@@ -1,0 +1,33 @@
+{
+  "name": "dsh-switchman",
+  "version": "1.1.2",
+  "private": true,
+  "type": "module",
+  "description": "让 DeepSeek Harness 的四个出厂预设（standard / ptc / minimal / cordis）默认具备自主智能体团队（Agent Teams）决策能力——装一个 bundle，四个模式全部自带 team 模式。",
+  "license": "MIT",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "cordis",
+    "agent-teams",
+    "preset"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}
