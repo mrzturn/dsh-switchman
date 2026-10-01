@@ -192,7 +192,10 @@ window.__ModuleLoader__.load({
 		 * shape ('' / [] / numeric / boolean / enum defaults when unset or
 		 * malformed). */
 		function readCurrent(snapshot) {
-			const value = snapshot.value;
+			// Form state carries the Host snapshot under `values` (the
+			// original configForms shape used `.value`; keep a fallback so
+			// a shape regression degrades instead of silently blanking).
+			const value = snapshot.values ?? snapshot.value;
 			const string = (field) =>
 				typeof value?.[field] === 'string' ? value[field] : '';
 			const routes = (field) =>
