@@ -577,13 +577,16 @@
         disabled: !!js "!ctx.get('profileContext')"
 
 # -----------------------------------------------------------------------------
-# The bundle's own plugin row. The Host half (index.js) is empty: the preset
-# overrides above are pure patch data. The Client half (client.js) renders a
-# small "team autonomy" badge into `conversation.session.header.actions`
+# The bundle's own plugin row. The Host half (index.js) registers the bundled
+# skills provider on ctx.skills (skills/<name>/SKILL.md → source "bundled");
+# the preset overrides above are pure patch data. The Client half (client.js)
+# renders a small "team autonomy" badge into `conversation.session.header.actions`
 # (order -9, right after the agent-preset chip at order -10) so the doctrine's
 # presence is visible at a glance — the built-in preset picker shows only its
-# own i18n copy and ignores declaration name/description fields.
+# own i18n copy and ignores declaration name/description fields. Client-half
+# discovery itself is driven by the `dsh.client` declaration in package.json
+# and does not depend on this row.
 # -----------------------------------------------------------------------------
 - insert:
-    - id: dsh-switchman-ui
+    - id: dsh-switchman-host
       name: dsh-switchman

@@ -1,6 +1,6 @@
 # dsh-switchman
 
-> 一个 bundle，四个模式，全部自带团队。装上 dsh-switchman，DeepSeek Harness 的四个出厂预设（`standard` / `ptc` / `minimal` / `cordis`）就都具备**自主决策是否激活智能体团队（Agent Teams）**的能力——不用再单独安装任何 team 预设。
+> 一个 bundle，四个模式，全部自带团队，外加三个常用技能。装上 dsh-switchman，DeepSeek Harness 的四个出厂预设（`standard` / `ptc` / `minimal` / `cordis`）就都具备**自主决策是否激活智能体团队（Agent Teams）**的能力——不用再单独安装任何 team 预设；同时捆绑 `db-query` / `git-commit-message` / `requirement-docs` 三个技能，所有会话开箱可用。
 
 ## 这是什么
 
@@ -14,6 +14,24 @@ dsh-switchman 覆盖（override）四个出厂预设的声明，在每个预设�
 - 边界清晰：用户说「不要用团队」时即时让位；工具目录里没有团队工具时静默回退单人模式；teammate 不越权组建团队。
 
 四个预设的能力差异保持出厂原样：`standard` 全家桶、`ptc` 的编码呈现流、`minimal` 的持久 shell、`cordis` 的组合开发工具——只是每个都默认带上了 team 模式。
+
+## 捆绑技能
+
+本 bundle 的 Host 半（`index.js`）在 `ctx.skills` 上注册了一个静态技能 provider（仿官方 `@deepseek-ai/dsh-skill-badge` / `dsh-skill-office` 的 bundled 模式：`source: "bundled"`、rank 600、目录型 resourceBase）。`skills/` 下每个目录一个技能，模型与用户均可调用，对全部预设生效：
+
+| 技能 | 说明 | 资源 |
+|------|------|------|
+| `db-query` | MySQL / Redis **只读**查询核验（内置安全校验脚本） | `scripts/`（查询入口 + setup）、`references/` |
+| `git-commit-message` | 生成规范 Git commit message（只出文本，从不 commit/push） | 纯文档 |
+| `requirement-docs` | 需求/设计类文档统一规范与归档命名 | `references/templates.md` |
+
+**db-query 首次使用需初始化**：其脚本依赖（`mysql2` / `redis` / `dotenv`）安装在技能目录内部，不污染任何项目：
+
+```bash
+bash <dsh-switchman 检出目录>/skills/db-query/scripts/setup.sh
+```
+
+bundle 更新（git pull / 重装）后如 `package.json` 依赖有变，重跑一次即可（幂等）。安装产物 `skills/db-query/node_modules/` 已被仓库 `.gitignore` 覆盖。
 
 ## 可见徽标
 
@@ -40,13 +58,12 @@ plugin_manager: install_bundle  target=/path/to/dsh-switchman
 ## 验证
 
 - **最快**：看会话头部预设 chip 旁是否出现「⚡ 自主团队」徽标（模块内容更新后刷新页面即可；刚装好/刚改过 `package.json` 则需先完全重启 DSH Desktop）。
+- 技能级：任意会话调用 `skill` 工具列出技能，应包含 `db-query` / `git-commit-message` / `requirement-docs`（provider `dsh-switchman`）。
 - 行为级：新开会话问模型「你系统提示词的最后一段标题是什么」，正确答案以 `# dsh-switchman 自主智能体团队调度规程` 开头。
-- 组合级：
+- 组合级（应用更名为 DeepSeek Harness 后 bin.js 在 asar 内，改用校验脚本）：
 
 ```
-node "/Applications/DSH Desktop.app/Contents/Resources/app/node_modules/@deepseek-ai/dsh/lib/bin.js" \
-  --profile web --dump-config | grep -c "dsh-switchman 自主智能体团队调度规程"
-# 期望输出：4（standard / ptc / minimal / cordis 各一条）
+node scripts/validate.mjs   # 期望：4 个 override 一致 + 技能完整 OK
 ```
 
 ## 卸载
@@ -67,10 +84,11 @@ plugin_manager: remove_bundle  target=dsh-switchman
 
 ```
 ├── package.json        # bundle 清单（patch + web 客户端模块声明）
-├── cordis.patch.yml    # 四个出厂预设的 override + 共享 doctrine 锚点 + UI 插件行
-├── index.js            # Host 半插件（空实现，仅占位）
+├── cordis.patch.yml    # 四个出厂预设的 override + 共享 doctrine 锚点 + Host 半插件行
+├── index.js            # Host 半插件：把 skills/ 注册为 bundled 技能 provider
 ├── client.js           # Client 半插件：会话头部的「⚡ 自主团队」徽标
-└── scripts/validate.mjs# 校验：YAML 语法 + 与出厂预设逐字段一致性
+├── skills/             # 捆绑技能（db-query / git-commit-message / requirement-docs）
+└── scripts/validate.mjs# 校验：YAML 语法 + 与出厂预设逐字段一致性 + 技能完整性
 ```
 
 ## License

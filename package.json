@@ -1,9 +1,9 @@
 {
   "name": "dsh-switchman",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
-  "description": "让 DeepSeek Harness 的四个出厂预设（standard / ptc / minimal / cordis）默认具备自主智能体团队（Agent Teams）决策能力——装一个 bundle，四个模式全部自带 team 模式。",
+  "description": "让 DeepSeek Harness 的四个出厂预设（standard / ptc / minimal / cordis）默认具备自主智能体团队（Agent Teams）决策能力，并捆绑 db-query / git-commit-message / requirement-docs 三个技能。",
   "license": "MIT",
   "keywords": [
     "deepseek-harness",
