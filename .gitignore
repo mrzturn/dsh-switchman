@@ -5,3 +5,6 @@
 node_modules/
 # npm pack artifacts
 *.tgz
+
+# dsh-switchman runtime data (handover docs)
+.dsh-switchman/
