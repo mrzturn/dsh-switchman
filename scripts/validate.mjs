@@ -24,7 +24,7 @@
  * from whichever layout DSH_APP_ROOT points at.
  */
 import assert from "node:assert";
-import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -195,9 +195,65 @@ for (const target of ["index.js", "client.js"]) {
 	assert.ok(existsSync(fileURLToPath(new URL(`../${target}`, import.meta.url))), `${target} is missing`);
 }
 
+// --- npm publish / marketplace readiness --------------------------------
+// The market display path reads <package>/locale/en.json (+ <lang>.json
+// siblings) and package.json's `icon` (dsh-app-boot readPluginMeta); the
+// client-module scan additionally needs the ./locale/*.json export exposed.
+assert.equal(pkg.private, undefined, "package.json must not stay private for npm publishing");
+assert.equal(pkg.dsh?.manifestVersion, 1, "dsh.manifestVersion must be 1");
+assert.equal(typeof pkg.engines?.dsh, "string", "engines.dsh must be declared as a SemVer range");
+assert.equal(
+	pkg.dependencies?.["@deepseek-ai/schemastery"],
+	"3.18.4",
+	"the host Config schema pins @deepseek-ai/schemastery to the shipped version",
+);
+assert.equal(
+	exportsMap["./locale/*.json"],
+	"./locale/*.json",
+	'exports["./locale/*.json"] must stay exposed for the plugin-meta locale scan',
+);
+const ICON = fileURLToPath(new URL("../icon.svg", import.meta.url));
+assert.ok(existsSync(ICON), "icon.svg is missing");
+assert.ok(statSync(ICON).size <= 256 * 1024, "icon.svg exceeds the 256 KiB plugin-meta limit");
+for (const published of [
+	"index.js",
+	"client.js",
+	"host/",
+	"skills/db-query/SKILL.md",
+	"skills/db-query/scripts",
+	"skills/git-commit-message/SKILL.md",
+	"skills/requirement-docs/SKILL.md",
+	"locale/",
+	"icon.svg",
+	"cordis.patch.yml",
+]) {
+	assert.ok(pkg.files?.includes(published), `package.json files must include "${published}"`);
+}
+for (const lang of ["en", "zh"]) {
+	const metaPath = fileURLToPath(new URL(`../locale/${lang}.json`, import.meta.url));
+	assert.ok(existsSync(metaPath), `locale/${lang}.json is missing (plugin display meta)`);
+	const meta = JSON.parse(readFileSync(metaPath, "utf8")).meta;
+	assert.equal(typeof meta?.title, "string", `locale/${lang}.json: meta.title must be a string`);
+	assert.ok(meta.title.length > 0, `locale/${lang}.json: meta.title is empty`);
+	assert.equal(typeof meta?.description, "string", `locale/${lang}.json: meta.description must be a string`);
+	assert.ok(meta.description.length > 0, `locale/${lang}.json: meta.description is empty`);
+}
+const HOST_CONFIG = fileURLToPath(new URL("../host/config.js", import.meta.url));
+assert.ok(existsSync(HOST_CONFIG), "host/config.js is missing");
+const CONFIG_SOURCE = readFileSync(HOST_CONFIG, "utf8");
+assert.match(CONFIG_SOURCE, /export const Config = z\.object/u, "host/config.js must export the Config schema");
+assert.match(
+	CONFIG_SOURCE,
+	/import z from "@deepseek-ai\/schemastery"/u,
+	"host/config.js must build its schema on @deepseek-ai/schemastery",
+);
+const CLIENT_SOURCE = readFileSync(fileURLToPath(new URL("../client.js", import.meta.url)), "utf8");
+assert.match(CLIENT_SOURCE, /ctx\.locale\.register\(/u, "client.js must register its locale namespace");
+assert.match(CLIENT_SOURCE, /ctx\.locale\.bind\(/u, "client.js must bind its locale namespace");
+
 // --- bundled skills: same parse subset as index.js, shape + assets intact ---
 const INDEX_SOURCE = readFileSync(fileURLToPath(new URL("../index.js", import.meta.url)), "utf8");
-assert.match(INDEX_SOURCE, /inject\s*=\s*\[\s*"skills"\s*\]/u, "index.js must inject the skills service");
+assert.match(INDEX_SOURCE, /inject\s*=\s*\[[^\]]*"skills"/u, "index.js must inject the skills service");
 assert.match(
 	INDEX_SOURCE,
 	/registerProvider/u,
@@ -245,5 +301,6 @@ for (const asset of [
 
 console.log("OK: 4 overrides parse, match shipped presets, share one doctrine suffix");
 console.log("OK: package.json keeps the client-half discovery surface (exports + dsh.client)");
+console.log("OK: npm/market surface (icon, locale meta, files, schemastery pin, manifestVersion)");
 console.log(`OK: ${skillDirs.length} bundled skill(s) parse with intact assets: ${skillDirs.join(", ")}`);
 console.log(`doctrine suffix length: ${suffixes[0].length} chars`);

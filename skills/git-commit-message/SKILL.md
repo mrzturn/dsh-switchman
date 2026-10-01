@@ -4,6 +4,7 @@ description: Generate convention-compliant Git commit messages. Trigger whenever
 ---
 
 <!-- [2026-09-05]-[default output to English unless project rules/user explicitly request Chinese; generic examples]-[generated messages follow this default] -->
+<!-- [2026-10-01]-[Language section: honor a [SWITCHMAN:LANG] system-prompt line over the English default]-[aligns with the host-side language-preference layer] -->
 # Git Commit Message Generation
 
 Core rule: **deliver text only; never run `git add` / `git commit` / `git push`**.
@@ -42,3 +43,7 @@ refactor(1024): Extract config parsing into loader module
 ### 4. Stop after delivery
 
 Present the message and stop; don't ask "want me to commit?". Commit/push only on explicit request.
+
+## Language
+
+English by default; use the project's configured language when a `[SWITCHMAN:LANG]` line in the system prompt specifies one, or when the user explicitly requests it.

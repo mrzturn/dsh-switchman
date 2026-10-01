@@ -7,17 +7,55 @@
  * base so the skill tool tells the Agent where `scripts/` and `references/`
  * live). The preset overrides live in cordis.patch.yml; the Client half in
  * client.js renders the "team autonomy" badge beside the preset chip.
+ *
+ * Phase 1 additionally mounts the language-preference layer (host/lang.js):
+ * a dynamic systemPrompt section carrying the `[SWITCHMAN:LANG]` protocol
+ * block plus a `tools/post-execute` listener that captures ask_user_question
+ * answers and persists them into this plugin's settings namespace.
+ *
+ * Phase 2 mounts the dispatch-pool layer (host/dispatch.js + host/lib/rank.js):
+ * a `[SWITCHMAN:POOLS]` recommendation section ordered by modelRank anchors
+ * and the bundled capability snapshot, plus an optional (enforce mode only)
+ * `tools/pre-execute` gate that denies subagent routes outside the pools.
+ *
+ * Phase 3 mounts the context-watermark layer (host/context-watch.js): the
+ * `[SWITCHMAN:WATERMARK]` tiered banner from the live token meter, a per-turn
+ * read budget with deny/cap gates, force-tier fire-and-forget handover into
+ * compaction, and the /ctx-pause, /ctx-resume, /ctx-handover commands.
  */
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Plugin settings schema: flat `.volatile()` fields exposed as the
+// "dsh-switchman" settings namespace (forms + profile-patch persistence).
+export { Config, LANES, laneField } from "./host/config.js";
+
+// Language-preference layer (dynamic prompt section + answer capture).
+import { applyLanguage } from "./host/lang.js";
+
+// Dispatch-pool layer (pools recommendation section + enforce gate).
+import { applyDispatch } from "./host/dispatch.js";
+
+// Context-watermark layer (banner + read budget + handover + /ctx-* commands).
+import { applyContextWatch } from "./host/context-watch.js";
+
+// Client-bridge routes (config snapshot/fenced write + model catalog for the
+// restricted browser half, which has no configForms/remote services).
+import { applyRoutes } from "./host/routes.js";
+
 /** Cordis plugin name. */
 const name = "dsh-switchman";
 
-/** The bundled-skill registry service this plugin contributes to. */
-const inject = ["skills"];
+/** Services this plugin contributes to: the bundled-skill registry, the
+ * system-prompt section registry, the settings store it writes back to, the
+ * token meter and agent registry the watermark reads, the compaction service
+ * the handover fires into, and the command registry for /ctx-*. */
+// NOTE: "compaction" is deliberately NOT injected — presets mount it inside
+// an isolated per-agent composition, so a root-level inject would wait
+// forever; host/context-watch.js resolves it through the agent's own ctx.
+const inject = ["skills", "systemPrompt", "settings", "tokenMeter", "commands", "agents", "webServer"];
 
 /** Must equal `BUNDLED_SKILL_RANK` of @deepseek-ai/dsh-skill (packaged skill
  *  providers and local bundled roots; below user entries, above none). Not
@@ -88,8 +126,10 @@ function loadSkillCandidates(root, warn) {
 	return candidates;
 }
 
-/** Register the bundled dsh-switchman skill provider on `ctx.skills`. */
-function apply(ctx) {
+/** Register the bundled dsh-switchman skill provider on `ctx.skills` and
+ *  mount the language (lang), dispatch (dispatch), and watermark
+ *  (context-watch) layers. */
+function apply(ctx, config) {
 	const root = fileURLToPath(new URL("./skills/", import.meta.url));
 	const warn = (message) => ctx.logger.warn(`dsh-switchman: ${message}`);
 	const candidates = loadSkillCandidates(root, warn);
@@ -102,6 +142,10 @@ function apply(ctx) {
 		},
 	};
 	ctx.skills.registerProvider(() => provider);
+	applyLanguage(ctx, config);
+	applyDispatch(ctx, config);
+	applyContextWatch(ctx, config);
+	applyRoutes(ctx, config);
 }
 
 export { apply, inject, name };
