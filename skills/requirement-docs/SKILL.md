@@ -4,6 +4,7 @@ description: Unified spec for technical docs — requirements analysis, PRD, des
 ---
 
 <!-- [2026-09-05]-[default output to English unless project rules/user explicitly request Chinese; generic examples]-[generated docs follow this default] -->
+<!-- [2026-10-01]-[Language section: honor a [SWITCHMAN:LANG] system-prompt line over the English default]-[aligns with the host-side language-preference layer] -->
 # Requirements & Design Doc Spec
 
 Goal: centralized archiving, unified naming, consistent structure; understand existing code before proposing solutions.
@@ -31,3 +32,7 @@ Language: **English by default** (keep technical terms as-is). Use the project's
 2. Prefer mermaid or indented code blocks for call chains/sequences/flows; no external images.
 3. Give reasons for decisions, not just conclusions.
 4. When citing `file:line`, include the method name/context to survive line drift.
+
+## Language
+
+English by default; use the project's configured language when a `[SWITCHMAN:LANG]` line in the system prompt specifies one, or when the user explicitly requests it.

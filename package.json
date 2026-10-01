@@ -1,33 +1,70 @@
 {
-  "name": "dsh-switchman",
-  "version": "1.2.0",
-  "private": true,
-  "type": "module",
-  "description": "让 DeepSeek Harness 的四个出厂预设（standard / ptc / minimal / cordis）默认具备自主智能体团队（Agent Teams）决策能力，并捆绑 db-query / git-commit-message / requirement-docs 三个技能。",
-  "license": "MIT",
-  "keywords": [
-    "deepseek-harness",
-    "dsh",
-    "cordis",
-    "agent-teams",
-    "preset"
-  ],
-  "exports": {
-    ".": "./index.js",
-    "./client": "./client.js",
-    "./package.json": "./package.json"
-  },
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "platform": "web",
-      "immediately": true,
-      "inject": [
-        "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-ui-conversation"
-      ]
-    }
-  }
+	"name": "dsh-switchman",
+	"version": "1.3.0",
+	"description": "Autonomous Agent Teams doctrine for the four shipped DeepSeek Harness presets, plus language preferences, dispatch pools with model ranking, and context watermark control.",
+	"license": "MIT",
+	"keywords": [
+		"deepseek-harness",
+		"dsh",
+		"cordis",
+		"agent-teams",
+		"preset",
+		"orchestration",
+		"context-watermark"
+	],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/mrzturn/dsh-switchman.git"
+	},
+	"homepage": "https://github.com/mrzturn/dsh-switchman#readme",
+	"bugs": {
+		"url": "https://github.com/mrzturn/dsh-switchman/issues"
+	},
+	"type": "module",
+	"main": "./index.js",
+	"icon": "./icon.svg",
+	"engines": {
+		"node": ">=24",
+		"dsh": ">=0.2.0-rc.0"
+	},
+	"exports": {
+		".": "./index.js",
+		"./client": "./client.js",
+		"./package.json": "./package.json",
+		"./locale/*.json": "./locale/*.json"
+	},
+	"files": [
+		"index.js",
+		"client.js",
+		"host/",
+		"skills/db-query/SKILL.md",
+		"skills/db-query/package.json",
+		"skills/db-query/package-lock.json",
+		"skills/db-query/scripts",
+		"skills/db-query/references",
+		"skills/git-commit-message/SKILL.md",
+		"skills/requirement-docs/SKILL.md",
+		"skills/requirement-docs/references",
+		"locale/",
+		"icon.svg",
+		"cordis.patch.yml"
+	],
+	"dependencies": {
+		"@deepseek-ai/schemastery": "3.18.4"
+	},
+	"dsh": {
+		"manifestVersion": 1,
+		"bundle": {
+			"patch": "./cordis.patch.yml"
+		},
+		"client": {
+			"platform": "web",
+			"immediately": true,
+			"inject": [
+				"@deepseek-ai/dsh-client-locale",
+				"@deepseek-ai/dsh-client-ui-conversation",
+				"@deepseek-ai/dsh-client-ui-settings"
+			]
+		}
+	}
 }

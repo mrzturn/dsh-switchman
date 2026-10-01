@@ -1,0 +1,1097 @@
+{
+  "_meta": {
+    "generated_at": "2026-09-02T14:49:02.112Z",
+    "generator": "bun run gen:capability",
+    "upstream": "openrouter.ai /api/v1/models?sort=coding-high-to-low (benchmarks.artificial_analysis official indices)",
+    "note": "Bundled default capability ranks for offline/fetch-failure fallback; iterated manually per release (re-run gen:capability to refresh)"
+  },
+  "bundled": true,
+  "source": "openrouter",
+  "version": "bundled-or-1788285838",
+  "fetched_at": 1788360542.112,
+  "score_kind": "index",
+  "thresholds": {
+    "S": 62,
+    "A": 55,
+    "B": 45
+  },
+  "models": {
+    "claude-fable-5.1": {
+      "score": 65.7,
+      "intelligence": 65.7,
+      "coding": 81.6,
+      "agentic": 61.3
+    },
+    "claude-fable-5.1-batch": {
+      "score": 65.7,
+      "intelligence": 65.7,
+      "coding": 81.6,
+      "agentic": 61.3
+    },
+    "claude-opus-5": {
+      "score": 63.1,
+      "intelligence": 63.1,
+      "coding": 78,
+      "agentic": 59.2
+    },
+    "claude-opus-5-batch": {
+      "score": 63.1,
+      "intelligence": 63.1,
+      "coding": 78,
+      "agentic": 59.2
+    },
+    "gpt-5.6-sol": {
+      "score": 60.9,
+      "intelligence": 60.9,
+      "coding": 77.4,
+      "agentic": 57.8
+    },
+    "gpt-5.6-sol-batch": {
+      "score": 60.9,
+      "intelligence": 60.9,
+      "coding": 77.4,
+      "agentic": 57.8
+    },
+    "grok-4.6": {
+      "score": 60.9,
+      "intelligence": 60.9,
+      "coding": 76.8,
+      "agentic": 58.7
+    },
+    "gpt-5.6-terra": {
+      "score": 56.6,
+      "intelligence": 56.6,
+      "coding": 76.7,
+      "agentic": 50.2
+    },
+    "gpt-5.6-terra-batch": {
+      "score": 56.6,
+      "intelligence": 56.6,
+      "coding": 76.7,
+      "agentic": 50.2
+    },
+    "claude-fable-5": {
+      "score": 62.1,
+      "intelligence": 62.1,
+      "coding": 76.5,
+      "agentic": 56.6
+    },
+    "claude-fable-5-batch": {
+      "score": 62.1,
+      "intelligence": 62.1,
+      "coding": 76.5,
+      "agentic": 56.6
+    },
+    "kimi-k3": {
+      "score": 59.7,
+      "intelligence": 59.7,
+      "coding": 76.2,
+      "agentic": 54.3
+    },
+    "kimi-k3-batch": {
+      "score": 59.7,
+      "intelligence": 59.7,
+      "coding": 76.2,
+      "agentic": 54.3
+    },
+    "gemini-3.7-flash": {
+      "score": 56,
+      "intelligence": 56,
+      "coding": 76.1,
+      "agentic": 45.1
+    },
+    "gemini-3.7-flash-batch": {
+      "score": 56,
+      "intelligence": 56,
+      "coding": 76.1,
+      "agentic": 45.1
+    },
+    "gpt-5.5": {
+      "score": 56.3,
+      "intelligence": 56.3,
+      "coding": 74.9,
+      "agentic": 47.4
+    },
+    "gpt-5.5-batch": {
+      "score": 56.3,
+      "intelligence": 56.3,
+      "coding": 74.9,
+      "agentic": 47.4
+    },
+    "glm-5.3": {
+      "score": 59.5,
+      "intelligence": 59.5,
+      "coding": 74.8,
+      "agentic": 59.1
+    },
+    "claude-opus-4.8": {
+      "score": 57.3,
+      "intelligence": 57.3,
+      "coding": 74.3,
+      "agentic": 49.4
+    },
+    "claude-opus-4.8-batch": {
+      "score": 57.3,
+      "intelligence": 57.3,
+      "coding": 74.3,
+      "agentic": 49.4
+    },
+    "claude-opus-4.7": {
+      "score": 55,
+      "intelligence": 55,
+      "coding": 73.6,
+      "agentic": 46.3
+    },
+    "claude-opus-4.7-batch": {
+      "score": 55,
+      "intelligence": 55,
+      "coding": 73.6,
+      "agentic": 46.3
+    },
+    "grok-4.5": {
+      "score": 55.8,
+      "intelligence": 55.8,
+      "coding": 72.4,
+      "agentic": 48.9
+    },
+    "muse-spark-1.2": {
+      "score": 56.8,
+      "intelligence": 56.8,
+      "coding": 72.2,
+      "agentic": 49.3
+    },
+    "qwen3.8-2.4t-a95b": {
+      "score": 57.7,
+      "intelligence": 57.7,
+      "coding": 71.9,
+      "agentic": 57.1
+    },
+    "qwen3.8-2.4t-a95b-batch": {
+      "score": 57.7,
+      "intelligence": 57.7,
+      "coding": 71.9,
+      "agentic": 57.1
+    },
+    "qwen3.8-max": {
+      "score": 58.1,
+      "intelligence": 58.1,
+      "coding": 71.8,
+      "agentic": 58.4
+    },
+    "claude-sonnet-5": {
+      "score": 55.3,
+      "intelligence": 55.3,
+      "coding": 71.5,
+      "agentic": 49.7
+    },
+    "claude-sonnet-5-batch": {
+      "score": 55.3,
+      "intelligence": 55.3,
+      "coding": 71.5,
+      "agentic": 49.7
+    },
+    "glm-5.3-flash": {
+      "score": 57.5,
+      "intelligence": 57.5,
+      "coding": 71.5,
+      "agentic": 58.2
+    },
+    "glm-5.3-flash-batch": {
+      "score": 57.5,
+      "intelligence": 57.5,
+      "coding": 71.5,
+      "agentic": 58.2
+    },
+    "gpt-5.6-luna": {
+      "score": 52.3,
+      "intelligence": 52.3,
+      "coding": 71.4,
+      "agentic": 46.9
+    },
+    "gpt-5.6-luna-batch": {
+      "score": 52.3,
+      "intelligence": 52.3,
+      "coding": 71.4,
+      "agentic": 46.9
+    },
+    "muse-spark-1.1": {
+      "score": 53.2,
+      "intelligence": 53.2,
+      "coding": 71.3,
+      "agentic": 39.7
+    },
+    "gpt-5.4": {
+      "score": 53.1,
+      "intelligence": 53.1,
+      "coding": 71.1,
+      "agentic": 44.2
+    },
+    "gpt-5.4-batch": {
+      "score": 53.1,
+      "intelligence": 53.1,
+      "coding": 71.1,
+      "agentic": 44.2
+    },
+    "gemini-3.5-flash": {
+      "score": 52,
+      "intelligence": 52,
+      "coding": 70.1,
+      "agentic": 39.7
+    },
+    "gemini-3.5-flash-batch": {
+      "score": 52,
+      "intelligence": 52,
+      "coding": 70.1,
+      "agentic": 39.7
+    },
+    "gemini-3.6-flash": {
+      "score": 51.6,
+      "intelligence": 51.6,
+      "coding": 69.2,
+      "agentic": 40.5
+    },
+    "gemini-3.6-flash-batch": {
+      "score": 51.6,
+      "intelligence": 51.6,
+      "coding": 69.2,
+      "agentic": 40.5
+    },
+    "deepseek-v4-flash-0731": {
+      "score": 51.8,
+      "intelligence": 51.8,
+      "coding": 69.1,
+      "agentic": 48.4
+    },
+    "deepseek-v4-flash-0731-batch": {
+      "score": 51.8,
+      "intelligence": 51.8,
+      "coding": 69.1,
+      "agentic": 48.4
+    },
+    "deepseek-v4-pro-0813": {
+      "score": 53.2,
+      "intelligence": 53.2,
+      "coding": 68.8,
+      "agentic": 49.6
+    },
+    "deepseek-v4-pro-0813-batch": {
+      "score": 53.2,
+      "intelligence": 53.2,
+      "coding": 68.8,
+      "agentic": 49.6
+    },
+    "gemini-3.1-pro-preview": {
+      "score": 47.7,
+      "intelligence": 47.7,
+      "coding": 68.8,
+      "agentic": 23
+    },
+    "gemini-3.1-pro-preview-batch": {
+      "score": 47.7,
+      "intelligence": 47.7,
+      "coding": 68.8,
+      "agentic": 23
+    },
+    "glm-5.2": {
+      "score": 52.6,
+      "intelligence": 52.6,
+      "coding": 68.8,
+      "agentic": 45.7
+    },
+    "glm-5.2-free": {
+      "score": 52.6,
+      "intelligence": 52.6,
+      "coding": 68.8,
+      "agentic": 45.7
+    },
+    "qwen3.8-27b": {
+      "score": 52,
+      "intelligence": 52,
+      "coding": 68.1,
+      "agentic": 50.9
+    },
+    "qwen3.7-max": {
+      "score": 46.7,
+      "intelligence": 46.7,
+      "coding": 66,
+      "agentic": 30.9
+    },
+    "claude-sonnet-4.6": {
+      "score": 48.4,
+      "intelligence": 48.4,
+      "coding": 63,
+      "agentic": 42.1
+    },
+    "claude-sonnet-4.6-batch": {
+      "score": 48.4,
+      "intelligence": 48.4,
+      "coding": 63,
+      "agentic": 42.1
+    },
+    "kimi-k2.6": {
+      "score": 45.1,
+      "intelligence": 45.1,
+      "coding": 61.8,
+      "agentic": 31.2
+    },
+    "kimi-k2.7-code": {
+      "score": 43,
+      "intelligence": 43,
+      "coding": 60.8,
+      "agentic": 30.3
+    },
+    "mimo-v2.5-pro": {
+      "score": 42.9,
+      "intelligence": 42.9,
+      "coding": 60.2,
+      "agentic": 29.5
+    },
+    "kat-coder-pro-v2": {
+      "score": 33.7,
+      "intelligence": 33.7,
+      "coding": 59.5,
+      "agentic": 15.1
+    },
+    "deepseek-v4-pro": {
+      "score": 45.3,
+      "intelligence": 45.3,
+      "coding": 59.4,
+      "agentic": 37.8
+    },
+    "nex-n2-pro": {
+      "score": 41.7,
+      "intelligence": 41.7,
+      "coding": 59.1,
+      "agentic": 31.2
+    },
+    "hy3-preview": {
+      "score": 42.2,
+      "intelligence": 42.2,
+      "coding": 58.8,
+      "agentic": 31.4
+    },
+    "minimax-m3": {
+      "score": 45.4,
+      "intelligence": 45.4,
+      "coding": 58.6,
+      "agentic": 36.1
+    },
+    "minimax-m3-batch": {
+      "score": 45.4,
+      "intelligence": 45.4,
+      "coding": 58.6,
+      "agentic": 36.1
+    },
+    "minimax-m3-free": {
+      "score": 45.4,
+      "intelligence": 45.4,
+      "coding": 58.6,
+      "agentic": 36.1
+    },
+    "mimo-v2.5": {
+      "score": 38,
+      "intelligence": 38,
+      "coding": 56.8,
+      "agentic": 24.4
+    },
+    "deepseek-v4-flash": {
+      "score": 42.1,
+      "intelligence": 42.1,
+      "coding": 56.2,
+      "agentic": 33.7
+    },
+    "gpt-5.4-mini": {
+      "score": 40.9,
+      "intelligence": 40.9,
+      "coding": 56.1,
+      "agentic": 31.5
+    },
+    "gpt-5.4-mini-batch": {
+      "score": 40.9,
+      "intelligence": 40.9,
+      "coding": 56.1,
+      "agentic": 31.5
+    },
+    "gpt-5.4-nano": {
+      "score": 39.7,
+      "intelligence": 39.7,
+      "coding": 56.1,
+      "agentic": 29.7
+    },
+    "gpt-5.4-nano-batch": {
+      "score": 39.7,
+      "intelligence": 39.7,
+      "coding": 56.1,
+      "agentic": 29.7
+    },
+    "qwen3.7-plus": {
+      "score": 39.4,
+      "intelligence": 39.4,
+      "coding": 55.9,
+      "agentic": 20.7
+    },
+    "glm-5.1": {
+      "score": 41,
+      "intelligence": 41,
+      "coding": 55.8,
+      "agentic": 30.6
+    },
+    "qwen3.6-plus": {
+      "score": 40.5,
+      "intelligence": 40.5,
+      "coding": 54.5,
+      "agentic": 29
+    },
+    "qwen3.6-27b": {
+      "score": 37.7,
+      "intelligence": 37.7,
+      "coding": 53.7,
+      "agentic": 27.5
+    },
+    "inkling-small": {
+      "score": 41.2,
+      "intelligence": 41.2,
+      "coding": 52.9,
+      "agentic": 31.9
+    },
+    "inkling-small-batch": {
+      "score": 41.2,
+      "intelligence": 41.2,
+      "coding": 52.9,
+      "agentic": 31.9
+    },
+    "inkling-small-free": {
+      "score": 41.2,
+      "intelligence": 41.2,
+      "coding": 52.9,
+      "agentic": 31.9
+    },
+    "solar-pro4": {
+      "score": 41.6,
+      "intelligence": 41.6,
+      "coding": 52.7,
+      "agentic": 33.6
+    },
+    "minimax-m2.7": {
+      "score": 38.9,
+      "intelligence": 38.9,
+      "coding": 52.6,
+      "agentic": 25.9
+    },
+    "minimax-m2.7-free": {
+      "score": 38.9,
+      "intelligence": 38.9,
+      "coding": 52.6,
+      "agentic": 25.9
+    },
+    "claude-sonnet-4.5": {
+      "score": 37.4,
+      "intelligence": 37.4,
+      "coding": 52.1,
+      "agentic": 26.4
+    },
+    "claude-sonnet-4.5-batch": {
+      "score": 37.4,
+      "intelligence": 37.4,
+      "coding": 52.1,
+      "agentic": 26.4
+    },
+    "inkling": {
+      "score": 42.3,
+      "intelligence": 42.3,
+      "coding": 52.1,
+      "agentic": 34.1
+    },
+    "inkling-batch": {
+      "score": 42.3,
+      "intelligence": 42.3,
+      "coding": 52.1,
+      "agentic": 34.1
+    },
+    "inkling-free": {
+      "score": 42.3,
+      "intelligence": 42.3,
+      "coding": 52.1,
+      "agentic": 34.1
+    },
+    "grok-build-0.1": {
+      "score": 40.7,
+      "intelligence": 40.7,
+      "coding": 51.5,
+      "agentic": 28.9
+    },
+    "ling-3.0-flash": {
+      "score": 37.8,
+      "intelligence": 37.8,
+      "coding": 50.6,
+      "agentic": 29.3
+    },
+    "gpt-5.1": {
+      "score": 37.5,
+      "intelligence": 37.5,
+      "coding": 49.4,
+      "agentic": 21.6
+    },
+    "gpt-5.1-batch": {
+      "score": 37.5,
+      "intelligence": 37.5,
+      "coding": 49.4,
+      "agentic": 21.6
+    },
+    "gemini-3.5-flash-lite": {
+      "score": 37.4,
+      "intelligence": 37.4,
+      "coding": 49.3,
+      "agentic": 27.2
+    },
+    "gemini-3.5-flash-lite-batch": {
+      "score": 37.4,
+      "intelligence": 37.4,
+      "coding": 49.3,
+      "agentic": 27.2
+    },
+    "nemotron-3-ultra-550b-a55b": {
+      "score": 38.3,
+      "intelligence": 38.3,
+      "coding": 49.3,
+      "agentic": 27.5
+    },
+    "nemotron-3-ultra-550b-a55b-batch": {
+      "score": 38.3,
+      "intelligence": 38.3,
+      "coding": 49.3,
+      "agentic": 27.5
+    },
+    "nemotron-3-ultra-550b-a55b-free": {
+      "score": 38.3,
+      "intelligence": 38.3,
+      "coding": 49.3,
+      "agentic": 27.5
+    },
+    "qwen3.5-397b-a17b": {
+      "score": 34.3,
+      "intelligence": 34.3,
+      "coding": 48.2,
+      "agentic": 19.8
+    },
+    "mistral-medium-3-5": {
+      "score": 30.4,
+      "intelligence": 30.4,
+      "coding": 46.9,
+      "agentic": 19.2
+    },
+    "mistral-medium-3-5-batch": {
+      "score": 30.4,
+      "intelligence": 30.4,
+      "coding": 46.9,
+      "agentic": 19.2
+    },
+    "kimi-k2.5": {
+      "score": 36,
+      "intelligence": 36,
+      "coding": 46.8,
+      "agentic": 21.7
+    },
+    "glm-4.6": {
+      "score": 29.3,
+      "intelligence": 29.3,
+      "coding": 45.8,
+      "agentic": 18.6
+    },
+    "qwen3.5-122b-a10b": {
+      "score": 32.8,
+      "intelligence": 32.8,
+      "coding": 45.7,
+      "agentic": 21.3
+    },
+    "longcat-2.0": {
+      "score": 34,
+      "intelligence": 34,
+      "coding": 45.3,
+      "agentic": 22
+    },
+    "glm-4.7": {
+      "score": 34.5,
+      "intelligence": 34.5,
+      "coding": 45.3,
+      "agentic": 26.2
+    },
+    "deepseek-v3.2": {
+      "score": 44.2,
+      "intelligence": null,
+      "coding": 44.2,
+      "agentic": null
+    },
+    "claude-haiku-4.5": {
+      "score": 29.9,
+      "intelligence": 29.9,
+      "coding": 43.9,
+      "agentic": 16.5
+    },
+    "claude-haiku-4.5-batch": {
+      "score": 29.9,
+      "intelligence": 29.9,
+      "coding": 43.9,
+      "agentic": 16.5
+    },
+    "deepseek-v3.1-terminus": {
+      "score": 31.4,
+      "intelligence": 31.4,
+      "coding": 43.5,
+      "agentic": 19.9
+    },
+    "gemma-4-31b-it": {
+      "score": 29.7,
+      "intelligence": 29.7,
+      "coding": 43.4,
+      "agentic": 14.4
+    },
+    "gemma-4-31b-it-batch": {
+      "score": 29.7,
+      "intelligence": 29.7,
+      "coding": 43.4,
+      "agentic": 14.4
+    },
+    "gemma-4-31b-it-free": {
+      "score": 29.7,
+      "intelligence": 29.7,
+      "coding": 43.4,
+      "agentic": 14.4
+    },
+    "grok-4.3": {
+      "score": 37.9,
+      "intelligence": 37.9,
+      "coding": 42.2,
+      "agentic": 24.2
+    },
+    "qwen3.6-35b-a3b": {
+      "score": 32.1,
+      "intelligence": 32.1,
+      "coding": 41.9,
+      "agentic": 21.6
+    },
+    "o1": {
+      "score": 39.7,
+      "intelligence": null,
+      "coding": 39.7,
+      "agentic": null
+    },
+    "step-3.7-flash": {
+      "score": 30.9,
+      "intelligence": 30.9,
+      "coding": 39.6,
+      "agentic": 21.7
+    },
+    "gemma-4-26b-a4b-it": {
+      "score": 26.1,
+      "intelligence": 26.1,
+      "coding": 39.3,
+      "agentic": 11
+    },
+    "gemma-4-26b-a4b-it-free": {
+      "score": 26.1,
+      "intelligence": 26.1,
+      "coding": 39.3,
+      "agentic": 11
+    },
+    "gpt-5": {
+      "score": 35.3,
+      "intelligence": 35.3,
+      "coding": 37.8,
+      "agentic": 26.5
+    },
+    "gpt-5-batch": {
+      "score": 35.3,
+      "intelligence": 35.3,
+      "coding": 37.8,
+      "agentic": 26.5
+    },
+    "nemotron-3-super-120b-a12b": {
+      "score": 25.7,
+      "intelligence": 25.7,
+      "coding": 37.7,
+      "agentic": 8.8
+    },
+    "nemotron-3-super-120b-a12b-free": {
+      "score": 25.7,
+      "intelligence": 25.7,
+      "coding": 37.7,
+      "agentic": 8.8
+    },
+    "claude-sonnet-4": {
+      "score": 29.8,
+      "intelligence": 29.8,
+      "coding": 37.6,
+      "agentic": 17.6
+    },
+    "qwen3.5-35b-a3b": {
+      "score": 24.3,
+      "intelligence": 24.3,
+      "coding": 37,
+      "agentic": 11.8
+    },
+    "north-mini-code-free": {
+      "score": 20.2,
+      "intelligence": 20.2,
+      "coding": 36.5,
+      "agentic": 3.1
+    },
+    "qwen3-coder-next": {
+      "score": 21.3,
+      "intelligence": 21.3,
+      "coding": 36.2,
+      "agentic": 8.9
+    },
+    "gemini-3.1-flash-lite-preview": {
+      "score": 25.6,
+      "intelligence": 25.6,
+      "coding": 34.7,
+      "agentic": 6.5
+    },
+    "gemini-2.5-pro": {
+      "score": 25.9,
+      "intelligence": 25.9,
+      "coding": 33.3,
+      "agentic": 7.2
+    },
+    "gemini-2.5-pro-batch": {
+      "score": 25.9,
+      "intelligence": 25.9,
+      "coding": 33.3,
+      "agentic": 7.2
+    },
+    "devstral-2512": {
+      "score": 19.2,
+      "intelligence": 19.2,
+      "coding": 31.3,
+      "agentic": 10.6
+    },
+    "mercury-2": {
+      "score": 21.9,
+      "intelligence": 21.9,
+      "coding": 31.1,
+      "agentic": 9.5
+    },
+    "gpt-oss-120b": {
+      "score": 24.1,
+      "intelligence": 24.1,
+      "coding": 30.4,
+      "agentic": 13.4
+    },
+    "gpt-oss-120b-batch": {
+      "score": 24.1,
+      "intelligence": 24.1,
+      "coding": 30.4,
+      "agentic": 13.4
+    },
+    "qwen3.5-9b": {
+      "score": 21.8,
+      "intelligence": 21.8,
+      "coding": 28.7,
+      "agentic": 7
+    },
+    "qwen3.5-9b-batch": {
+      "score": 21.8,
+      "intelligence": 21.8,
+      "coding": 28.7,
+      "agentic": 7
+    },
+    "command-a": {
+      "score": 22.8,
+      "intelligence": 22.8,
+      "coding": 27.8,
+      "agentic": 9.2
+    },
+    "nemotron-3.5-lightning": {
+      "score": 23.6,
+      "intelligence": 23.6,
+      "coding": 26.8,
+      "agentic": 13.8
+    },
+    "nemotron-3.5-lightning-free": {
+      "score": 23.6,
+      "intelligence": 23.6,
+      "coding": 26.8,
+      "agentic": 13.8
+    },
+    "mistral-small-2603": {
+      "score": 19.7,
+      "intelligence": 19.7,
+      "coding": 26.6,
+      "agentic": 4.6
+    },
+    "trinity-large-thinking": {
+      "score": 18.7,
+      "intelligence": 18.7,
+      "coding": 25.8,
+      "agentic": 3.7
+    },
+    "deepseek-r1": {
+      "score": 18.6,
+      "intelligence": 18.6,
+      "coding": 24.6,
+      "agentic": 3.1
+    },
+    "gpt-4o-2024-05-13": {
+      "score": 24.2,
+      "intelligence": null,
+      "coding": 24.2,
+      "agentic": null
+    },
+    "nova-2-lite-v1": {
+      "score": 23,
+      "intelligence": null,
+      "coding": 23,
+      "agentic": null
+    },
+    "granite-4.2-8b": {
+      "score": 19.6,
+      "intelligence": 19.6,
+      "coding": 22.4,
+      "agentic": 9.2
+    },
+    "qwen3-235b-a22b-thinking-2507": {
+      "score": 19.9,
+      "intelligence": 19.9,
+      "coding": 22.1,
+      "agentic": 3.8
+    },
+    "gpt-4-turbo": {
+      "score": 21.5,
+      "intelligence": null,
+      "coding": 21.5,
+      "agentic": null
+    },
+    "gpt-4-turbo-batch": {
+      "score": 21.5,
+      "intelligence": null,
+      "coding": 21.5,
+      "agentic": null
+    },
+    "deepseek-chat-v3-0324": {
+      "score": 15.2,
+      "intelligence": 15.2,
+      "coding": 21.2,
+      "agentic": 1.6
+    },
+    "kimi-k2-thinking": {
+      "score": 21,
+      "intelligence": null,
+      "coding": 21,
+      "agentic": null
+    },
+    "gpt-oss-20b": {
+      "score": 15.2,
+      "intelligence": 15.2,
+      "coding": 20.7,
+      "agentic": 3.1
+    },
+    "gpt-oss-20b-batch": {
+      "score": 15.2,
+      "intelligence": 15.2,
+      "coding": 20.7,
+      "agentic": 3.1
+    },
+    "mistral-medium-3.1": {
+      "score": 14.7,
+      "intelligence": 14.7,
+      "coding": 20.5,
+      "agentic": 6.1
+    },
+    "gpt-4.1-mini": {
+      "score": 14.8,
+      "intelligence": 14.8,
+      "coding": 20.2,
+      "agentic": 1.8
+    },
+    "gpt-4.1-mini-batch": {
+      "score": 14.8,
+      "intelligence": 14.8,
+      "coding": 20.2,
+      "agentic": 1.8
+    },
+    "mistral-large-2512": {
+      "score": 15.9,
+      "intelligence": 15.9,
+      "coding": 20.1,
+      "agentic": 5.5
+    },
+    "qwen3-next-80b-a3b-thinking": {
+      "score": 16.9,
+      "intelligence": 16.9,
+      "coding": 17.4,
+      "agentic": 2.1
+    },
+    "llama-4-maverick": {
+      "score": 14.5,
+      "intelligence": 14.5,
+      "coding": 16.3,
+      "agentic": 1.2
+    },
+    "o3-mini-high": {
+      "score": 15.7,
+      "intelligence": 15.7,
+      "coding": 16.3,
+      "agentic": 1.7
+    },
+    "solar-pro-3": {
+      "score": 14.5,
+      "intelligence": 14.5,
+      "coding": 16.2,
+      "agentic": 2.9
+    },
+    "gpt-5-mini": {
+      "score": 25.8,
+      "intelligence": 25.8,
+      "coding": 15.6,
+      "agentic": 19.6
+    },
+    "gpt-5-mini-batch": {
+      "score": 25.8,
+      "intelligence": 25.8,
+      "coding": 15.6,
+      "agentic": 19.6
+    },
+    "qwen3-32b": {
+      "score": 11.4,
+      "intelligence": 11.4,
+      "coding": 15.3,
+      "agentic": 1.8
+    },
+    "ministral-14b-2512": {
+      "score": 11.2,
+      "intelligence": 11.2,
+      "coding": 14.4,
+      "agentic": 2.2
+    },
+    "nemotron-3-nano-30b-a3b": {
+      "score": 14.5,
+      "intelligence": 14.5,
+      "coding": 14.4,
+      "agentic": 2
+    },
+    "nemotron-3-nano-omni-30b-a3b-reasoning-free": {
+      "score": 13.8,
+      "intelligence": null,
+      "coding": 13.8,
+      "agentic": null
+    },
+    "qwen3-14b": {
+      "score": 10.4,
+      "intelligence": 10.4,
+      "coding": 13.8,
+      "agentic": 1.9
+    },
+    "gpt-4": {
+      "score": 13.1,
+      "intelligence": null,
+      "coding": 13.1,
+      "agentic": null
+    },
+    "qwen3-30b-a3b-thinking-2507": {
+      "score": 14.6,
+      "intelligence": 14.6,
+      "coding": 12.1,
+      "agentic": 1.8
+    },
+    "llama-3.3-70b-instruct": {
+      "score": 11.9,
+      "intelligence": null,
+      "coding": 11.9,
+      "agentic": null
+    },
+    "gpt-4o-mini": {
+      "score": 11.4,
+      "intelligence": null,
+      "coding": 11.4,
+      "agentic": 1
+    },
+    "gpt-4o-mini-batch": {
+      "score": 11.4,
+      "intelligence": null,
+      "coding": 11.4,
+      "agentic": 1
+    },
+    "gpt-4.1-nano": {
+      "score": 9.6,
+      "intelligence": 9.6,
+      "coding": 11.1,
+      "agentic": 1.2
+    },
+    "gpt-4.1-nano-batch": {
+      "score": 9.6,
+      "intelligence": 9.6,
+      "coding": 11.1,
+      "agentic": 1.2
+    },
+    "gpt-3.5-turbo": {
+      "score": 10.7,
+      "intelligence": null,
+      "coding": 10.7,
+      "agentic": null
+    },
+    "gpt-3.5-turbo-batch": {
+      "score": 10.7,
+      "intelligence": null,
+      "coding": 10.7,
+      "agentic": null
+    },
+    "gemma-3-27b-it": {
+      "score": 7.4,
+      "intelligence": 7.4,
+      "coding": 10.1,
+      "agentic": 0.3
+    },
+    "ministral-8b-2512": {
+      "score": 9,
+      "intelligence": 9,
+      "coding": 9.7,
+      "agentic": 1.2
+    },
+    "granite-4.1-8b": {
+      "score": 9.5,
+      "intelligence": null,
+      "coding": 9.5,
+      "agentic": null
+    },
+    "qwen3-8b": {
+      "score": 8.3,
+      "intelligence": 8.3,
+      "coding": 9,
+      "agentic": 1.6
+    },
+    "llama-4-scout": {
+      "score": 10.3,
+      "intelligence": 10.3,
+      "coding": 8.2,
+      "agentic": 1.1
+    },
+    "gemma-3-12b-it": {
+      "score": 5.5,
+      "intelligence": 5.5,
+      "coding": 5.8,
+      "agentic": 0.3
+    },
+    "llama-3.1-8b-instruct": {
+      "score": 5.4,
+      "intelligence": null,
+      "coding": 5.4,
+      "agentic": null
+    },
+    "ministral-3b-2512": {
+      "score": 7.1,
+      "intelligence": 7.1,
+      "coding": 4.8,
+      "agentic": 1.6
+    },
+    "gemma-3-4b-it": {
+      "score": 2.7,
+      "intelligence": null,
+      "coding": 2.7,
+      "agentic": null
+    }
+  },
+  "counts": {
+    "models": 179
+  }
+}

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+	<!-- dsh-switchman: switch + bolt mark. Flat, theme-safe, no external refs. -->
+	<rect x="4" y="4" width="56" height="56" rx="14" fill="#2B5FFF"/>
+	<path d="M14 40h14a10 10 0 0 0 0-20H14" fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round"/>
+	<circle cx="44" cy="40" r="6" fill="#FFFFFF"/>
+	<path d="M47 8 34 30h8l-5 18 16-24h-9z" fill="#FFD34D" stroke="#2B5FFF" stroke-width="1.5" stroke-linejoin="round"/>
+</svg>

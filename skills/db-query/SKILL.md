@@ -6,6 +6,7 @@ compatibility: Node.js 18+, npm, MySQL 5.7.8+/8.0, Redis 5+; dedicated read-only
 
 <!-- [2026-09-05]-[full English rewrite; top rule: unknown DB access info → stop and ask, never hunt/guess]-[blocks blind or self-sourced connections] -->
 <!-- [2026-09-16]-[broaden the trigger sentence: run-this-SQL / check-the-table phrasings now match too]-[natural trigger rate rises alongside the [DB] hint surfaces] -->
+<!-- [2026-10-01]-[Language section: honor a [SWITCHMAN:LANG] system-prompt line over the English default]-[aligns with the host-side language-preference layer] -->
 # Database Query & Verification
 
 Safely query MySQL and Redis via built-in read-only scripts for debugging, data verification, and cache inspection.
@@ -309,6 +310,10 @@ After every execution, verify:
 - [ ] **No truncation**: results not truncated (`[TRUNCATED]` marker); re-query if they were.
 - [ ] **Conclusions hold**: results actually support the claim; flag any uncertainties.
 - [ ] **Sensitive data**: mask as needed when reporting (phone numbers, password hashes, etc.).
+
+## Language
+
+English by default; use the project's configured language when a `[SWITCHMAN:LANG]` line in the system prompt specifies one, or when the user explicitly requests it.
 
 ## References
 
