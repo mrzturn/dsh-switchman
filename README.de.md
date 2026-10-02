@@ -49,7 +49,7 @@ Nur ein Modell? Lohnt sich trotzdem — die Wasserstandskontrolle und die Doktri
 
 2. **DSH neu starten** — beenden Sie die App vollständig und öffnen Sie sie neu (ein Seiten-Reload genügt nicht), damit die Client-Modul-Tabelle das Bundle aufnimmt.
 
-3. **Einstellungsseite öffnen** — Settings → dsh-switchman. Der erste Bildschirm sind die Spracheinstellungen: je ein Dropdown für Antworten / Kommentare / Dokumente, jedes mit einer Live-Zeile `current: …`. Sie dürfen sie überspringen — Sie werden einmal gefragt, und es bleibt gemerkt.
+3. **Einstellungsseite öffnen** — Settings → dsh-switchman. Der erste Bildschirm sind die Spracheinstellungen: ein Dropdown für den Geltungsbereich — profilweit oder pro Projekt (`.switchman/lang.json` des jeweiligen Projekts) — plus je ein Dropdown für Antworten / Kommentare / Dokumente, jedes mit einer Live-Zeile `current: …`. Sie dürfen sie überspringen — Sie werden einmal gefragt, und es bleibt gemerkt (gefragt wird in der Sprache Ihrer DSH-Oberfläche).
 
    ![Einstellungsseite und Spracheinstellungen](docs/assets/conf-demo1.png)
 

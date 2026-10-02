@@ -46,6 +46,10 @@ export const EffortEntrySchema = z.object({
 /** All dsh-switchman settings. Field names are the settings mutation paths. */
 export const Config = z.object({
 	// --- Phase 1: project language preference -----------------------------
+	/** Where the three language slots live: "global" = these profile-level
+	 *  fields below; "project" = each project's .switchman/lang.json (per
+	 *  session cwd; missing file = ask once per session and save there). */
+	langScope: z.union(["global", "project"]).default("global").volatile(),
 	/** Language for conversational replies. Empty = ask once, then remember. */
 	langConversation: z.string().default("").volatile(),
 	/** Language for code comments. Empty = follow langConversation. */

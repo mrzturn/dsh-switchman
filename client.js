@@ -230,6 +230,10 @@ window.__ModuleLoader__.load({
 			const bool = (field, def) =>
 				typeof value?.[field] === 'boolean' ? value[field] : def;
 			return {
+				// 作用域枚举（host 快照缺失/非法值一律按 global 呈现）；
+				// 放在首位，与 save() 组装的 desired 键序一致，保持
+				// sameValues 的无改动早退路径可用。
+				langScope: value?.langScope === 'project' ? 'project' : 'global',
 				langConversation: string('langConversation'),
 				langComments: string('langComments'),
 				langDocs: string('langDocs'),
@@ -270,6 +274,7 @@ window.__ModuleLoader__.load({
 		 * numbers — never their input-string forms). */
 		function canonical(values) {
 			return JSON.stringify({
+				langScope: values.langScope,
 				langConversation: values.langConversation,
 				langComments: values.langComments,
 				langDocs: values.langDocs,
@@ -417,6 +422,12 @@ window.__ModuleLoader__.load({
 				langSectionTitle: '语言偏好',
 				langSectionDescription:
 					'控制智能体的对话、代码注释与文档撰写语言。',
+				langScopeLabel: '语言作用域',
+				langScopeHelp: '选择这三项语言偏好的存放位置。',
+				langScopeGlobal: '全局（本 profile）',
+				langScopeProject: '按项目（.switchman/lang.json）',
+				langProjectNote:
+					'按项目模式：各项目读取自身的 .switchman/lang.json；首次询问的答案会写入该文件，文件不存在时每个会话都会询问。以下三项仅在全局模式生效。',
 				langConversationLabel: '对话语言',
 				langConversationHelp:
 					'智能体回复与讨论使用的语言；未设置时会在首次使用时询问一次并记住。',
@@ -534,6 +545,12 @@ window.__ModuleLoader__.load({
 				langSectionTitle: 'Language',
 				langSectionDescription:
 					'Controls the language of agent replies, code comments, and authored documents.',
+				langScopeLabel: 'Language scope',
+				langScopeHelp: 'Where these language preferences are stored.',
+				langScopeGlobal: 'Global (this profile)',
+				langScopeProject: 'Per project (.switchman/lang.json)',
+				langProjectNote:
+					'Per-project mode: every project reads its own .switchman/lang.json; first-use answers are saved there, and sessions ask until it exists. The three fields below apply only in global mode.',
 				langConversationLabel: 'Conversation language',
 				langConversationHelp:
 					'The language agents reply and discuss in; when unset, you are asked once on first use and the choice is remembered.',
@@ -1467,7 +1484,9 @@ window.__ModuleLoader__.load({
 				!(values.wmSoftTokens < values.wmHardTokens) ||
 				!(values.wmHardTokens < values.wmForceTokens);
 			const invalid =
-				(customActive && values.langConversation.trim() === '') ||
+				(values.langScope === 'global' &&
+					customActive &&
+					values.langConversation.trim() === '') ||
 				anyNumberInvalid ||
 				orderInvalid;
 			const dirty = !sameValues(current, values);
@@ -1653,6 +1672,7 @@ window.__ModuleLoader__.load({
 			if (form.status !== 'ready' || !form.writable || savingRef.current)
 				return;
 			const desired = {
+				langScope: values.langScope,
 				langConversation: values.langConversation.trim(),
 				langComments: values.langComments,
 				langDocs: values.langDocs,
@@ -1770,6 +1790,9 @@ window.__ModuleLoader__.load({
 			const conversationId = `${headingId}-conversation`;
 			const commentsId = `${headingId}-comments`;
 			const docsId = `${headingId}-docs`;
+			const scopeId = `${headingId}-scope`;
+			/** Project scope moves the three slots into per-project files. */
+			const langLocked = values.langScope === 'project';
 			const suggestion = suggestFromUiLocale(locale.getLocale().active);
 
 			/** Status lines under one row's control. */
@@ -1805,12 +1828,12 @@ window.__ModuleLoader__.load({
 				return lines;
 			};
 
-			/** Shared select props (disabled while saving / read-only). */
-			const selectProps = (id, value, onChange) => ({
+			/** Shared select props (disabled while saving / read-only / locked). */
+			const selectProps = (id, value, onChange, locked = false) => ({
 				id,
 				value,
 				onChange: (event) => onChange(event.target.value),
-				disabled: !editable,
+				disabled: !editable || locked,
 				style: STYLE.control,
 			});
 
@@ -1825,6 +1848,7 @@ window.__ModuleLoader__.load({
 							? CUSTOM
 							: values.langConversation,
 						selectConversation,
+						langLocked,
 					),
 					...languageOptions(t, { withUnset: 'ask', withCustom: true }),
 				),
@@ -1836,7 +1860,7 @@ window.__ModuleLoader__.load({
 								edit('langConversation', event.target.value),
 							placeholder: t('customLanguagePlaceholder'),
 							maxLength: LANG_MAX,
-							disabled: !editable,
+							disabled: !editable || langLocked,
 							'aria-label': t('customLanguage'),
 							style: STYLE.control,
 						})
@@ -2072,6 +2096,34 @@ window.__ModuleLoader__.load({
 						h(
 							SettingsRow,
 							{
+								key: 'scope',
+								id: scopeId,
+								label: t('langScopeLabel'),
+								help: t('langScopeHelp'),
+								control: h(
+									'select',
+									selectProps(scopeId, values.langScope, (value) =>
+										edit('langScope', value),
+									),
+									h(
+										'option',
+										{ key: 'global', value: 'global' },
+										t('langScopeGlobal'),
+									),
+									h(
+										'option',
+										{ key: 'project', value: 'project' },
+										t('langScopeProject'),
+									),
+								),
+								lines: langLocked
+									? [{ text: t('langProjectNote'), invalid: false }]
+									: [],
+							},
+						),
+						h(
+							SettingsRow,
+							{
 								key: 'conversation',
 								id: conversationId,
 								label: t('langConversationLabel'),
@@ -2093,6 +2145,7 @@ window.__ModuleLoader__.load({
 										commentsId,
 										values.langComments,
 										(value) => edit('langComments', value),
+										langLocked,
 									),
 									...languageOptions(t, { withUnset: 'follow' }),
 								),
@@ -2112,6 +2165,7 @@ window.__ModuleLoader__.load({
 										docsId,
 										values.langDocs,
 										(value) => edit('langDocs', value),
+										langLocked,
 									),
 									...languageOptions(t, { withUnset: 'follow' }),
 								),
@@ -2398,6 +2452,16 @@ window.__ModuleLoader__.load({
 			apply(ctx) {
 				ctx.effect(() => ctx.locale.register(NS, DICTS));
 				const t = ctx.locale.bind(NS);
+				// 报告当前生效的 UI 语言给 host 半场（决定语言询问指引的
+				// 提问语言；fire-and-forget，失败静默——host 会退回
+				// settings 的 locale.preference，再退回英文）。3 秒后补报
+				// 一次，覆盖 host 路由晚于本页就绪的启动窗口。
+				const reportUiLocale = () =>
+					void api.post('ui-locale', {
+						locale: ctx.locale?.getLocale?.().active ?? '',
+					});
+				reportUiLocale();
+				setTimeout(reportUiLocale, 3000);
 				ctx.slots.inject('conversation.session.header.actions', () =>
 					ctx.slots.register(
 						{

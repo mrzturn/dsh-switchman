@@ -49,7 +49,7 @@ Un plugin para [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
 
 2. **Reiniciar DSH** — cierra la app por completo y vuelve a abrirla (recargar la página no basta) para que la tabla de módulos del cliente recoja el bundle.
 
-3. **Abrir la página de ajustes** — Settings → dsh-switchman. La primera pantalla son las preferencias de idioma: un desplegable para respuestas / comentarios / documentos, cada uno con una línea `current: …` en vivo. Sáltatelos si quieres — se te preguntará una vez y se recordará.
+3. **Abrir la página de ajustes** — Settings → dsh-switchman. La primera pantalla son las preferencias de idioma: un desplegable de ámbito — todo el perfil o por proyecto (`.switchman/lang.json` de cada proyecto) — más un desplegable para respuestas / comentarios / documentos, cada uno con una línea `current: …` en vivo. Sáltatelos si quieres — se te preguntará una vez y se recordará (se pregunta en el idioma de la interfaz de tu DSH).
 
    ![Página de ajustes y preferencias de idioma](docs/assets/conf-demo1.png)
 

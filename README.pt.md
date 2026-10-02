@@ -49,7 +49,7 @@ Só um modelo? Ainda vale a pena — o controle de nível de água e a doutrina 
 
 2. **Reinicie o DSH** — feche o app por completo e reabra (recarregar a página não basta) para que a tabela de módulos do cliente reconheça o bundle.
 
-3. **Abra a página de configurações** — Settings → dsh-switchman. A primeira tela é a preferência de idioma: um dropdown para respostas / comentários / documentos, cada um com uma linha ao vivo `current: …`. Pode pular — perguntam uma vez e fica guardado.
+3. **Abra a página de configurações** — Settings → dsh-switchman. A primeira tela é a preferência de idioma: um dropdown de escopo — todo o perfil ou por projeto (`.switchman/lang.json` de cada projeto) — mais um dropdown para respostas / comentários / documentos, cada um com uma linha ao vivo `current: …`. Pode pular — perguntam uma vez e fica guardado (perguntam no idioma da interface do DSH).
 
    ![Página de configurações e preferência de idioma](docs/assets/conf-demo1.png)
 

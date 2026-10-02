@@ -49,7 +49,7 @@ Only one model? Still worth it — water-level control and the doctrine don't ca
 
 2. **Restart DSH** — quit the app entirely and reopen (a page reload is not enough) so the client-module table picks up the bundle.
 
-3. **Open the settings page** — Settings → dsh-switchman. The first screen is language preferences: one dropdown each for replies / comments / docs, each with a live `current: …` line. Skip them if you like — you'll be asked once and remembered.
+3. **Open the settings page** — Settings → dsh-switchman. The first screen is language preferences: a scope dropdown — profile-wide, or per project (`.switchman/lang.json`) — plus one dropdown each for replies / comments / docs, each with a live `current: …` line. Skip them if you like — you'll be asked once and remembered (asked in your DSH UI language).
 
    ![Settings page and language preferences](docs/assets/conf-demo1.png)
 

@@ -14,6 +14,9 @@
  *   GET  /api/dsh-switchman/models   — model-catalog pass-through from the
  *                                      host sessionController (degrades to
  *                                      llm.listProviders, then []).
+ *   POST /api/dsh-switchman/ui-locale — the client half reports its active
+ *                                      UI locale (feeds the ask guidance's
+ *                                      question language; no settings write).
  *
  * Every route carries the shared trust fence (loopback + same-origin browser
  * markers; a live remoteWebUiPairing cookie is an extra allow path), mirroring
@@ -21,11 +24,14 @@
  * settings, so unpaired LAN clients must not reach it.
  */
 
+import { reportedUiLocale, setReportedUiLocale } from "./ui-locale.js";
+
 /** Route paths (client.js mirrors these literals). */
 const ROUTES = {
 	health: "/api/dsh-switchman/health",
 	config: "/api/dsh-switchman/config",
 	models: "/api/dsh-switchman/models",
+	uiLocale: "/api/dsh-switchman/ui-locale",
 };
 
 /** Settings namespace this plugin's writes target: the LOADER ENTRY id from
@@ -71,6 +77,7 @@ const EFFORTS_FIELDS = [
 	"poolReviewEfforts",
 ];
 const ENUM_FIELDS = {
+	langScope: ["global", "project"],
 	dispatchEnforce: ["off", "advice", "enforce"],
 	wmDenyMode: ["cap", "deny"],
 };
@@ -206,6 +213,7 @@ export function snapshotOf(config) {
 		values[field] = Array.isArray(rawOf(config?.[field]))
 			? rawOf(config[field]).map(cleanEffortEntry).filter(Boolean)
 			: [];
+	values.langScope = ENUM_FIELDS.langScope.includes(rawOf(config?.langScope)) ? rawOf(config.langScope) : "global";
 	values.dispatchEnforce = ENUM_FIELDS.dispatchEnforce.includes(rawOf(config?.dispatchEnforce))
 		? rawOf(config.dispatchEnforce)
 		: "advice";
@@ -244,6 +252,8 @@ function coerceValues(input) {
 		if (efforts.some((entry) => entry === null)) return null;
 		values[field] = efforts;
 	}
+	if (!ENUM_FIELDS.langScope.includes(input.langScope)) return null;
+	values.langScope = input.langScope;
 	if (!ENUM_FIELDS.dispatchEnforce.includes(input.dispatchEnforce)) return null;
 	values.dispatchEnforce = input.dispatchEnforce;
 	for (const field of NUMBER_FIELDS) {
@@ -377,6 +387,22 @@ export function makeRoutes(ctx, config) {
 					ctx.logger.warn(`dsh-switchman: model catalog failed: ${error?.message ?? error}`);
 					writeJson(res, 500, { error: error?.message ?? String(error) });
 				}
+			},
+		},
+		{
+			kind: "exact",
+			path: ROUTES.uiLocale,
+			handler: async (req, res) => {
+				if (!guard(req, res, "POST")) return;
+				let body;
+				try {
+					body = await readJsonBody(req);
+				} catch (error) {
+					writeJson(res, 400, { error: error?.message ?? String(error) });
+					return;
+				}
+				setReportedUiLocale(body?.locale);
+				writeJson(res, 200, { ok: true, locale: reportedUiLocale() });
 			},
 		},
 	];
