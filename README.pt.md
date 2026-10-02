@@ -40,6 +40,13 @@ Só um modelo? Ainda vale a pena — o controle de nível de água e a doutrina 
    plugin_manager: install_bundle  target=/path/to/dsh-switchman
    ```
 
+   ou pelo terminal via CLI `dsh` — escolha o perfil que corresponde a como você executa o DSH:
+
+   ```bash
+   dsh plugin --profile web add dsh-switchman      # Web GUI
+   dsh plugin --profile desktop add dsh-switchman   # app desktop
+   ```
+
 2. **Reinicie o DSH** — feche o app por completo e reabra (recarregar a página não basta) para que a tabela de módulos do cliente reconheça o bundle.
 
 3. **Abra a página de configurações** — Settings → dsh-switchman. A primeira tela é a preferência de idioma: um dropdown para respostas / comentários / documentos, cada um com uma linha ao vivo `current: …`. Pode pular — perguntam uma vez e fica guardado.

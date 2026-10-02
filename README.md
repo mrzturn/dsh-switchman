@@ -40,6 +40,13 @@ Only one model? Still worth it — water-level control and the doctrine don't ca
    plugin_manager: install_bundle  target=/path/to/dsh-switchman
    ```
 
+   or from a terminal via the `dsh` CLI — pick the profile that matches how you run DSH:
+
+   ```bash
+   dsh plugin --profile web add dsh-switchman      # Web GUI
+   dsh plugin --profile desktop add dsh-switchman   # desktop app
+   ```
+
 2. **Restart DSH** — quit the app entirely and reopen (a page reload is not enough) so the client-module table picks up the bundle.
 
 3. **Open the settings page** — Settings → dsh-switchman. The first screen is language preferences: one dropdown each for replies / comments / docs, each with a live `current: …` line. Skip them if you like — you'll be asked once and remembered.

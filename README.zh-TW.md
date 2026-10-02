@@ -40,6 +40,13 @@
    plugin_manager: install_bundle  target=/path/to/dsh-switchman
    ```
 
+   或在終端機用 `dsh` 命令安裝——依執行方式選擇對應的 profile：
+
+   ```bash
+   dsh plugin --profile web add dsh-switchman      # Web GUI
+   dsh plugin --profile desktop add dsh-switchman   # 桌面應用
+   ```
+
 2. **重啟 DSH**——完全結束應用程式再重新開啟（重新整理頁面不算），用戶端模組表才會載入本 bundle。
 
 3. **打開設定頁**——設定 → dsh-switchman。第一屏是語言偏好：三個下拉選單對應回覆 / 註解 / 文件，每項下方有「目前：…」狀態行；不設定也沒關係，首次使用會問一次並記住。
