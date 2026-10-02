@@ -50,7 +50,26 @@ const NUMBER_FIELDS = [
 	"wmReadBudgetTokens",
 	"wmSubagentForceTokens",
 ];
-const BOOLEAN_FIELDS = ["wmAutoHandover", "wmSubagentCap"];
+const BOOLEAN_FIELDS = [
+	"wmAutoHandover",
+	"wmSubagentCap",
+	// 以下六个 mirrors host/config.js 的 pool*Manual 开关
+	"poolEconomyManual",
+	"poolMechanicalManual",
+	"poolMainManual",
+	"poolHardManual",
+	"poolVisionManual",
+	"poolReviewManual",
+];
+/** Per-pool effort-route lists (mirrors host/config.js pool*Efforts). */
+const EFFORTS_FIELDS = [
+	"poolEconomyEfforts",
+	"poolMechanicalEfforts",
+	"poolMainEfforts",
+	"poolHardEfforts",
+	"poolVisionEfforts",
+	"poolReviewEfforts",
+];
 const ENUM_FIELDS = {
 	dispatchEnforce: ["off", "advice", "enforce"],
 	wmDenyMode: ["cap", "deny"],
@@ -164,6 +183,15 @@ function cleanRank(entry) {
 	return tier === undefined ? route : { ...route, tier };
 }
 
+/** Coerce one effort candidate `{provider, model, effort}` entry; null when invalid. */
+function cleanEffortEntry(entry) {
+	if (entry === null || typeof entry !== "object") return null;
+	const provider = typeof entry.provider === "string" ? entry.provider.trim() : "";
+	const model = typeof entry.model === "string" ? entry.model.trim() : "";
+	const effort = typeof entry.effort === "string" ? entry.effort.trim() : "";
+	return provider !== "" && model !== "" && effort !== "" ? { provider, model, effort } : null;
+}
+
 /** Snapshot the plugin's live volatile config into plain JSON values. */
 export function snapshotOf(config) {
 	const values = {};
@@ -174,6 +202,10 @@ export function snapshotOf(config) {
 			: [];
 	const rank = rawOf(config?.modelRank);
 	values.modelRank = Array.isArray(rank) ? rank.map(cleanRank).filter(Boolean) : [];
+	for (const field of EFFORTS_FIELDS)
+		values[field] = Array.isArray(rawOf(config?.[field]))
+			? rawOf(config[field]).map(cleanEffortEntry).filter(Boolean)
+			: [];
 	values.dispatchEnforce = ENUM_FIELDS.dispatchEnforce.includes(rawOf(config?.dispatchEnforce))
 		? rawOf(config.dispatchEnforce)
 		: "advice";
@@ -206,6 +238,12 @@ function coerceValues(input) {
 	const rank = input.modelRank.map(cleanRank);
 	if (rank.some((entry) => entry === null)) return null;
 	values.modelRank = rank;
+	for (const field of EFFORTS_FIELDS) {
+		if (!Array.isArray(input[field])) return null;
+		const efforts = input[field].map(cleanEffortEntry);
+		if (efforts.some((entry) => entry === null)) return null;
+		values[field] = efforts;
+	}
 	if (!ENUM_FIELDS.dispatchEnforce.includes(input.dispatchEnforce)) return null;
 	values.dispatchEnforce = input.dispatchEnforce;
 	for (const field of NUMBER_FIELDS) {

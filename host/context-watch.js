@@ -162,19 +162,24 @@ function renderRootBanner(level, used, th, autoHandover) {
 	return lines.join("\n");
 }
 
-/** Subagent-session banner: "" under 50% (token economy), one line to 80%,
- *  HANDOFF-block instructions to the cap, one-line ceiling notice at it.
- *  Pausing never applies to subagents (oc index.ts:187-190). */
-function renderSubBanner(used, cap) {
-	if (used < cap * 0.5) return "";
-	if (used < cap * 0.8)
-		return `[SWITCHMAN:WATERMARK] subagent context at ${kilo(used)}/${kilo(cap)} — keep reads narrow, drop bulky raw output.`;
-	if (used < cap)
-		return (
-			`[SWITCHMAN:WATERMARK] subagent context at ${kilo(used)}/${kilo(cap)} — nearing the cap.\n` +
-			`Your FINAL message must end with a HANDOFF block: completed / key findings (file:line) / remaining / next steps.`
-		);
-	return `[SWITCHMAN:WATERMARK] subagent context cap ${kilo(cap)} reached — stop reading and return the final summary now.`;
+/** Subagent-session banner: the same soft/hard/force absolute-token tiers
+ *  as the root banner ("" while ok — token economy), with subagent-flavored
+ *  advice and the HANDOFF block due at the force tier. Pausing never applies
+ *  to subagents (oc index.ts:187-190). */
+function renderSubBanner(used, th) {
+	const level = levelOf(used, th);
+	const head =
+		`[SWITCHMAN:WATERMARK] subagent level=${level} used=${kilo(used)}` +
+		` budget=${kilo(th.soft)}/${kilo(th.hard)}/${kilo(th.force)}`;
+	if (level === "ok") return "";
+	if (level === "soft")
+		return `${head}\nsoft tier: keep reads narrow and drop bulky raw output.`;
+	if (level === "hard")
+		return `${head}\nhard tier: stop broad reading; start wrapping toward the final summary.`;
+	return (
+		`${head}\nforce tier: stop reading and return the final summary now.\n` +
+		`End the FINAL message with a HANDOFF block: completed / key findings (file:line) / remaining / next steps.`
+	);
 }
 
 /** Whole banner for one assembly; "" whenever anything needed is missing. */
@@ -186,9 +191,12 @@ function renderBanner(ctx, config, state, agent) {
 		const used = measureNow(ctx, agent);
 		if (used === null) return "";
 		if (!isRoot(ctx, agent)) {
-			const subForce = readNumber(config.wmSubagentForceTokens, 0);
-			const cap = readBool(config.wmSubagentCap, true) && subForce > 0 ? subForce : th.force;
-			return renderSubBanner(used, cap);
+			// Subagents share the root soft/hard thresholds; the optional
+			// wmSubagentForceTokens override replaces only the force tier
+			// (enabled by the wmSubagentCap toggle, 0/0 = follow the root set).
+			const subForce = readBool(config.wmSubagentCap, true) ? readNumber(config.wmSubagentForceTokens, 0) : 0;
+			const subTh = subForce > 0 ? { ...th, force: subForce } : th;
+			return renderSubBanner(used, subTh);
 		}
 		const level = state.paused.has(sessionId) ? "paused" : levelOf(used, th);
 		return renderRootBanner(level, used, th, readBool(config.wmAutoHandover, true));

@@ -33,6 +33,16 @@ export const RankEntrySchema = z.object({
 	tier: z.union(["S", "A", "B", "C"]),
 });
 
+/** One per-model effort pin: a route plus the reasoning effort to use when
+ *  dispatching that model (overrides the lane's default effort). The value
+ *  is free-form on purpose — the valid set is whatever the DSH adapter for
+ *  that model reports (low/medium/high, off, …). */
+export const EffortEntrySchema = z.object({
+	provider: z.string().min(1).required(),
+	model: z.string().min(1).required(),
+	effort: z.string().min(1).required(),
+});
+
 /** All dsh-switchman settings. Field names are the settings mutation paths. */
 export const Config = z.object({
 	// --- Phase 1: project language preference -----------------------------
@@ -51,6 +61,24 @@ export const Config = z.object({
 	poolHard: z.array(ModelRouteSchema).default([]).volatile(),
 	poolVision: z.array(ModelRouteSchema).default([]).volatile(),
 	poolReview: z.array(ModelRouteSchema).default([]).volatile(),
+	/** Per-lane manual ordering: true = the lane's stored array order IS the
+	 *  dispatch priority (host skips the capability/modelRank re-sort); false
+	 *  = auto ordering (modelRank anchors first, then capability score). */
+	poolEconomyManual: z.boolean().default(false).volatile(),
+	poolMechanicalManual: z.boolean().default(false).volatile(),
+	poolMainManual: z.boolean().default(false).volatile(),
+	poolHardManual: z.boolean().default(false).volatile(),
+	poolVisionManual: z.boolean().default(false).volatile(),
+	poolReviewManual: z.boolean().default(false).volatile(),
+	/** Per-lane manually pinned reasoning efforts: one {provider, model,
+	 *  effort} entry per route the user pinned; routes without an entry use
+	 *  the lane's default effort. */
+	poolEconomyEfforts: z.array(EffortEntrySchema).default([]).volatile(),
+	poolMechanicalEfforts: z.array(EffortEntrySchema).default([]).volatile(),
+	poolMainEfforts: z.array(EffortEntrySchema).default([]).volatile(),
+	poolHardEfforts: z.array(EffortEntrySchema).default([]).volatile(),
+	poolVisionEfforts: z.array(EffortEntrySchema).default([]).volatile(),
+	poolReviewEfforts: z.array(EffortEntrySchema).default([]).volatile(),
 	/** Capability ranking, strongest first; manual order overrides defaults. */
 	modelRank: z.array(RankEntrySchema).default([]).volatile(),
 	/** How pool guidance is enforced on delegation tools. */
@@ -80,3 +108,9 @@ export const LANES = ["economy", "mechanical", "main", "hard", "vision", "review
 
 /** Settings field name for one lane. */
 export const laneField = (lane) => `pool${lane[0].toUpperCase()}${lane.slice(1)}`;
+
+/** Manual-order flag field name for one lane. */
+export const laneManualField = (lane) => `${laneField(lane)}Manual`;
+
+/** Per-model effort-pin list field name for one lane. */
+export const laneEffortsField = (lane) => `${laneField(lane)}Efforts`;

@@ -99,14 +99,16 @@ window.__ModuleLoader__.load({
 		/** Enforcement modes (dictionary keys: enforceOff/Advice/Enforce). */
 		const ENFORCE_MODES = ['off', 'advice', 'enforce'];
 
-		/** The six dispatch lanes: settings field per lane, display order. */
+		/** The six dispatch lanes: settings field per lane, display order.
+		 *  manualField = the per-lane manual-order toggle (true = stored
+		 *  array order IS the dispatch priority). */
 		const POOL_FIELDS = [
-			{ field: 'poolEconomy', lane: 'economy' },
-			{ field: 'poolMechanical', lane: 'mechanical' },
-			{ field: 'poolMain', lane: 'main' },
-			{ field: 'poolHard', lane: 'hard' },
-			{ field: 'poolVision', lane: 'vision' },
-			{ field: 'poolReview', lane: 'review' },
+			{ field: 'poolEconomy', manualField: 'poolEconomyManual', effortsField: 'poolEconomyEfforts', lane: 'economy' },
+			{ field: 'poolMechanical', manualField: 'poolMechanicalManual', effortsField: 'poolMechanicalEfforts', lane: 'mechanical' },
+			{ field: 'poolMain', manualField: 'poolMainManual', effortsField: 'poolMainEfforts', lane: 'main' },
+			{ field: 'poolHard', manualField: 'poolHardManual', effortsField: 'poolHardEfforts', lane: 'hard' },
+			{ field: 'poolVision', manualField: 'poolVisionManual', effortsField: 'poolVisionEfforts', lane: 'vision' },
+			{ field: 'poolReview', manualField: 'poolReviewManual', effortsField: 'poolReviewEfforts', lane: 'review' },
 		];
 
 		/** Numeric watermark fields: settings field, schema minimum, and the
@@ -138,6 +140,8 @@ window.__ModuleLoader__.load({
 		const ALL_FIELDS = [
 			...LANG_FIELDS,
 			...POOL_FIELDS.map(({ field }) => field),
+			...POOL_FIELDS.map(({ manualField }) => manualField),
+			...POOL_FIELDS.map(({ effortsField }) => effortsField),
 			'modelRank',
 			'dispatchEnforce',
 			...WM_NUMBER_FIELDS.map(({ field }) => field),
@@ -165,6 +169,19 @@ window.__ModuleLoader__.load({
 			return typeof entry.tier === 'string' && TIERS.includes(entry.tier)
 				? { ...route, tier: entry.tier }
 				: route;
+		}
+
+		/** 思考强度 fallback 档位（模型拿不到 wire 元数据时用）；
+		 * 真实列表以 wire reasoning.efforts 为准。 */
+		const EFFORTS = ['low', 'medium', 'high'];
+
+		/** 一条格式良好的 effort 条目（{provider, model, effort}），或 null。 */
+		function sanitizeEffortEntry(entry) {
+			const route = sanitizeRoute(entry);
+			if (route === null) return null;
+			return typeof entry.effort === 'string' && entry.effort !== ''
+				? { ...route, effort: entry.effort }
+				: null;
 		}
 
 		/** Is `value` one of the predefined candidates? */
@@ -202,6 +219,10 @@ window.__ModuleLoader__.load({
 				Array.isArray(value?.[field])
 					? value[field].map(sanitizeRoute).filter(Boolean)
 					: [];
+			const efforts = (field) =>
+				Array.isArray(value?.[field])
+					? value[field].map(sanitizeEffortEntry).filter(Boolean)
+					: [];
 			const number = ({ field, def }) =>
 				typeof value?.[field] === 'number' && Number.isFinite(value[field])
 					? value[field]
@@ -214,6 +235,18 @@ window.__ModuleLoader__.load({
 				langDocs: string('langDocs'),
 				...Object.fromEntries(
 					POOL_FIELDS.map(({ field }) => [field, routes(field)]),
+				),
+				...Object.fromEntries(
+					POOL_FIELDS.map(({ field, manualField }) => [
+						manualField,
+						bool(manualField, false),
+					]),
+				),
+				...Object.fromEntries(
+					POOL_FIELDS.map(({ effortsField }) => [
+						effortsField,
+						efforts(effortsField),
+					]),
 				),
 				modelRank: Array.isArray(value?.modelRank)
 					? value.modelRank.map(sanitizeRankEntry).filter(Boolean)
@@ -230,8 +263,9 @@ window.__ModuleLoader__.load({
 			};
 		}
 
-		/** Canonical serialization for equality: pools compare as sets (order
-		 * inside one pool is irrelevant), the ranking as an ordered
+		/** Canonical serialization for equality: auto pools compare as sets
+		 * (order irrelevant) while manual pools compare as ordered sequences
+		 * (their order IS the dispatch priority), the ranking as an ordered
 		 * tier-annotated sequence, everything else verbatim (numbers as
 		 * numbers — never their input-string forms). */
 		function canonical(values) {
@@ -240,9 +274,26 @@ window.__ModuleLoader__.load({
 				langComments: values.langComments,
 				langDocs: values.langDocs,
 				...Object.fromEntries(
-					POOL_FIELDS.map(({ field }) => [
+					POOL_FIELDS.map(({ field, manualField }) => [
 						field,
-						values[field].map(routeKey).sort(),
+						values[manualField]
+							? values[field].map(routeKey)
+							: values[field].map(routeKey).sort(),
+					]),
+				),
+				...Object.fromEntries(
+					POOL_FIELDS.map(({ manualField }) => [
+						manualField,
+						values[manualField],
+					]),
+				),
+				...Object.fromEntries(
+					POOL_FIELDS.map(({ effortsField }) => [
+						effortsField,
+						values[effortsField]
+							.map((entry) => `${routeKey(entry)}\0${entry.effort}`)
+							.sort()
+							.join('|'),
 					]),
 				),
 				modelRank: values.modelRank
@@ -281,6 +332,11 @@ window.__ModuleLoader__.load({
 						model: modelId,
 						providerName: providerName || provider,
 						modelName: model.name ?? modelId,
+						reasoning:
+							model.reasoning !== null &&
+							typeof model.reasoning === 'object'
+								? model.reasoning
+								: undefined,
 					});
 				}
 			}
@@ -403,6 +459,18 @@ window.__ModuleLoader__.load({
 				poolSelectAll: '全选',
 				poolClear: '清空',
 				poolEmpty: '暂无候选模型',
+				poolManualLabel: '手动序',
+				poolManualHelp:
+					'开启后按列表顺序派发（首个即首选）；未开启按能力排序自动排。',
+				poolManualSelected: '已选 · 派发优先序',
+				poolManualAddable: '可添加',
+				poolMoveUp: '上移',
+				poolMoveDown: '下移',
+				poolRemoveOne: '移除',
+				poolEffortFollow: '跟随泳道',
+				poolEffortLabel: '思考强度',
+				poolEffortHelp:
+					'手动指定该模型的思考强度，派发时优先于泳道默认',
 				catalogLoading: '正在加载模型目录…',
 				catalogLoadFailed: '无法加载模型目录。',
 				catalogRetry: '重试',
@@ -448,9 +516,11 @@ window.__ModuleLoader__.load({
 				wmAutoHandoverHelp: '达到强制水位时自动备份并移交压缩，无需手动确认。',
 				wmSubagentTitle: '子智能体',
 				wmSubagentCapLabel: '子智能体上下文上限',
-				wmSubagentCapHelp: '将子智能体的上下文限制在下方阈值内。',
+				wmSubagentCapHelp:
+					'开启后子智能体可用下方独立强制阈值；关闭则完全跟随上方三档水位。',
 				wmSubagentForceLabel: '子智能体强制阈值',
-				wmSubagentForceHelp: '子智能体的强制水位；0 = 跟随上方强制水位。',
+				wmSubagentForceHelp:
+					'仅覆盖子智能体的 force 档（soft/hard 与主会话共用）；0 = 跟随上方强制水位。',
 				wmSubagentFollowForce: '跟随 force 档（0）',
 				wmCommands:
 					'命令：/ctx-pause 暂停水位干预 · /ctx-resume 恢复干预 · /ctx-handover 立即备份并交接压缩。',
@@ -507,6 +577,18 @@ window.__ModuleLoader__.load({
 				poolSelectAll: 'Select all',
 				poolClear: 'Clear',
 				poolEmpty: 'No candidate models',
+				poolManualLabel: 'Manual order',
+				poolManualHelp:
+					'When on, dispatch follows the listed order (head = first choice); when off, lanes are ordered by capability automatically.',
+				poolManualSelected: 'Selected · dispatch priority',
+				poolManualAddable: 'Add models',
+				poolMoveUp: 'Move up',
+				poolMoveDown: 'Move down',
+				poolRemoveOne: 'Remove',
+				poolEffortFollow: 'follow lane',
+				poolEffortLabel: 'effort',
+				poolEffortHelp:
+					"Pin this model's reasoning effort; it overrides the lane default when dispatching",
 				catalogLoading: 'Loading model catalog…',
 				catalogLoadFailed: 'The model catalog could not be loaded.',
 				catalogRetry: 'Retry',
@@ -552,9 +634,11 @@ window.__ModuleLoader__.load({
 				wmAutoHandoverHelp: 'At the force watermark, back up and hand over to compaction automatically.',
 				wmSubagentTitle: 'Subagents',
 				wmSubagentCapLabel: 'Subagent context cap',
-				wmSubagentCapHelp: 'Cap subagent contexts at the threshold below.',
+				wmSubagentCapHelp:
+					'Lets subagents use the dedicated force threshold below; off = fully follow the three tiers above.',
 				wmSubagentForceLabel: 'Subagent force threshold',
-				wmSubagentForceHelp: 'The subagent force watermark; 0 follows the force watermark above.',
+				wmSubagentForceHelp:
+					'Overrides only the subagent force tier (soft/hard are shared with the main session); 0 follows the force watermark above.',
 				wmSubagentFollowForce: 'Follow the force tier (0)',
 				wmCommands:
 					'Commands: /ctx-pause suspends watermark actions · /ctx-resume resumes them · /ctx-handover backs up and hands over now.',
@@ -806,6 +890,18 @@ window.__ModuleLoader__.load({
 				whiteSpace: 'nowrap',
 			},
 			rankActions: { display: 'flex', gap: '4px', flex: 'none' },
+			effortSelect: {
+				font: 'inherit',
+				fontSize: '12px',
+				lineHeight: 1.5,
+				padding: '1px 2px',
+				borderRadius: 'var(--dsw-radius-xs)',
+				border: '.5px solid var(--dsw-alias-border-l2)',
+				background: 'transparent',
+				color: 'var(--dsw-alias-label-secondary)',
+				marginLeft: '8px',
+				flex: 'none',
+			},
 			iconButton: {
 				font: 'inherit',
 				fontSize: '12px',
@@ -893,28 +989,260 @@ window.__ModuleLoader__.load({
 
 		/** One dispatch-pool card: title + positioning, select-all/clear, and a
 		 * provider-grouped checkbox list of catalog candidates plus this pool's
-		 * saved-but-unavailable routes. */
+		 * saved-but-unavailable routes. With `manual` on, the body switches to
+		 * a stored-order priority list (move up/down/remove) plus an
+		 * add-only checkbox list. */
 		function PoolCard({
 			t,
 			title,
 			description,
 			rows,
 			extras,
+			routes,
+			efforts,
+			manual,
 			editable,
 			onToggle,
+			onToggleManual,
+			onSetEffort,
+			onMove,
+			onRemove,
 			onSelectAll,
 			onClear,
 		}) {
 			const hasCandidates = rows.length > 0 || extras.length > 0;
+			/** 显示名查找：覆盖目录行与已存离架行。 */
+			const nameByKey = new Map(
+				[...rows, ...extras]
+					.filter((row) => row.header === undefined)
+					.map((row) => [
+						routeKey(row),
+						`${row.providerName} · ${row.modelName}`,
+					]),
+			);
+			/** effort 查找：该池已配置条目的 key → effort。 */
+			const effortByKey = new Map(
+				efforts.map((entry) => [routeKey(entry), entry.effort]),
+			);
+			/** effort 元数据查找：routeKey → wire reasoning.efforts（无则缺省）。 */
+			const effortsMetaByKey = new Map(
+				[...rows, ...extras]
+					.filter(
+						(row) =>
+							row.header === undefined && Array.isArray(row.reasoning?.efforts),
+					)
+					.map((row) => [routeKey(row), row.reasoning.efforts]),
+			);
+			/** 单个已选模型的 effort 下拉选项：优先该模型 wire 里的真实
+			 * efforts；拿不到时退回 EFFORTS 常量；已存旧值不在列表里时追加，
+			 * 避免受控 select 错位。 */
+			const effortOptions = (route) => {
+				const key = routeKey(route);
+				const wireEfforts = effortsMetaByKey.get(key);
+				const raw =
+					wireEfforts !== undefined && wireEfforts.length > 0
+						? wireEfforts
+						: EFFORTS.map((effort) => ({ id: effort }));
+				const seen = new Set(raw.map((entry) => entry.id));
+				const current = effortByKey.get(key);
+				const pending =
+					typeof current === 'string' && current !== '' && !seen.has(current)
+						? [{ id: current }]
+						: [];
+				return [
+					{ id: '', name: t('poolEffortFollow') },
+					...raw.map((entry) => ({
+						id: entry.id,
+						name: entry.name ?? entry.id,
+					})),
+					...pending,
+				];
+			};
+			/** 单个已选模型的 effort 下拉（'' = 跟随泳道默认）；阻止冒泡避免
+			 * 触发外层 label 的 checkbox。 */
+			const effortSelect = (route) =>
+				h(
+					'select',
+					{
+						style: STYLE.effortSelect,
+						title: t('poolEffortHelp'),
+						'aria-label': `${t('poolEffortLabel')} · ${route.provider}/${route.model}`,
+						disabled: !editable,
+						value: effortByKey.get(routeKey(route)) ?? '',
+						onClick: (e) => e.stopPropagation(),
+						onChange: (e) => {
+							onSetEffort(route, e.target.value);
+						},
+					},
+					...effortOptions(route).map((option) =>
+						h('option', { value: option.id }, option.name),
+					),
+				);
+			/** 手动态的「可添加」列表：仅未勾选的目录行，空分组头剔除。 */
+			const addableRows = [];
+			if (manual) {
+				let pendingHeader = null;
+				for (const row of rows) {
+					if (row.header !== undefined) {
+						pendingHeader = row;
+						continue;
+					}
+					if (row.selected) continue;
+					if (pendingHeader !== null) {
+						addableRows.push(pendingHeader);
+						pendingHeader = null;
+					}
+					addableRows.push(row);
+				}
+			}
+			/** 标题行右侧的手动序开关。 */
+			const manualToggle = h(
+				'label',
+				{ style: STYLE.checkRow, title: t('poolManualHelp') },
+				h('input', {
+					type: 'checkbox',
+					checked: manual,
+					disabled: !editable,
+					onChange: onToggleManual,
+				}),
+				h('span', { style: STYLE.checkText }, t('poolManualLabel')),
+			);
+			if (manual)
+				return h(
+					'div',
+					{ style: STYLE.poolCard },
+					h('div', { style: STYLE.poolCardTitle }, title, manualToggle),
+					h('p', { style: STYLE.poolCardDesc }, description),
+					routes.length > 0
+						? h(
+								'div',
+								{ style: STYLE.poolList },
+								h('p', { style: STYLE.groupHeader }, t('poolManualSelected')),
+								h(
+									'div',
+									{ style: STYLE.rankList },
+									...routes.map((route, index) =>
+										h(
+											'div',
+											{ key: routeKey(route), style: STYLE.rankRow },
+											h('span', { style: STYLE.rankIndex }, String(index + 1)),
+											h(
+												'span',
+												{
+													style: STYLE.rankLabel,
+													title: `${route.provider}/${route.model}`,
+												},
+												nameByKey.get(routeKey(route)) ??
+													`${route.provider} · ${route.model}`,
+											),
+											effortSelect(route),
+											h(
+												'div',
+												{ style: STYLE.rankActions },
+												h(
+													'button',
+													{
+														type: 'button',
+														onClick: () => {
+															onMove(index, -1);
+														},
+														disabled: !editable || index === 0,
+														title: t('poolMoveUp'),
+														'aria-label': t('poolMoveUp'),
+														style: STYLE.iconButton,
+													},
+													'↑',
+												),
+												h(
+													'button',
+													{
+														type: 'button',
+														onClick: () => {
+															onMove(index, 1);
+														},
+														disabled: !editable || index === routes.length - 1,
+														title: t('poolMoveDown'),
+														'aria-label': t('poolMoveDown'),
+														style: STYLE.iconButton,
+													},
+													'↓',
+												),
+												h(
+													'button',
+													{
+														type: 'button',
+														onClick: () => {
+															onRemove(index);
+														},
+														disabled: !editable,
+														title: t('poolRemoveOne'),
+														'aria-label': t('poolRemoveOne'),
+														style: STYLE.iconButton,
+													},
+													'✕',
+												),
+											),
+										),
+									),
+								),
+							)
+						: h('p', { style: STYLE.poolCardDesc }, t('poolEmpty')),
+					addableRows.length > 0
+						? h(
+								'div',
+								{ style: STYLE.poolList },
+								h('p', { style: STYLE.groupHeader }, t('poolManualAddable')),
+								...addableRows.map((row, index) =>
+									row.header !== undefined
+										? h(
+												'p',
+												{ key: `h${index}`, style: STYLE.groupHeader },
+												row.header,
+											)
+										: h(
+												'label',
+												{
+													key: routeKey(row),
+													style: STYLE.checkRow,
+													title: `${row.provider}/${row.model}`,
+												},
+												h('input', {
+													type: 'checkbox',
+													checked: false,
+													disabled: !editable,
+													onChange: () => {
+														onToggle(row);
+													},
+												}),
+												h(
+													'span',
+													{ style: STYLE.checkText },
+													`${row.providerName} · ${row.modelName}`,
+												),
+											),
+								),
+							)
+						: null,
+					h(
+						'div',
+						{ style: STYLE.poolActions },
+						h(
+							'button',
+							{
+								type: 'button',
+								onClick: onClear,
+								disabled: !editable,
+								style: STYLE.linkButton,
+							},
+							t('poolClear'),
+						),
+					),
+				);
 			return h(
 				'div',
 				{ style: STYLE.poolCard },
-				h(
-					'div',
-					null,
-					h('span', { style: STYLE.poolCardTitle }, title),
-					h('p', { style: STYLE.poolCardDesc }, description),
-				),
+				h('div', { style: STYLE.poolCardTitle }, title, manualToggle),
+				h('p', { style: STYLE.poolCardDesc }, description),
 				h(
 					'div',
 					{ style: STYLE.poolActions },
@@ -970,6 +1298,7 @@ window.__ModuleLoader__.load({
 												{ style: STYLE.checkText },
 												`${row.providerName} · ${row.modelName}`,
 											),
+											...(row.selected ? [effortSelect(row)] : []),
 										),
 							),
 							extras.length > 0
@@ -1000,6 +1329,7 @@ window.__ModuleLoader__.load({
 										{ style: STYLE.checkText },
 										`${row.providerName} · ${row.modelName}`,
 									),
+									effortSelect(row),
 									h(
 										'span',
 										{ style: STYLE.unavailableMark },
@@ -1191,10 +1521,23 @@ window.__ModuleLoader__.load({
 			function togglePool(field, meta) {
 				const pool = values[field];
 				const key = routeKey(meta);
-				const next = pool.some((route) => routeKey(route) === key)
-					? pool.filter((route) => routeKey(route) !== key)
-					: [...pool, { provider: meta.provider, model: meta.model }];
-				edit(field, next);
+				const existed = pool.some((route) => routeKey(route) === key);
+				edit(
+					field,
+					existed
+						? pool.filter((route) => routeKey(route) !== key)
+						: [...pool, { provider: meta.provider, model: meta.model }],
+				);
+				// 取消勾选时同步移除该路由的手动 effort 条目
+				if (existed) {
+					const { effortsField } = POOL_FIELDS.find(
+						(spec) => spec.field === field,
+					);
+					edit(
+						effortsField,
+						values[effortsField].filter((entry) => routeKey(entry) !== key),
+					);
+				}
 			}
 
 			/** Select every listed candidate (catalog + saved extras) in one
@@ -1202,6 +1545,11 @@ window.__ModuleLoader__.load({
 			function setAllPool(field, select) {
 				if (!select) {
 					edit(field, []);
+					// 清空池时同步清空该池的手动 effort 条目
+					const { effortsField } = POOL_FIELDS.find(
+						(spec) => spec.field === field,
+					);
+					edit(effortsField, []);
 					return;
 				}
 				const extras = values[field]
@@ -1209,6 +1557,60 @@ window.__ModuleLoader__.load({
 					.map((route) => ({ provider: route.provider, model: route.model }));
 				const clean = (meta) => ({ provider: meta.provider, model: meta.model });
 				edit(field, [...[...catalogIndex.values()].map(clean), ...extras]);
+			}
+
+			/** 手动序：把 index 处的路由与相邻项交换（边界守卫）。 */
+			function movePoolRoute(field, index, delta) {
+				const pool = values[field];
+				const target = index + delta;
+				if (target < 0 || target >= pool.length) return;
+				const next = [...pool];
+				[next[index], next[target]] = [next[target], next[index]];
+				edit(field, next.map((route) => ({
+					provider: route.provider,
+					model: route.model,
+				})));
+			}
+
+			/** 手动序：移除 index 处的路由。 */
+			function removePoolRoute(field, index) {
+				const next = [...values[field]];
+				const [removed] = next.splice(index, 1);
+				edit(field, next.map((route) => ({
+					provider: route.provider,
+					model: route.model,
+				})));
+				// 同步移除该路由的手动 effort 条目
+				const { effortsField } = POOL_FIELDS.find(
+					(spec) => spec.field === field,
+				);
+				edit(
+					effortsField,
+					values[effortsField].filter(
+						(entry) => routeKey(entry) !== routeKey(removed),
+					),
+				);
+			}
+
+			/** 设置/清除某池某路由的手动 effort 条目（effort '' = 移除条目）。 */
+			function setPoolEffort(effortsField, meta, effort) {
+				const key = routeKey(meta);
+				const rest = values[effortsField].filter(
+					(entry) => routeKey(entry) !== key,
+				);
+				edit(
+					effortsField,
+					effort === ''
+						? rest
+						: [
+								...rest,
+								{
+									provider: meta.provider,
+									model: meta.model,
+									effort,
+								},
+							],
+				);
 			}
 
 			/** Apply one edit to the rank display list and persist the whole
@@ -1260,6 +1662,22 @@ window.__ModuleLoader__.load({
 						values[field].map((route) => ({
 							provider: route.provider,
 							model: route.model,
+						})),
+					]),
+				),
+				...Object.fromEntries(
+					POOL_FIELDS.map(({ manualField }) => [
+						manualField,
+						values[manualField],
+					]),
+				),
+				...Object.fromEntries(
+					POOL_FIELDS.map(({ effortsField }) => [
+						effortsField,
+						values[effortsField].map((entry) => ({
+							provider: entry.provider,
+							model: entry.model,
+							effort: entry.effort,
 						})),
 					]),
 				),
@@ -1731,7 +2149,7 @@ window.__ModuleLoader__.load({
 					h(
 						'div',
 						{ style: STYLE.poolGrid },
-						...POOL_FIELDS.map(({ field, lane }) => {
+						...POOL_FIELDS.map(({ field, manualField, effortsField, lane }) => {
 							const { rows, extras } = poolRows(values[field], catalogIndex);
 							return h(PoolCard, {
 								key: field,
@@ -1742,9 +2160,24 @@ window.__ModuleLoader__.load({
 								),
 								rows,
 								extras,
+								routes: values[field],
+								efforts: values[effortsField],
+								manual: values[manualField],
 								editable,
 								onToggle: (meta) => {
 									togglePool(field, meta);
+								},
+								onToggleManual: () => {
+									edit(manualField, !values[manualField]);
+								},
+								onSetEffort: (meta, effort) => {
+									setPoolEffort(effortsField, meta, effort);
+								},
+								onMove: (index, delta) => {
+									movePoolRoute(field, index, delta);
+								},
+								onRemove: (index) => {
+									removePoolRoute(field, index);
 								},
 								onSelectAll: () => {
 									setAllPool(field, true);
