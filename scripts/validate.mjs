@@ -127,6 +127,12 @@ for (const entry of overrides) {
 }
 
 const suffixes = [];
+// The shipped-preset comparison needs the local DSH Desktop install; allow
+// skipping it on CI (no /Applications/DeepSeek Harness.app there).
+const SKIP_HOST_CHECK = process.env.DSH_SKIP_HOST_CHECK === "1";
+if (SKIP_HOST_CHECK) {
+	console.log("SKIP: shipped-preset comparison (DSH_SKIP_HOST_CHECK=1)");
+} else {
 for (const pid of PRESETS) {
 	const rowId = `preset-${pid}`;
 	assert.ok(mineById.has(rowId), `missing override for ${rowId}`);
@@ -166,6 +172,7 @@ for (const pid of PRESETS) {
 }
 
 assert.equal(new Set(suffixes).size, 1, "persona suffixes are not identical across presets");
+}
 
 // --- package.json: client-half discovery surface (regression guard) ---
 const pkg = JSON.parse(readFileSync(PKG, "utf8"));
@@ -299,8 +306,12 @@ for (const asset of [
 	assert.ok(existsSync(join(SKILLS_DIR, asset)), `skills/${asset} is missing`);
 }
 
-console.log("OK: 4 overrides parse, match shipped presets, share one doctrine suffix");
+console.log(
+	SKIP_HOST_CHECK
+		? "OK: 4 overrides parse (shipped-preset comparison skipped)"
+		: "OK: 4 overrides parse, match shipped presets, share one doctrine suffix",
+);
 console.log("OK: package.json keeps the client-half discovery surface (exports + dsh.client)");
 console.log("OK: npm/market surface (icon, locale meta, files, schemastery pin, manifestVersion)");
 console.log(`OK: ${skillDirs.length} bundled skill(s) parse with intact assets: ${skillDirs.join(", ")}`);
-console.log(`doctrine suffix length: ${suffixes[0].length} chars`);
+if (!SKIP_HOST_CHECK) console.log(`doctrine suffix length: ${suffixes[0].length} chars`);
