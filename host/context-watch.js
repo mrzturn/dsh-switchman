@@ -308,9 +308,11 @@ function applyContextWatch(ctx, config) {
 		// The borrowed /compact runs through agent.runMaintenance, which only
 		// accepts an IDLE agent; the auto trigger fires mid-turn from tools/
 		// post-execute, so the first attempt usually loses the race with the
-		// still-running turn. Retry across the turn boundary with backoff —
-		// once the agent goes idle the compact lands before the next turn's
-		// driver (maintenance latches wake requests by design).
+		// still-running turn. compactNow wraps that as ManualCompactionError
+		// "busy" and the command layer resolves {kind:"error"} (not a
+		// rejection), so BOTH branches must funnel into the retry. Once the
+		// agent goes idle the compact lands before the next turn's driver
+		// (maintenance latches wake requests by design).
 		const delays = [5_000, 15_000, 30_000, 60_000];
 		const settle = () => state.inflight.delete(sessionId);
 		const attempt = (index) => {
@@ -327,17 +329,25 @@ function applyContextWatch(ctx, config) {
 				settle();
 				return;
 			}
+			const retryOrFail = (reason) => {
+				if (index < delays.length) {
+					setTimeout(() => attempt(index + 1), delays[index]);
+					return;
+				}
+				warn(`context handover failed for session ${sessionId}: ${reason}`);
+				settle();
+			};
 			promise.then(
-				() => ctx.logger?.info?.(`dsh-switchman: context handover settled for session ${sessionId}`),
-				(error) => {
-					const message = error?.message ?? String(error);
-					if (index < delays.length && message.includes("already has active work")) {
-						setTimeout(() => attempt(index + 1), delays[index]);
+				(value) => {
+					if (value !== null && typeof value === "object" && value.kind === "error") {
+						retryOrFail(value.text ?? "compact returned an error result");
 						return;
 					}
-					warn(`context handover failed for session ${sessionId}: ${message}`);
+					ctx.logger?.info?.(`dsh-switchman: context handover settled for session ${sessionId}`);
+					settle();
 				},
-			).then(settle, settle);
+				(error) => retryOrFail(error?.message ?? String(error)),
+			);
 		};
 		attempt(0);
 	};
