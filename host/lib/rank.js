@@ -111,33 +111,38 @@ function capabilityOf(table, provider, model) {
 	return matchKey(table, normalizeModelKey(provider, model));
 }
 
-/** Order one dispatch pool's routes: entries anchored in modelRank keep the
- *  array order and come first (their anchored tier is display-only); the
- *  rest fall back to default capability score descending, input order as the
- *  final tiebreak. Each returned entry carries { provider, model, tier }
- *  with tier = anchored ?? capability ?? null. */
-function orderedPool(poolRoutes, modelRank, table) {
+/** Order one dispatch pool's routes. With manual=false (default): entries
+ *  anchored in modelRank keep the array order and come first (their anchored
+ *  tier is display-only); the rest fall back to default capability score
+ *  descending, input order as the final tiebreak. With manual=true: the
+ *  stored input order IS the dispatch priority — no re-sorting, tiers are
+ *  still resolved for display. Each returned entry carries
+ *  { provider, model, tier } with tier = anchored ?? capability ?? null. */
+function orderedPool(poolRoutes, modelRank, table, manual = false) {
 	const routes = (Array.isArray(poolRoutes) ? poolRoutes : []).filter(isModelRoute);
 	const rank = (Array.isArray(modelRank) ? modelRank : []).filter(isModelRoute);
-	const anchorIndex = new Map();
 	const anchorTier = new Map();
+	rank.forEach((entry) => {
+		const key = normalizeModelKey(entry.provider, entry.model);
+		if (key === "" || anchorTier.has(key)) return;
+		if (TIERS.includes(entry.tier)) anchorTier.set(key, entry.tier);
+	});
+	const resolveTier = (key) => anchorTier.get(key) ?? matchKey(table instanceof Map ? table : new Map(), key)?.tier ?? null;
+	if (manual) return routes.map((route) => ({ provider: route.provider, model: route.model, tier: resolveTier(normalizeModelKey(route.provider, route.model)) }));
+	const anchorIndex = new Map();
 	rank.forEach((entry, index) => {
 		const key = normalizeModelKey(entry.provider, entry.model);
-		if (key === "") return;
-		if (!anchorIndex.has(key)) {
-			anchorIndex.set(key, index);
-			if (TIERS.includes(entry.tier)) anchorTier.set(key, entry.tier);
-		}
+		if (key === "" || anchorIndex.has(key)) return;
+		anchorIndex.set(key, index);
 	});
 	const decorated = routes.map((route, index) => {
 		const key = normalizeModelKey(route.provider, route.model);
 		const anchor = anchorIndex.get(key) ?? Number.POSITIVE_INFINITY;
 		const capability = matchKey(table instanceof Map ? table : new Map(), key);
-		const tier = anchorTier.get(key) ?? capability?.tier ?? null;
 		return {
 			provider: route.provider,
 			model: route.model,
-			tier,
+			tier: anchorTier.get(key) ?? capability?.tier ?? null,
 			anchor,
 			score: capability?.score ?? Number.NEGATIVE_INFINITY,
 			fallback: index,

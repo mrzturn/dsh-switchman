@@ -2,67 +2,77 @@
 
 English | [简体中文](./README.zh.md)
 
-> One bundle, four presets, autonomous teams — plus language preferences, dispatch pools with model ranking, and context watermark control for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH).
+> **The switchman family**, same author, same orchestration: [opencode-switchman](https://github.com/mrzturn/opencode-switchman) (the OpenCode original) · [zcode-switchman](https://github.com/mrzturn/zcode-switchman) (the ZCode port) · **dsh-switchman** (this repo, for DeepSeek Harness).
 
-## What it is
+![dsh-switchman — the context water level drives the switchman and throws the route](docs/assets/hero.svg)
 
-**dsh-switchman** extends the four shipped DSH presets (`standard` / `ptc` / `minimal` / `cordis`) with:
+> Context on a meter. Tasks dispatch themselves.
 
-1. **Autonomous Agent Teams doctrine** — the shipped conservative team policy ("only create teammates when the user asks") is replaced by a self-directed dispatching regime: the Lead judges every task against four trigger conditions (parallelizable subtasks, large self-contained chunks, high main-context pressure, role separation) and spawns, coordinates, and collects results on its own. User overrides ("don't use teams") always win.
-2. **Language preferences** — a `[SWITCHMAN:LANG]` protocol line in every system prompt pins the language for replies, code comments, and authored documents. Unconfigured projects get one gentle ask (via `ask_user_question`); answers are captured and persisted automatically. Bundled skills follow the same preference.
-3. **Dispatch pools & model ranking** — configure which models serve six cognitive lanes (economy / mechanical / main / hard / vision / review) in the Switchman settings page, and rank models strongest-first. A `[SWITCHMAN:POOLS]` recommendation table guides every delegation; an optional `enforce` mode denies `subagent` calls naming models outside the pools. Bundled capability snapshot (179 models) pre-ranks candidates.
-4. **Context watermark control** — a `[SWITCHMAN:WATERMARK]` banner tracks live context against soft/hard/force thresholds: soft advises delegation, hard caps the per-turn read budget and nudges wrap-up, force triggers an automatic backup-and-compact handover through DSH's compaction service. Every subagent gets its own hard cap and a HANDOFF-block wrap-up. `/ctx-pause`, `/ctx-resume`, `/ctx-handover` give manual control.
+A plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH). Once installed, your primary model stops doing everything itself and becomes a dispatcher: measure the water level, pick the lane, hand out the task, check the work. Four things:
 
-Three bundled skills ship with every install: `db-query` (read-only MySQL/Redis verification), `git-commit-message`, `requirement-docs`.
+**1. Context water-level control.** Every turn measures live session tokens. Soft (default 50k) advises delegating, hard (90k) tightens the per-turn read budget and nudges wrap-up, force (130k) backs the session up and hands it over to compaction — automatically. Run a session all day; your context never drowns in its own history. Every dispatched subagent carries its own hard cap and exits with a HANDOFF summary when it's reached.
 
-## Install
+**2. Six-lane dispatch.** economy / mechanical / main / hard / vision / review — six cognitive lanes. Pick candidate models per lane in the settings page, rank them strongest-first (optional S/A/B/C tier anchoring), and pin a reasoning effort per route — the dropdown lists the levels each model *actually* supports, not a generic three. A `[SWITCHMAN:POOLS]` table ships with every prompt so the model knows who to call; `enforce` mode rejects out-of-pool models outright.
 
-From an agent session, or the Web UI's plugin manager:
+**3. Language preferences.** One dropdown each for replies, code comments, and authored docs. Unset? You get asked once, it's remembered forever, and every later session follows it.
 
-```
-plugin_manager: install_bundle  target=dsh-switchman
-```
+**4. Delegate-by-default doctrine.** Replaces DSH's shipped conservative team policy ("only create teammates when asked"): trivia stays hands-on (<200 lines read, <50 changed), real work gets delegated by default; every change gets verified — >20 lines goes to a tester, >300 lines or core logic goes to a reviewer. Say "don't use teams" and it steps aside instantly.
 
-or install from a local checkout (linked; re-run `remove_bundle` + `install_bundle` after pulling changes):
+Only one model? Still worth it — water-level control and the doctrine don't care how many models you have.
 
-```
-plugin_manager: install_bundle  target=/path/to/dsh-switchman
-```
+## Bundled skills
 
-**db-query one-time setup** (its script dependencies live inside the skill directory):
+- **db-query** — read-only MySQL/Redis verification: run SQL to check records, cache keys / TTLs, cross-store consistency. Refuses all writes. One-time setup below.
+- **git-commit-message** — convention-compliant commit text. Text only; never touches git.
+- **requirement-docs** — one spec for requirements / PRD / design docs, archived to `docs/requirements-and-design/`.
+
+## Quick start
+
+1. **Install** — from any agent session, or the Web plugin manager:
+
+   ```
+   plugin_manager: install_bundle  target=dsh-switchman
+   ```
+
+   or from a local checkout (linked; re-run `remove_bundle` + `install_bundle` after pulling changes):
+
+   ```
+   plugin_manager: install_bundle  target=/path/to/dsh-switchman
+   ```
+
+2. **Restart DSH** — quit the app entirely and reopen (a page reload is not enough) so the client-module table picks up the bundle.
+
+3. **Open the settings page** — Settings → dsh-switchman. The first screen is language preferences: one dropdown each for replies / comments / docs, each with a live `current: …` line. Skip them if you like — you'll be asked once and remembered.
+
+   ![Settings page and language preferences](docs/assets/conf-demo1.png)
+
+4. **Fill the six pools** — each pool card lists candidates grouped by provider; tick the ones you want. Tick **manual order** and the card becomes a numbered priority list with ↑ ↓ × controls. The effort dropdown beside each selected route defaults to *follow lane*; pinning it lists the levels that model actually supports (Low / High / Max…). A summary line tracks progress live: “6/6 pools set · 3 ranked · mode advice”.
+
+   ![Dispatch pools](docs/assets/conf-demo2.png)
+
+5. **Ranking and watermark** — the ranking table's order is capability order (strongest first), with optional S/A/B/C tiers; execution mode is `off` / advice / enforce (enforce = out-of-pool models are rejected). Below it, the watermark section tightens behavior by token usage: three thresholds, a per-call read budget, hard-mode behavior (cap / deny), an auto-handover toggle, and a separate cap for subagents. The bottom line carries the commands: `/ctx-pause` to stop intervening · `/ctx-resume` to resume · `/ctx-handover` to back up and hand over now.
+
+   ![Ranking and context watermark](docs/assets/conf-demo3.png)
+
+6. **Verify** — the ⚡ badge appears beside the preset chip in any session header; ask the model “what does the last section of your system prompt say?” — it should mention the dsh-switchman doctrine.
+
+**db-query one-time setup** (script dependencies live inside the skill directory):
 
 ```bash
 bash <install-dir>/skills/db-query/scripts/setup.sh
 ```
 
-After any install or update, fully restart DSH (quit the app, not just reload the page) so the client-module table picks up the bundle.
-
-## The Switchman settings page
-
-Settings → **dsh-switchman** (its own section, localized zh/en):
-
-- **Language** — conversation / comments / docs languages, with a suggestion from your UI language.
-- **Dispatch pools** — per-lane candidate checklists (fed by the live model catalog, including saved-but-currently-unavailable routes), a rank editor (order = priority, optional S/A/B/C tier anchoring), enforce mode (`off` / `advice` / `enforce`), and a setup progress line.
-- **Context watermark** — soft/hard/force thresholds (strictly increasing), per-call read budget, `cap` vs `deny` enforcement, auto-handover toggle, and per-subagent caps.
-
 ## How it works
 
-- The Host half (`index.js` + `host/`) contributes three dynamic system-prompt sections (orders 10300/10400/10500, after the persona suffix), a `tools/pre|post-execute` pair for read-budget and enforce gates, automatic answer capture, and three slash commands. All settings are live `volatile` fields — changes apply to the next prompt assembly without a restart.
-- The Client half (`client.js`) renders the ⚡ badge beside the preset chip and the settings page, through official settings-form services with revision-fenced saves.
-- The preset overrides in `cordis.patch.yml` restate each shipped preset's plugin list verbatim and only extend the persona suffix (shared YAML anchor). The Agent Teams tools themselves still come from the shipped `@deepseek-ai/dsh-experimental-agent-team-profile`.
-
-## Verify
-
-- ⚡ badge beside the preset chip in any session header.
-- Ask the model: "what does the last section of your system prompt say?" — it should mention the dsh-switchman doctrine.
-- The `[SWITCHMAN:...]` lines appear in behavior: language answers stick, pool recommendations shape delegation, and long sessions show watermark levels.
-- `node scripts/validate.mjs` — patch integrity, market surface, skills, locale meta.
+- The Host half (`index.js` + `host/`) injects three dynamic system-prompt sections, the read-budget and enforce gates, automatic answer capture, and three slash commands. All settings are volatile fields — saved changes apply to the next prompt assembly, no restart.
+- The Client half (`client.js`) renders the ⚡ badge beside the preset chip and the settings page, through official settings-form services.
+- `cordis.patch.yml` restates each shipped preset's plugin list verbatim and only extends the persona suffix; the Agent Teams tools themselves still come from the shipped `@deepseek-ai/dsh-experimental-agent-team-profile`.
 
 ## Maintenance
 
-- **After a DSH upgrade** that changes shipped preset plugin lists, re-sync `cordis.patch.yml` from the new `presets/*.patch.yml` (keep the doctrine suffix), then reinstall.
+- After a DSH upgrade that changes shipped preset plugin lists, re-sync `cordis.patch.yml` from the new `presets/*.patch.yml` (keep the doctrine suffix), then reinstall.
 - Model-facing protocol lines (`[SWITCHMAN:LANG|POOLS|WATERMARK]`) are deliberately English and byte-stable — do not localize them.
-- `npm pack --dry-run` must stay at the audited 32-file / ~97 kB shape (skill `node_modules` never ships).
+- `npm pack --dry-run` must stay at the audited 34-file / ~111 kB shape (the `docs/` screenshots never ship).
 
 ## License
 

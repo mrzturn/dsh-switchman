@@ -14,8 +14,14 @@
  * snapshot degrades to advice, never blocks a tool.
  */
 
-import { LANES, laneField } from "./config.js";
+import { LANES, laneEffortsField, laneField, laneManualField } from "./config.js";
 import { isModelRoute, loadCapabilityDefaults, normalizeModelKey, orderedPool } from "./lib/rank.js";
+
+/** True for a well-formed {provider, model, effort} pin; the effort value
+ *  is free-form — its valid set is the DSH adapter's reported efforts. */
+function isEffortEntry(value) {
+	return isModelRoute(value) && typeof value.effort === "string" && value.effort !== "";
+}
 
 /** Read one volatile settings field as a plain string (live `.get()` reference;
  *  mirrors host/lang.js's helper — the files stay independently mountable). */
@@ -44,9 +50,29 @@ function readList(field) {
 	return Array.isArray(field) ? field : [];
 }
 
-/** Live snapshot of the dispatch settings plus the bundled capability table. */
+/** Boolean volatile-field read (false on any malformed value). */
+function readBool(field) {
+	if (field !== null && typeof field === "object" && typeof field.get === "function") {
+		try {
+			return field.get() === true;
+		} catch {
+			return false;
+		}
+	}
+	return field === true;
+}
+
+/** Live snapshot of the dispatch settings plus the bundled capability table.
+ *  Each lane carries its manual-order flag: manual=true lanes dispatch in
+ *  stored array order, auto lanes use the modelRank+capability ordering;
+ *  `efforts` holds the lane's manually pinned reasoning efforts. */
 function readDispatchState(ctx, config) {
-	const lanePools = LANES.map((lane) => ({ lane, routes: readList(config[laneField(lane)]).filter(isModelRoute) }));
+	const lanePools = LANES.map((lane) => ({
+		lane,
+		routes: readList(config[laneField(lane)]).filter(isModelRoute),
+		manual: readBool(config[laneManualField(lane)]),
+		efforts: readList(config[laneEffortsField(lane)]).filter(isEffortEntry),
+	}));
 	return {
 		lanePools,
 		modelRank: readList(config.modelRank).filter(isModelRoute),
@@ -55,24 +81,43 @@ function readDispatchState(ctx, config) {
 	};
 }
 
-/** Render `provider/model(T)` for one ordered pool entry (tier omitted when unknown). */
-function renderRoute(entry) {
-	return entry.tier === null ? `${entry.provider}/${entry.model}` : `${entry.provider}/${entry.model}(${entry.tier})`;
+/** Render `provider/model(T)` for one ordered pool entry, with a `@effort`
+ *  suffix when the route carries a manually pinned reasoning effort (tier
+ *  omitted when unknown). */
+function renderRoute(entry, effort = null) {
+	const base = entry.tier === null ? `${entry.provider}/${entry.model}` : `${entry.provider}/${entry.model}(${entry.tier})`;
+	return effort === null ? base : `${base}@${effort}`;
+}
+
+/** Key → pinned effort for one lane (first entry wins on duplicate keys). */
+function effortMapOf(pool) {
+	const effortOf = new Map();
+	for (const pin of pool.efforts) {
+		const key = normalizeModelKey(pin.provider, pin.model);
+		if (key !== "" && !effortOf.has(key)) effortOf.set(key, pin.effort);
+	}
+	return effortOf;
 }
 
 /** The `[SWITCHMAN:POOLS]` block: anchor line, one line per configured lane,
- *  then three guidance lines (byte-stable for a given configuration). */
+ *  then the guidance lines (byte-stable for a given configuration). */
 function renderPoolsBlock(state) {
 	const configured = state.lanePools.filter((pool) => pool.routes.length > 0);
 	const lines = [`[SWITCHMAN:POOLS] configured=${configured.length}/6 enforce=${state.enforce}`];
 	for (const pool of state.lanePools) {
 		if (pool.routes.length === 0) continue;
-		const routes = orderedPool(pool.routes, state.modelRank, state.defaults).map(renderRoute).join(", ");
-		lines.push(`${pool.lane}: ${routes}`);
+		const effortOf = effortMapOf(pool);
+		const routes = orderedPool(pool.routes, state.modelRank, state.defaults, pool.manual)
+			.map((entry) => renderRoute(entry, effortOf.get(normalizeModelKey(entry.provider, entry.model)) ?? null))
+			.join(", ");
+		lines.push(`${pool.lane}${pool.manual ? "*" : ""}: ${routes}`);
 	}
 	lines.push(
 		`When delegating via subagent/workflow, pick a model from the lane matching the task category; spawn_teammate takes no model argument (lanes do not apply to it).`,
+		`Lanes marked * are in manual order: dispatch follows the listed order exactly (the head is the first choice).`,
 		`effort: economy=medium mechanical=medium main=medium (high for complex tasks) hard=high vision=multimodal-capable model review=high; an unconfigured lane uses the system default model.`,
+		`A route suffixed @effort has a manually pinned reasoning effort — pass it as reasoning_effort when delegating to that model (it overrides the lane default).`,
+		`Review delegations: prefer a review-pool model different from the main session's when the pool offers one; reusing the same model is allowed (declare DOWNGRADED in the conclusion).`,
 		`This table does not restrict models outside the pools${
 			state.enforce === "enforce"
 				? " (enforce mode: subagent calls naming a provider+model outside the pools or modelRank are denied)"
@@ -83,11 +128,12 @@ function renderPoolsBlock(state) {
 }
 
 /** The first recommended route right now: the head of the first configured
- *  lane in display order (already ordered), else the modelRank head. */
+ *  lane in display order (already ordered — manual lanes use stored order,
+ *  auto lanes the modelRank+capability ordering), else the modelRank head. */
 function topRecommendation(state) {
 	for (const pool of state.lanePools) {
 		if (pool.routes.length === 0) continue;
-		return orderedPool(pool.routes, state.modelRank, state.defaults)[0] ?? null;
+		return orderedPool(pool.routes, state.modelRank, state.defaults, pool.manual)[0] ?? null;
 	}
 	return state.modelRank.length > 0 ? state.modelRank[0] : null;
 }
