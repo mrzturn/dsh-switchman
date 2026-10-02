@@ -66,5 +66,8 @@
 				"@deepseek-ai/dsh-client-ui-settings"
 			]
 		}
+	},
+	"devDependencies": {
+		"yaml": "^2.9.1"
 	}
 }
