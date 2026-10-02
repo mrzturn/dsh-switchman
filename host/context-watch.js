@@ -295,7 +295,10 @@ function applyContextWatch(ctx, config) {
 			agent,
 			rawInput: "",
 			attachments: Object.freeze([]),
-			signal,
+			// The borrowed /compact handler (and compactNow behind it) touches
+			// signal.throwIfAborted()/aborted unconditionally; the auto path
+			// has no real signal, so always carry a fresh un-aborted one.
+			signal: signal ?? new AbortController().signal,
 		});
 		return Promise.resolve(definition.handler(invocation));
 	};
