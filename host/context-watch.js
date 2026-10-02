@@ -305,24 +305,41 @@ function applyContextWatch(ctx, config) {
 
 	const startHandover = (agent, sessionId) => {
 		state.inflight.add(sessionId);
-		let promise;
-		try {
-			promise = sessionCompact(agent, `switchman-auto-${sessionId}`, undefined);
-			if (promise === undefined)
-				warn(`auto handover found no per-agent /compact command for session ${sessionId} — nothing to do`);
-		} catch (error) {
-			warn(`handover failed to start: ${error?.message ?? error}`);
-			promise = undefined;
-		}
+		// The borrowed /compact runs through agent.runMaintenance, which only
+		// accepts an IDLE agent; the auto trigger fires mid-turn from tools/
+		// post-execute, so the first attempt usually loses the race with the
+		// still-running turn. Retry across the turn boundary with backoff —
+		// once the agent goes idle the compact lands before the next turn's
+		// driver (maintenance latches wake requests by design).
+		const delays = [5_000, 15_000, 30_000, 60_000];
 		const settle = () => state.inflight.delete(sessionId);
-		if (promise !== undefined && typeof promise.then === "function") {
+		const attempt = (index) => {
+			let promise;
+			try {
+				promise = sessionCompact(agent, `switchman-auto-${sessionId}`, undefined);
+				if (promise === undefined) {
+					warn(`auto handover found no per-agent /compact command for session ${sessionId} — nothing to do`);
+					settle();
+					return;
+				}
+			} catch (error) {
+				warn(`handover failed to start: ${error?.message ?? error}`);
+				settle();
+				return;
+			}
 			promise.then(
 				() => ctx.logger?.info?.(`dsh-switchman: context handover settled for session ${sessionId}`),
-				(error) => warn(`context handover failed for session ${sessionId}: ${error?.message ?? error}`),
+				(error) => {
+					const message = error?.message ?? String(error);
+					if (index < delays.length && message.includes("already has active work")) {
+						setTimeout(() => attempt(index + 1), delays[index]);
+						return;
+					}
+					warn(`context handover failed for session ${sessionId}: ${message}`);
+				},
 			).then(settle, settle);
-		} else {
-			settle();
-		}
+		};
+		attempt(0);
 	};
 
 	/** First {provider, model} route of a volatile pool field, or null. */
