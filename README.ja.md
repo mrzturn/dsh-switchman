@@ -40,6 +40,13 @@
    plugin_manager: install_bundle  target=/path/to/dsh-switchman
    ```
 
+   ターミナルから `dsh` CLI でもインストールできます——DSH の実行形態に合わせてプロファイルを選んでください:
+
+   ```bash
+   dsh plugin --profile web add dsh-switchman      # Web GUI
+   dsh plugin --profile desktop add dsh-switchman   # デスクトップアプリ
+   ```
+
 2. **DSH を再起動** — アプリを完全に終了して開き直します（ページ再読み込みでは不十分）。クライアントモジュールのテーブルがこの bundle を取り込めるようになります。
 
 3. **設定ページを開く** — 設定 → dsh-switchman。最初の画面は言語設定です：返信 / コメント / ドキュメントに対応する 3 つのドロップダウンがあり、それぞれの下に「現在: …」のステータス行が付きます。設定しなくても大丈夫——初回に一度だけ尋ねられて記憶されます。

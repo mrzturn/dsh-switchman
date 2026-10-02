@@ -40,6 +40,13 @@
    plugin_manager: install_bundle  target=/path/to/dsh-switchman
    ```
 
+   或在终端用 `dsh` 命令安装——按运行方式选择对应的 profile：
+
+   ```bash
+   dsh plugin --profile web add dsh-switchman      # Web GUI
+   dsh plugin --profile desktop add dsh-switchman   # 桌面应用
+   ```
+
 2. **重启 DSH**——完全退出应用再打开（刷新页面不算），客户端模块表才能识别本 bundle。
 
 3. **打开设置页**——设置 → dsh-switchman。第一屏是语言偏好：三个下拉对应回复 / 注释 / 文档，每项下方有「当前：…」状态行；不设置也没关系，首次使用会问一次并记住。

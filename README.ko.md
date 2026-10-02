@@ -40,6 +40,13 @@
    plugin_manager: install_bundle  target=/path/to/dsh-switchman
    ```
 
+   터미널에서 `dsh` CLI로도 설치할 수 있습니다 — DSH 실행 방식에 맞는 프로파일을 선택하세요:
+
+   ```bash
+   dsh plugin --profile web add dsh-switchman      # Web GUI
+   dsh plugin --profile desktop add dsh-switchman   # 데스크톱 앱
+   ```
+
 2. **DSH 재시작** — 앱을 완전히 종료한 뒤 다시 엽니다(페이지 새로고침으로는 부족). 클라이언트 모듈 테이블이 이 bundle 을 인식하게 됩니다.
 
 3. **설정 페이지 열기** — 설정 → dsh-switchman. 첫 화면은 언어 기본 설정입니다: 답변 / 주석 / 문서에 대응하는 드롭다운 3개가 있고 각 항목 아래에 "현재: …" 상태 줄이 붙습니다. 설정하지 않아도 괜찮습니다 — 첫 사용 때 한 번 물어보고 기억합니다.

@@ -40,6 +40,13 @@ Nur ein Modell? Lohnt sich trotzdem — die Wasserstandskontrolle und die Doktri
    plugin_manager: install_bundle  target=/path/to/dsh-switchman
    ```
 
+   oder über das `dsh`-CLI im Terminal — wählen Sie das Profil, das dazu passt, wie Sie DSH ausführen:
+
+   ```bash
+   dsh plugin --profile web add dsh-switchman      # Web GUI
+   dsh plugin --profile desktop add dsh-switchman   # Desktop-App
+   ```
+
 2. **DSH neu starten** — beenden Sie die App vollständig und öffnen Sie sie neu (ein Seiten-Reload genügt nicht), damit die Client-Modul-Tabelle das Bundle aufnimmt.
 
 3. **Einstellungsseite öffnen** — Settings → dsh-switchman. Der erste Bildschirm sind die Spracheinstellungen: je ein Dropdown für Antworten / Kommentare / Dokumente, jedes mit einer Live-Zeile `current: …`. Sie dürfen sie überspringen — Sie werden einmal gefragt, und es bleibt gemerkt.

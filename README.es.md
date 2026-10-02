@@ -40,6 +40,13 @@ Un plugin para [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harnes
    plugin_manager: install_bundle  target=/path/to/dsh-switchman
    ```
 
+   o desde una terminal mediante la CLI `dsh` — elige el perfil que corresponda a cómo ejecutas DSH:
+
+   ```bash
+   dsh plugin --profile web add dsh-switchman      # Web GUI
+   dsh plugin --profile desktop add dsh-switchman   # app de escritorio
+   ```
+
 2. **Reiniciar DSH** — cierra la app por completo y vuelve a abrirla (recargar la página no basta) para que la tabla de módulos del cliente recoja el bundle.
 
 3. **Abrir la página de ajustes** — Settings → dsh-switchman. La primera pantalla son las preferencias de idioma: un desplegable para respuestas / comentarios / documentos, cada uno con una línea `current: …` en vivo. Sáltatelos si quieres — se te preguntará una vez y se recordará.
