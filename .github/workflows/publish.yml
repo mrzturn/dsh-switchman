@@ -1,0 +1,52 @@
+name: Publish to npm
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  # [2026-10-02]-[npm OIDC trusted publishing: no long-lived NPM_TOKEN; requires the package's Trusted Publisher on npmjs.com to match repo/workflow/environment]-[publish authenticates via short-lived OIDC tokens; provenance is generated automatically]
+  id-token: write
+
+jobs:
+  publish:
+    # [2026-10-02]-[only main-branch releases may publish to npm; dev-branch releases are ignored]-[prevents accidental npm publish from dev]
+    if: github.event.release.target_commitish == 'main'
+    # [2026-10-02]-[route the publish through the release-publish environment: required-reviewer approval gate + branch/tag policy (environment needs a v* tag rule since release runs carry refs/tags/*)]-[each release waits for manual approval before npm publish]
+    environment: release-publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          # [2026-10-02]-[trusted publishing needs npm >= 11.5.1; node 22's bundled npm is too old]-[node 24 ships a compatible npm]
+          node-version: 24
+          registry-url: https://registry.npmjs.org/
+
+      - name: Verify tag matches package version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VER=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "$VER" ]; then
+            echo "::error::release tag ($GITHUB_REF_NAME) != package.json version ($VER)"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate bundle
+        run: node scripts/validate.mjs
+
+      - name: Verify pack shape (docs/ never ships)
+        run: |
+          if npm pack --dry-run 2>/dev/null | grep -q 'docs/'; then
+            echo "::error::docs/ leaked into the npm package (check the package.json files allowlist)"
+            exit 1
+          fi
+
+      # [2026-10-02]-[OIDC trusted publishing: npm exchanges the workflow's OIDC token for a short-lived publish token; no NODE_AUTH_TOKEN]-[long-lived NPM_TOKEN secret is not used by this workflow]
+      - name: Publish
+        run: npm publish
