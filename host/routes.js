@@ -28,6 +28,7 @@
  */
 
 import { authorizedChildRoutes } from "./dispatch.js";
+import { handoverSnapshot } from "./handover-state.js";
 import { reportedUiLocale, setReportedUiLocale } from "./ui-locale.js";
 
 /** Route paths (client.js mirrors these literals). */
@@ -36,6 +37,7 @@ const ROUTES = {
 	config: "/api/dsh-switchman/config",
 	models: "/api/dsh-switchman/models",
 	authorized: "/api/dsh-switchman/authorized",
+	handoverState: "/api/dsh-switchman/handover-state",
 	uiLocale: "/api/dsh-switchman/ui-locale",
 };
 
@@ -412,6 +414,18 @@ export function makeRoutes(ctx, config) {
 					ctx.logger.warn(`dsh-switchman: authorized-models read failed: ${error?.message ?? error}`);
 					writeJson(res, 500, { error: error?.message ?? String(error) });
 				}
+			},
+		},
+		{
+			kind: "exact",
+			path: ROUTES.handoverState,
+			handler: async (req, res) => {
+				if (!guard(req, res, "GET")) return;
+				// Read-only live registry: the client badge polls this during
+				// the otherwise-silent fork+compact window ({count, handovers}),
+				// so the GUI shows an animated "handover in progress" cue.
+				const handovers = handoverSnapshot();
+				writeJson(res, 200, { count: handovers.length, handovers });
 			},
 		},
 		{

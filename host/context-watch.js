@@ -40,6 +40,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { clearHandover, handoverOf, recordHandover } from "./handover-state.js";
 
 /** Tools whose result text is accounted against the per-turn read budget. */
 const ACCOUNT_TOOLS = new Set(["read", "glob", "grep", "bash"]);
@@ -216,7 +217,7 @@ function renderBanner(ctx, config, state, agent) {
 			return renderSubBanner(used, subTh);
 		}
 		const level = state.paused.has(sessionId) ? "paused" : levelOf(used, th);
-		const live = state.handover.get(sessionId);
+		const live = handoverOf(sessionId);
 		const elapsed = Date.now() - (state.lastHandover.get(sessionId) ?? 0);
 		return renderRootBanner(level, used, th, {
 			autoHandover: readBool(config.wmAutoHandover, true),
@@ -285,7 +286,6 @@ function applyContextWatch(ctx, config) {
 	const state = {
 		paused: new Set(),
 		inflight: new Set(),
-		handover: new Map(),
 		handoverTool: null,
 		lastHandover: new Map(),
 		readUsed: new Map(),
@@ -483,7 +483,7 @@ function applyContextWatch(ctx, config) {
 			};
 		state.inflight.add(sessionId);
 		try {
-			state.handover.set(sessionId, { phase: "backup", at: Date.now() });
+			recordHandover(sessionId, { phase: "backup", source, at: Date.now() });
 			const backup = await forkBackup(agent, sessionId, signal);
 			const backupId = backup.childId;
 			const docPath = writeHandoverSkeleton(agent, sessionId, backupId, measureNow(ctx, agent));
@@ -517,7 +517,7 @@ function applyContextWatch(ctx, config) {
 						clearTimeout(timer);
 						timer = null;
 					}
-					state.handover.set(sessionId, { phase: "compacting", attempt: attempts, at: Date.now() });
+					recordHandover(sessionId, { phase: "compacting", source, attempt: attempts, at: Date.now() });
 					let promise;
 					try {
 						promise = sessionCompact(agent, commandId ?? `switchman-${source}-${sessionId}`, signal);
@@ -579,7 +579,7 @@ function applyContextWatch(ctx, config) {
 					kind: "error",
 					text: `/ctx-handover: compaction failed after backup ${backupId ?? "n/a"} — ${outcome.reason}`,
 				};
-			state.handover.set(sessionId, { phase: "continuation", at: Date.now() });
+			recordHandover(sessionId, { phase: "continuation", source, at: Date.now() });
 			await armContinuation(agent, backupId, docPath);
 			const backupText = backupId ?? `n/a (${backup.reason ?? "log retains full history"})`;
 			return {
@@ -589,7 +589,7 @@ function applyContextWatch(ctx, config) {
 		} catch (error) {
 			return { kind: "error", text: `/ctx-handover failed: ${error?.message ?? error}` };
 		} finally {
-			state.handover.delete(sessionId);
+			clearHandover(sessionId);
 			state.inflight.delete(sessionId);
 		}
 	};
@@ -763,7 +763,7 @@ function applyContextWatch(ctx, config) {
 						),
 					(error) => warn(`ctx_handover handover crashed: ${error?.message ?? error}`),
 				);
-				return "[SWITCHMAN:WATERMARK] ctx_handover scheduled: backup fork + handover document + compaction + continuation are running. END this turn now — reply briefly and call no more tools, so the compaction lands at the idle boundary.";
+				return "[SWITCHMAN:WATERMARK] ctx_handover scheduled: backup fork + handover document + compaction + continuation are running. END this turn now — reply briefly and call no more tools, so the compaction lands at the idle boundary. Your closing line must tell the user the handover is running in the background and will continue automatically (the session-header badge shows the live state) — otherwise the GUI looks idle during fork+compact.";
 			},
 			presentCall: (args) => ({
 				card: "generic",

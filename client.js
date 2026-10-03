@@ -436,6 +436,12 @@ window.__ModuleLoader__.load({
 				badge: '自主团队',
 				badgeTip:
 					'dsh-switchman：四个内置预设（standard / ptc / minimal / cordis）已注入自主智能体团队调度规程',
+				handoverActive: '交接进行中',
+				handoverPhaseBackup: '备份会话',
+				handoverPhaseCompacting: '压缩上下文',
+				handoverPhaseContinuation: '唤醒续接',
+				handoverActiveTip:
+					'Switchman 正在后台交接：fork 备份会话并压缩上下文，完成后自动继续任务；期间会话静止属正常现象。',
 				settingsTitle: 'dsh-switchman',
 				panelLabel: 'Switchman 调度中心',
 				settingsDescription: '配置 dsh-switchman 的各项偏好。',
@@ -563,6 +569,12 @@ window.__ModuleLoader__.load({
 				badge: 'Team autonomy',
 				badgeTip:
 					'dsh-switchman: the four built-in presets (standard / ptc / minimal / cordis) carry the autonomous Agent Teams doctrine',
+				handoverActive: 'Handover in progress',
+				handoverPhaseBackup: 'forking backup',
+				handoverPhaseCompacting: 'compacting context',
+				handoverPhaseContinuation: 'waking continuation',
+				handoverActiveTip:
+					'Switchman is handing over in the background: forking a backup session and compacting context; the task continues automatically when done. A still session during this window is expected.',
 				settingsTitle: 'dsh-switchman',
 				panelLabel: 'Switchman',
 				settingsDescription: 'Configure dsh-switchman preferences.',
@@ -693,12 +705,118 @@ window.__ModuleLoader__.load({
 		// Session-header badge (Phase 0, unchanged)
 		// ------------------------------------------------------------------
 
+		/** Rotating-arc spinner (SVG SMIL animateTransform): the restricted
+		 * dynamic-module runtime exposes no CSS insertion here, and SMIL
+		 * animates without lifecycle code or a React state loop. */
+		function HandoverSpinner() {
+			return h(
+				'svg',
+				{
+					viewBox: '0 0 16 16',
+					width: 12,
+					height: 12,
+					'aria-hidden': true,
+					style: { flex: 'none' },
+				},
+				h(
+					'circle',
+					{
+						cx: 8,
+						cy: 8,
+						r: 6,
+						fill: 'none',
+						stroke: 'currentColor',
+						strokeWidth: 2,
+						strokeDasharray: '9 19',
+						strokeLinecap: 'round',
+					},
+					h('animateTransform', {
+						attributeName: 'transform',
+						type: 'rotate',
+						from: '0 8 8',
+						to: '360 8 8',
+						dur: '1s',
+						repeatCount: 'indefinite',
+					}),
+				),
+			);
+		}
+
 		function SwitchmanBadge({ locale, t }) {
 			// Subscription only: stable snapshot via getLocale() re-renders on switch.
 			React.useSyncExternalStore(
 				(fn) => locale.subscribe(fn),
 				() => locale.getLocale(),
 			);
+			// Live handover cue: during the fork+compact window the session
+			// GUI has no motion of its own, so the badge polls the Host's
+			// handover-state route (phases recorded from runHandover's first
+			// synchronous line) and flips to an animated status chip. Fast
+			// cadence while in flight, slow otherwise; a failed fetch or an
+			// older Host reads as "no handover" and never blocks the badge.
+			const [handover, setHandover] = React.useState(null);
+			React.useEffect(() => {
+				let stopped = false;
+				let timer = null;
+				const tick = async () => {
+					let live = null;
+					// NOTE: the slot hands the badge no session id, so this
+					// reflects ANY in-flight handover (cross-session bleed
+					// with several open sessions) — accepted: cosmetic, and
+					// the desktop GUI renders one session header at a time.
+					try {
+						const reply = await api.get('handover-state');
+						if (reply?.ok && reply.value?.count > 0)
+							live = reply.value.handovers[0] ?? null;
+					} catch {
+						live = null;
+					}
+					if (stopped) return;
+					setHandover(live);
+					timer = setTimeout(tick, live === null ? 10_000 : 3_000);
+				};
+				void tick();
+				return () => {
+					stopped = true;
+					if (timer !== null) clearTimeout(timer);
+				};
+			}, []);
+			if (handover !== null) {
+				const phaseKey =
+					handover.phase === 'backup'
+						? 'handoverPhaseBackup'
+						: handover.phase === 'continuation'
+							? 'handoverPhaseContinuation'
+							: 'handoverPhaseCompacting';
+				const seconds = Math.max(
+					0,
+					Math.round((Date.now() - (handover.at ?? Date.now())) / 1000),
+				);
+				return h(
+					'span',
+					{
+						title: `${t('handoverActiveTip')}（${seconds}s）`,
+						role: 'status',
+						'data-dsh-switchman': 'handover-active',
+						style: {
+							borderRadius: 'var(--dsw-radius-xs)',
+							background: 'var(--dsw-alias-interactive-bg-hover, transparent)',
+							color: 'var(--dsw-alias-state-business-primary, inherit)',
+							height: '22px',
+							whiteSpace: 'nowrap',
+							display: 'inline-flex',
+							alignItems: 'center',
+							gap: '4px',
+							padding: '0 8px',
+							fontSize: '12px',
+							lineHeight: '22px',
+							flex: 'none',
+						},
+					},
+					h(HandoverSpinner, null),
+					h('span', null, `${t('handoverActive')} · ${t(phaseKey)}`),
+				);
+			}
 			const text = t('badge');
 			const tip = t('badgeTip');
 			return h(
