@@ -62,10 +62,84 @@ function readBool(field) {
 	return field === true;
 }
 
+/** The rank.js model-segment extraction, verbatim (rank.js's
+ *  normalizeModelKey ~lines 32-44): lowercase/trim, strip a `provider/` or
+ *  bare-provider `provider:` prefix, drop `(...)`/`[...]` variant segments,
+ *  fold illegal chars into "-" and trim edge punctuation. */
+function modelSegment(model) {
+	let s = typeof model === "string" ? model : "";
+	s = s.toLowerCase().trim();
+	if (s.includes("/")) s = s.slice(s.lastIndexOf("/") + 1);
+	else if (s.includes(":")) {
+		const cut = s.lastIndexOf(":");
+		if (!s.slice(0, cut).includes("-")) s = s.slice(cut + 1);
+	}
+	s = s.replace(/\([^)]*\)/g, " ").replace(/\[[^\]]*\]/g, " ");
+	s = s.replace(/[^a-z0-9.]+/g, "-");
+	return s.replace(/-+/g, "-").replace(/^[-.]+|[-.]+$/g, "");
+}
+
+/** Provider-exact identity of one (provider, model) route for the drift
+ *  comparison ONLY. normalizeModelKey builds capability-table keys: it
+ *  folds away the provider and keeps just the model's last segment, so an
+ *  authorized `b/m` would falsely clear pool entry `a/m` — but DSH
+ *  authorizes exact (provider, model) pairs. Returns
+ *  `provider + "\u0000" + modelSegment`, or "" when either side is empty
+ *  ("" never matches an authorized key). */
+function routeIdentity(provider, model) {
+	const p = typeof provider === "string" ? provider.trim() : "";
+	const m = modelSegment(model);
+	return p === "" || m === "" ? "" : `${p}\u0000${m}`;
+}
+
+/** The session's child-model authorization snapshot, read from the DSH
+ *  host's `subagentModelSelection` service WITHOUT declaring inject (the
+ *  same fail-open pattern routes.js's modelCatalogOf uses). The persisted
+ *  shape names the list `allowedModels` while the inspect contract says
+ *  `routes` — both are accepted. Keys are provider-exact route identities
+ *  (routeIdentity), NOT capability-table keys: DSH authorizes exact
+ *  (provider, model) pairs. Any missing service, error, or malformed
+ *  value degrades to null: unknown means "render nothing", and this file
+ *  family never throws on degraded capability. When enabled === false no
+ *  explicit child model selection is allowed at all, so every pool route
+ *  counts as unauthorized. */
+function authorizedChildRoutes(ctx) {
+	let service;
+	try {
+		service = typeof ctx?.get === "function" ? ctx.get("subagentModelSelection", false) : undefined;
+	} catch {
+		return null;
+	}
+	if (service === undefined || service === null || typeof service.current !== "function") return null;
+	try {
+		const snapshot = service.current();
+		if (snapshot === null || typeof snapshot !== "object" || typeof snapshot.enabled !== "boolean") return null;
+		const listed = Array.isArray(snapshot.routes)
+			? snapshot.routes
+			: Array.isArray(snapshot.allowedModels)
+				? snapshot.allowedModels
+				: [];
+		const routes = [];
+		const keys = new Set();
+		for (const entry of listed) {
+			if (!isModelRoute(entry)) continue;
+			const key = routeIdentity(entry.provider, entry.model);
+			if (key === "") continue;
+			keys.add(key);
+			routes.push({ provider: entry.provider, model: entry.model });
+		}
+		return { enabled: snapshot.enabled, keys, routes };
+	} catch {
+		return null;
+	}
+}
+
 /** Live snapshot of the dispatch settings plus the bundled capability table.
  *  Each lane carries its manual-order flag: manual=true lanes dispatch in
  *  stored array order, auto lanes use the modelRank+capability ordering;
- *  `efforts` holds the lane's manually pinned reasoning efforts. */
+ *  `efforts` holds the lane's manually pinned reasoning efforts.
+ *  `authorized` is the DSH-side child-model whitelist snapshot (null when
+ *  unreadable — drift markers are then omitted). */
 function readDispatchState(ctx, config) {
 	const lanePools = LANES.map((lane) => ({
 		lane,
@@ -78,6 +152,7 @@ function readDispatchState(ctx, config) {
 		modelRank: readList(config.modelRank).filter(isModelRoute),
 		enforce: readField(config.dispatchEnforce),
 		defaults: loadCapabilityDefaults(ctx?.logger),
+		authorized: authorizedChildRoutes(ctx),
 	};
 }
 
@@ -100,15 +175,26 @@ function effortMapOf(pool) {
 }
 
 /** The `[SWITCHMAN:POOLS]` block: anchor line, one line per configured lane,
- *  then the guidance lines (byte-stable for a given configuration). */
+ *  then the guidance lines (byte-stable for a given configuration). Routes
+ *  outside the session's DSH-authorized child models carry a ⚠not-authorized
+ *  marker (after any @effort suffix) whenever the whitelist is readable. */
 function renderPoolsBlock(state) {
 	const configured = state.lanePools.filter((pool) => pool.routes.length > 0);
 	const lines = [`[SWITCHMAN:POOLS] configured=${configured.length}/6 enforce=${state.enforce}`];
+	let anyUnauthorized = false;
 	for (const pool of state.lanePools) {
 		if (pool.routes.length === 0) continue;
 		const effortOf = effortMapOf(pool);
 		const routes = orderedPool(pool.routes, state.modelRank, state.defaults, pool.manual)
-			.map((entry) => renderRoute(entry, effortOf.get(normalizeModelKey(entry.provider, entry.model)) ?? null))
+			.map((entry) => {
+				const rendered = renderRoute(entry, effortOf.get(normalizeModelKey(entry.provider, entry.model)) ?? null);
+				if (state.authorized === null) return rendered;
+				if (state.authorized.enabled === false || !state.authorized.keys.has(routeIdentity(entry.provider, entry.model))) {
+					anyUnauthorized = true;
+					return `${rendered} ⚠not-authorized`;
+				}
+				return rendered;
+			})
 			.join(", ");
 		lines.push(`${pool.lane}${pool.manual ? "*" : ""}: ${routes}`);
 	}
@@ -117,10 +203,20 @@ function renderPoolsBlock(state) {
 		`Lanes marked * are in manual order: dispatch follows the listed order exactly (the head is the first choice).`,
 		`effort: economy=medium mechanical=medium main=medium (high for complex tasks) hard=high vision=multimodal-capable model review=high; an unconfigured lane uses the system default model.`,
 		`A route suffixed @effort has a manually pinned reasoning effort — pass it as reasoning_effort when delegating to that model (it overrides the lane default).`,
-		`Review delegations: prefer a review-pool model different from the main session's when the pool offers one; reusing the same model is allowed (declare DOWNGRADED in the conclusion).`,
+		`Review delegations: anchor independence on the code AUTHOR's model, not the main session's (author = the agent that produced the diff: its explicit dispatch route, or the inherited session model when unspecified). Prefer a reviewer model different from the author's; also avoiding the session model is a bonus (its integration pass already covers that angle). If no pool entry differs from the author, same-model review is allowed — declare DOWNGRADED and state whether it is relative to the author or the session.`,
+		`Explicit provider/model/effort on subagent/workflow calls is validated against this session's DSH-authorized child models (DSH Settings: allow agents to choose subagent models) — NOT against this table; when denied, discover allowed routes via list_subagent_models, or dispatch implicitly by omitting all three fields (the child then uses configured defaults or inherits the parent route).`,
+	);
+	if (anyUnauthorized) {
+		lines.push(
+			state.authorized.enabled === false
+				? `All routes above are marked ⚠not-authorized because explicit child model selection is currently disabled in DSH Settings (subagents: model selection) — every explicit provider/model/effort dispatch is denied; dispatch implicitly by omitting those fields until it is re-enabled.`
+				: `Routes marked ⚠not-authorized are pool entries outside this session's DSH-authorized child models — authorize them in DSH Settings (subagents: model selection), or dispatch them implicitly by omitting provider/model/effort.`,
+		);
+	}
+	lines.push(
 		`This table does not restrict models outside the pools${
 			state.enforce === "enforce"
-				? " (enforce mode: subagent calls naming a provider+model outside the pools or modelRank are denied)"
+				? ". In addition, in enforce mode: subagent calls naming a provider+model outside the pools or modelRank are denied"
 				: ""
 		}.`,
 	);
@@ -202,4 +298,4 @@ function applyDispatch(ctx, config) {
 	});
 }
 
-export { applyDispatch };
+export { applyDispatch, authorizedChildRoutes };

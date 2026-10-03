@@ -14,6 +14,9 @@
  *   GET  /api/dsh-switchman/models   — model-catalog pass-through from the
  *                                      host sessionController (degrades to
  *                                      llm.listProviders, then []).
+ *   GET  /api/dsh-switchman/authorized — the session's DSH-authorized child
+ *                                      models ({enabled, routes}; both null
+ *                                      when the host service is unreadable).
  *   POST /api/dsh-switchman/ui-locale — the client half reports its active
  *                                      UI locale (feeds the ask guidance's
  *                                      question language; no settings write).
@@ -24,6 +27,7 @@
  * settings, so unpaired LAN clients must not reach it.
  */
 
+import { authorizedChildRoutes } from "./dispatch.js";
 import { reportedUiLocale, setReportedUiLocale } from "./ui-locale.js";
 
 /** Route paths (client.js mirrors these literals). */
@@ -31,6 +35,7 @@ const ROUTES = {
 	health: "/api/dsh-switchman/health",
 	config: "/api/dsh-switchman/config",
 	models: "/api/dsh-switchman/models",
+	authorized: "/api/dsh-switchman/authorized",
 	uiLocale: "/api/dsh-switchman/ui-locale",
 };
 
@@ -385,6 +390,26 @@ export function makeRoutes(ctx, config) {
 					writeJson(res, 200, await modelCatalogOf(ctx));
 				} catch (error) {
 					ctx.logger.warn(`dsh-switchman: model catalog failed: ${error?.message ?? error}`);
+					writeJson(res, 500, { error: error?.message ?? String(error) });
+				}
+			},
+		},
+		{
+			kind: "exact",
+			path: ROUTES.authorized,
+			handler: async (req, res) => {
+				if (!guard(req, res, "GET")) return;
+				try {
+					const snapshot = authorizedChildRoutes(ctx);
+					writeJson(
+						res,
+						200,
+						snapshot === null
+							? { enabled: null, routes: null }
+							: { enabled: snapshot.enabled, routes: snapshot.routes },
+					);
+				} catch (error) {
+					ctx.logger.warn(`dsh-switchman: authorized-models read failed: ${error?.message ?? error}`);
 					writeJson(res, 500, { error: error?.message ?? String(error) });
 				}
 			},

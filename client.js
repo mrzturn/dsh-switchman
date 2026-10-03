@@ -11,7 +11,9 @@
  * - Phase 2: a "Dispatch pools & ranking" card on the same page: six lane
  *   pools and a capability ranking edited against the live model catalog
  *   (served by the Host route family), plus the enforcement mode. Every
- *   field shares one staged draft and one atomic fenced save.
+ *   field shares one staged draft and one atomic fenced save. Selected
+ *   routes outside the session's DSH-authorized child models (Host
+ *   /authorized route) carry a ⚠ badge plus a one-line hint.
  * - Phase 3: a "Context watermark" card on the same page: tiered token
  *   thresholds (soft/hard/force), the per-read budget, hard-tier behavior,
  *   automatic handover, and the subagent context cap — number inputs with
@@ -348,9 +350,26 @@ window.__ModuleLoader__.load({
 			return index;
 		}
 
+		/** Parse the /authorized answer (the session's DSH-authorized child
+		 *  models) into { enabled, keys } — null when unknown: a failed
+		 *  fetch, an unreadable service (both fields null), or a malformed
+		 *  shape all degrade to "no badges, no hint". A readable-but-empty
+		 *  whitelist yields keys = empty Set (every selected route drifts). */
+		function parseAuthorized(value) {
+			if (value === null || typeof value !== 'object') return null;
+			if (value.enabled !== true && value.enabled !== false) return null;
+			if (!Array.isArray(value.routes)) return null;
+			const keys = new Set();
+			for (const route of value.routes) {
+				const clean = sanitizeRoute(route);
+				if (clean !== null) keys.add(routeKey(clean));
+			}
+			return { enabled: value.enabled, keys };
+		}
+
 		/** Checkbox rows for one pool: every live catalog model, checked or
-		 * not, plus this pool's saved routes that left the catalog (still
-		 * removable — mirrors the shipped model-selection page). */
+		 *  not, plus this pool's saved routes that left the catalog (still
+		 *  removable — mirrors the shipped model-selection page). */
 		function poolRows(pool, catalogIndex) {
 			const selected = new Set(pool.map(routeKey));
 			const rows = [];
@@ -489,6 +508,9 @@ window.__ModuleLoader__.load({
 				catalogEmpty: '当前没有模型提供方公布模型。',
 				catalogUnavailableGroup: '已保存但当前不可用',
 				catalogUnavailable: '当前不可用',
+				unauthorizedBadge: '未在 DSH 设置的子智能体模型选择授权列表中',
+				unauthorizedHint:
+					'标有 ⚠ 的模型未在 DSH 设置 → 子智能体 → 模型选择 中授权，Agent 显式指定它们会被拒绝；去 DSH 设置授权，或让 Agent 走隐式派发。',
 				rankTitle: '能力排序',
 				rankDescription:
 					'序号即能力序（最强在前），可为每项锚定 S/A/B/C 档。列表为六池选中 ∪ 已有排序；任意编辑都会固化当前显示顺序。',
@@ -613,6 +635,9 @@ window.__ModuleLoader__.load({
 				catalogEmpty: 'No model provider currently advertises a model.',
 				catalogUnavailableGroup: 'Saved but currently unavailable',
 				catalogUnavailable: 'currently unavailable',
+				unauthorizedBadge: 'not authorized for explicit child dispatch in DSH Settings (subagents: model selection)',
+				unauthorizedHint:
+					'Models marked ⚠ are not authorized in DSH Settings → Subagents → model selection; agents naming them explicitly will be denied — authorize them in DSH Settings, or let agents dispatch implicitly.',
 				rankTitle: 'Capability ranking',
 				rankDescription:
 					'Numbered strongest first; each entry may anchor an S/A/B/C tier. The list is pool selections ∪ the saved ranking; any edit persists the displayed order.',
@@ -884,6 +909,10 @@ window.__ModuleLoader__.load({
 				color: 'var(--dsw-alias-label-tertiary)',
 				flex: 'none',
 			},
+			unauthorizedMark: {
+				color: 'var(--dsw-alias-state-error-primary)',
+				flex: 'none',
+			},
 			rankList: { display: 'grid', gap: '2px', marginTop: '8px' },
 			rankRow: {
 				display: 'grid',
@@ -1019,6 +1048,7 @@ window.__ModuleLoader__.load({
 			efforts,
 			manual,
 			editable,
+			authorized,
 			onToggle,
 			onToggleManual,
 			onSetEffort,
@@ -1028,6 +1058,24 @@ window.__ModuleLoader__.load({
 			onClear,
 		}) {
 			const hasCandidates = rows.length > 0 || extras.length > 0;
+			/** 授权漂移判定：该路由不在本会话 DSH 授权的子智能体模型内
+			 *  （authorized === null = 未知，不标）。enabled === false 时
+			 *  一切显式指定都会被拒，所有已选路由都算漂移。 */
+			const drift = (route) =>
+				authorized !== null &&
+				(authorized.enabled === false ||
+					!authorized.keys.has(routeKey(route)));
+			/** 漂移行的 ⚠ 徽标（悬停/读屏文案见 unauthorizedBadge）。 */
+			const unauthorizedBadge = () =>
+				h(
+					'span',
+					{
+						style: STYLE.unauthorizedMark,
+						title: t('unauthorizedBadge'),
+						'aria-label': t('unauthorizedBadge'),
+					},
+					'⚠',
+				);
 			/** 显示名查找：覆盖目录行与已存离架行。 */
 			const nameByKey = new Map(
 				[...rows, ...extras]
@@ -1151,6 +1199,7 @@ window.__ModuleLoader__.load({
 												},
 												nameByKey.get(routeKey(route)) ??
 													`${route.provider} · ${route.model}`,
+												drift(route) ? unauthorizedBadge() : null,
 											),
 											effortSelect(route),
 											h(
@@ -1316,6 +1365,9 @@ window.__ModuleLoader__.load({
 												`${row.providerName} · ${row.modelName}`,
 											),
 											...(row.selected ? [effortSelect(row)] : []),
+											...(row.selected && drift(row)
+												? [unauthorizedBadge()]
+												: []),
 										),
 							),
 							extras.length > 0
@@ -1352,6 +1404,7 @@ window.__ModuleLoader__.load({
 										{ style: STYLE.unavailableMark },
 										` · ${t('catalogUnavailable')}`,
 									),
+									drift(row) ? unauthorizedBadge() : null,
 								),
 							),
 						)
@@ -1448,6 +1501,25 @@ window.__ModuleLoader__.load({
 			loadCatalog();
 		}, [loadCatalog]);
 			const catalogIndex = indexCatalog(catalog.groups);
+
+		// DSH-side child-model authorization (which routes this session may
+		// name explicitly on subagent/workflow calls): loaded once on mount
+		// beside the catalog. null (failed fetch or unreadable service)
+		// means unknown — no ⚠ badges, no hint.
+		const [authorized, setAuthorized] = React.useState(null);
+		React.useEffect(() => {
+			let alive = true;
+			void (async () => {
+				const response = await api.get('authorized');
+				if (!alive) return;
+				setAuthorized(
+					response.ok ? parseAuthorized(response.value) : null,
+				);
+			})();
+			return () => {
+				alive = false;
+			};
+		}, []);
 
 			// Numeric watermark editing: one raw-text overlay per field so
 			// partial input ('', '5', leading zeros) is editable without
@@ -1888,6 +1960,19 @@ window.__ModuleLoader__.load({
 				enforce: 'enforceHelpEnforce',
 			};
 			const display = rankDisplay(values, catalogIndex);
+			/** Authorization drift exists when at least one selected pool
+			 *  route is outside the DSH-authorized child models (or the
+			 *  whitelist is readable and explicit selection is disabled
+			 *  while any pool is configured) — drives the section hint. */
+			const anyUnauthorized =
+				authorized !== null &&
+				(authorized.enabled === false
+					? poolsSet > 0
+					: POOL_FIELDS.some(({ field }) =>
+							values[field].some(
+								(route) => !authorized.keys.has(routeKey(route)),
+							),
+						));
 
 			// ---- watermark section derived state ----
 			const wmId = `${headingId}-wm`;
@@ -1979,6 +2064,18 @@ window.__ModuleLoader__.load({
 									)
 								: null;
 
+			/** Keys of every route configured across the six pools: the drift
+			 *  badge is pool-scoped, so rank-only modelRank entries (in no
+			 *  pool) never carry it. */
+			const poolRouteKeys = new Set(
+				POOL_FIELDS.flatMap(({ field }) => values[field].map(routeKey)),
+			);
+			/** Pool-scoped drift check for rank rows (same semantics as the
+			 *  PoolCard drift helper, which is not in scope here). */
+			const rankDrift = (route) =>
+				authorized !== null &&
+				(authorized.enabled === false ||
+					!authorized.keys.has(routeKey(route)));
 			/** One ranking row: index, label, tier select, move/remove buttons. */
 			const rankRow = (entry, index) => {
 				const key = routeKey(entry);
@@ -2002,6 +2099,17 @@ window.__ModuleLoader__.load({
 									'span',
 									{ style: STYLE.unavailableMark },
 									` · ${t('catalogUnavailable')}`,
+								)
+							: null,
+						poolRouteKeys.has(key) && rankDrift(entry)
+							? h(
+									'span',
+									{
+										style: STYLE.unauthorizedMark,
+										title: t('unauthorizedBadge'),
+										'aria-label': t('unauthorizedBadge'),
+									},
+									'⚠',
 								)
 							: null,
 					),
@@ -2200,6 +2308,13 @@ window.__ModuleLoader__.load({
 						}),
 					),
 					catalogNotice,
+					anyUnauthorized
+						? h(
+								'p',
+								{ key: 'unauthorized', role: 'status', style: STYLE.progress },
+								t('unauthorizedHint'),
+							)
+						: null,
 					h(
 						'div',
 						{ style: STYLE.poolGrid },
@@ -2218,6 +2333,7 @@ window.__ModuleLoader__.load({
 								efforts: values[effortsField],
 								manual: values[manualField],
 								editable,
+								authorized,
 								onToggle: (meta) => {
 									togglePool(field, meta);
 								},
