@@ -73,6 +73,7 @@ bash <安装目录>/skills/db-query/scripts/setup.sh
 
 - Host 半（`index.js` + `host/`）注入三个动态系统提示词段、读预算与 enforce 双闸、答案自动捕获、三个斜杠命令。全部设置为 volatile 字段，保存后下一轮提示词装配即生效，无需重启。
 - Client 半（`client.js`）渲染预设 chip 旁的 ⚡ 徽标与设置页，走官方 settings-form 服务。
+- 首页侧边栏新增「Switchman 调度中心」入口，位于技能中心一行旁，单击即以中央面板打开同一设置页（语言偏好、派发池与排序、水位）；原设置段与会话头 ⚡ 徽标保留。
 - `cordis.patch.yml` 逐字段复刻出厂预设插件列表，仅扩展 persona suffix；Agent Teams 工具本体仍来自出厂 `@deepseek-ai/dsh-experimental-agent-team-profile`。
 
 ## 维护注意

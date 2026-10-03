@@ -73,6 +73,7 @@ bash <install-dir>/skills/db-query/scripts/setup.sh
 
 - La parte Host (`index.js` + `host/`) inietta tre sezioni dinamiche del system prompt, i gate di budget di lettura ed enforce, la cattura automatica delle risposte e tre comandi slash. Tutte le impostazioni sono campi volatili — le modifiche salvate valgono dall'assemblaggio del prompt successivo, senza riavvio.
 - La parte Client (`client.js`) renderizza il badge ⚡ accanto al chip del preset e la pagina delle impostazioni, attraverso i servizi ufficiali settings-form.
+- La barra laterale della home page guadagna una voce **Switchman** dedicata accanto alla riga Skills Center; un clic apre questa stessa pagina delle impostazioni (lingue, pool e classifica, watermark) come pannello centrale. La sezione delle impostazioni e il badge ⚡ restano al loro posto.
 - `cordis.patch.yml` ripete verbatim la lista di plugin di ogni preset di serie ed estende solo il suffisso di persona; gli strumenti Agent Teams in sé continuano a venire dal `@deepseek-ai/dsh-experimental-agent-team-profile` di serie.
 
 ## Manutenzione

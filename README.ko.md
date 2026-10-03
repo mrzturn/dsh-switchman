@@ -73,6 +73,7 @@ bash <install-dir>/skills/db-query/scripts/setup.sh
 
 - Host 쪽(`index.js` + `host/`)은 동적 시스템 프롬프트 섹션 3개, 읽기 예산과 enforce 이중 게이트, 답변 자동 캡처, 슬래시 명령 3개를 주입합니다. 모든 설정은 volatile 필드라서 저장 후 다음 프롬프트 조립부터 적용되며 재시작이 필요 없습니다.
 - Client 쪽(`client.js`)은 프리셋 chip 옆의 ⚡ 배지와 설정 페이지를 렌더링합니다. 공식 settings-form 서비스를 통해 이루어집니다.
+- 홈 사이드바에도 **Switchman** 항목이 추가됩니다(Skills Center 행 옆). 클릭 한 번으로 같은 설정 페이지(언어 설정, 풀과 랭킹, 수위)를 중앙 패널로 엽니다. 설정 섹션과 ⚡ 배지는 그대로 유지됩니다.
 - `cordis.patch.yml` 은 출하 시 기본 프리셋의 플러그인 목록을 필드 단위로 그대로 복제하고 persona suffix 만 확장합니다. Agent Teams 도구 본체는 여전히 기본 탑재 `@deepseek-ai/dsh-experimental-agent-team-profile` 에서 옵니다.
 
 ## 유지 보수

@@ -73,6 +73,7 @@ bash <install-dir>/skills/db-query/scripts/setup.sh
 
 - The Host half (`index.js` + `host/`) injects three dynamic system-prompt sections, the read-budget and enforce gates, automatic answer capture, and three slash commands. All settings are volatile fields — saved changes apply to the next prompt assembly, no restart.
 - The Client half (`client.js`) renders the ⚡ badge beside the preset chip and the settings page, through official settings-form services.
+- The home sidebar gets its own **Switchman** entry next to the Skills Center row; one click opens this same configuration page (languages, pools & ranking, watermark) as a central panel. The settings section and the ⚡ badge remain.
 - `cordis.patch.yml` restates each shipped preset's plugin list verbatim and only extends the persona suffix; the Agent Teams tools themselves still come from the shipped `@deepseek-ai/dsh-experimental-agent-team-profile`.
 
 ## Maintenance

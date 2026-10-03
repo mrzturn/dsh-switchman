@@ -437,6 +437,7 @@ window.__ModuleLoader__.load({
 				badgeTip:
 					'dsh-switchman：四个内置预设（standard / ptc / minimal / cordis）已注入自主智能体团队调度规程',
 				settingsTitle: 'dsh-switchman',
+				panelLabel: 'Switchman 调度中心',
 				settingsDescription: '配置 dsh-switchman 的各项偏好。',
 				langSectionTitle: '语言偏好',
 				langSectionDescription:
@@ -563,6 +564,7 @@ window.__ModuleLoader__.load({
 				badgeTip:
 					'dsh-switchman: the four built-in presets (standard / ptc / minimal / cordis) carry the autonomous Agent Teams doctrine',
 				settingsTitle: 'dsh-switchman',
+				panelLabel: 'Switchman',
 				settingsDescription: 'Configure dsh-switchman preferences.',
 				langSectionTitle: 'Language',
 				langSectionDescription:
@@ -725,6 +727,70 @@ window.__ModuleLoader__.load({
 				},
 				h('span', { 'aria-hidden': true, style: { flex: 'none' } }, '⚡'),
 				h('span', null, text),
+			);
+		}
+
+		/** Home-sidebar panel icon (sidebar.panellist contract): the shell
+		 * row renderer passes { size, active } and colors the glyph via the
+		 * row's currentColor, so only size matters here. 16×16 stroke
+		 * glyph — one dispatch stem splitting into two routed lanes.
+		 * data-dsh-panel-entry is the documented L2 skins hook (the shell
+		 * row itself carries no per-entry marker). */
+		function SwitchmanPanelIcon({ size }) {
+			return h(
+				'svg',
+				{
+					'data-dsh-panel-entry': 'dsh-switchman',
+					viewBox: '0 0 16 16',
+					width: size,
+					height: size,
+					fill: 'none',
+					stroke: 'currentColor',
+					strokeWidth: 1.3,
+					strokeLinecap: 'round',
+					strokeLinejoin: 'round',
+					'aria-hidden': true,
+				},
+				h('path', { d: 'M2 8h4.5' }),
+				h('path', { d: 'M6.5 8 10.5 4H12' }),
+				h('path', { d: 'M6.5 8l4 4H12' }),
+				h('path', { d: 'M12.2 2.2 14 4l-1.8 1.8' }),
+				h('path', { d: 'M12.2 10.2 14 12l-1.8 1.8' }),
+			);
+		}
+
+		/** Central-panel host for the sidebar entry: reuses the settings
+		 * page component unchanged (its {t, locale} props arrive as the
+		 * register inject() face). The main area hands the page a
+		 * definite-height, overflow-clipped frame with no gutter — the
+		 * page must own its scrolling (skill-explorer's .view/.tabBody
+		 * pattern): height:100% scroll owner outside, reading-width
+		 * centered column inside. */
+		function SwitchmanPanelPage(props) {
+			return h(
+				'div',
+				{
+					'data-dsh-switchman': 'panel',
+					style: {
+						minWidth: 0,
+						minHeight: 0,
+						height: '100%',
+						overflowY: 'auto',
+					},
+				},
+				h(
+					'div',
+					{
+						style: {
+							minWidth: 0,
+							maxWidth: '860px',
+							margin: '0 auto',
+							padding: '16px 24px',
+							boxSizing: 'border-box',
+						},
+					},
+					h(SwitchmanSettingsPage, props),
+				),
 			);
 		}
 
@@ -2586,6 +2652,36 @@ window.__ModuleLoader__.load({
 							order: -9,
 						},
 						() => h(SwitchmanBadge, { locale: ctx.locale, t }),
+					),
+				);
+				// Home left-sidebar entry + central panel: the same slot pair
+				// the shipped Skills Center row uses. The shell owns the row
+				// button, click-to-switch, active highlight, and collapsed
+				// tooltip. The sidebar id and the main key must match, and
+				// the inject() face becomes the page component's props
+				// ({t, locale} — SwitchmanPanelPage forwards them verbatim).
+				// order 31 sits directly under the Skills Center row
+				// (skill-explorer 30; plugins 0, schedules 10).
+				ctx.slots.inject('sidebar.panellist', () =>
+					ctx.slots.register(
+						{
+							name: 'sidebar.panellist',
+							id: 'dsh-switchman',
+							order: 31,
+							label: () => t('panelLabel'),
+							locale: NS,
+						},
+						SwitchmanPanelIcon,
+					),
+				);
+				ctx.slots.inject('main', () =>
+					ctx.slots.register(
+						{
+							name: 'main',
+							key: 'dsh-switchman',
+							inject: () => ({ t, locale: ctx.locale }),
+						},
+						SwitchmanPanelPage,
 					),
 				);
 				// Settings page: one settings.section entry. The restricted
