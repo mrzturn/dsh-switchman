@@ -41,6 +41,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { clearHandover, handoverOf, recordHandover } from "./handover-state.js";
+import { enumerateRunningSubagents, sessionRecordPath, sessionRecordsDir } from "./subagents.js";
 
 /** Tools whose result text is accounted against the per-turn read budget. */
 const ACCOUNT_TOOLS = new Set(["read", "glob", "grep", "bash"]);
@@ -391,14 +392,30 @@ function applyContextWatch(ctx, config) {
 	 *  the session's working directory. The mechanical facts land now (before
 	 *  compaction); the agent's continuation turn fills in the task-state
 	 *  summary using the compaction summary it can still see. Null when the
-	 *  session exposes no usable cwd or the write fails. */
-	const writeHandoverSkeleton = (agent, sessionId, backupId, used) => {
+	 *  session exposes no usable cwd or the write fails. Any still-running
+	 *  background subagents are recorded too: compaction orphans them from
+	 *  every plugin-visible registry, so without this section the compacted
+	 *  agent cannot know its dispatched work is alive (and double-dispatches).
+	 *  */
+	const writeHandoverSkeleton = (agent, sessionId, backupId, used, running) => {
 		const cwd = agent?.session?.header?.cwd;
 		if (typeof cwd !== "string" || cwd === "") return null;
 		const stamp = new Date().toISOString().replace(/[:.]/gu, "-");
 		const directory = join(cwd, ".dsh-switchman", "handover");
 		const short = sessionId.replace(/^session-/u, "").slice(0, 8) || sessionId;
 		const path = join(directory, `${stamp}-${short}.md`);
+		const runningSection =
+			Array.isArray(running) && running.length > 0
+				? [
+						`## Running background subagents (captured before compaction — still alive)`,
+						``,
+						...running.map(
+							(child) =>
+								`- \`${child.id}\`${child.label ? ` — ${child.label}` : ""}${child.mode ? ` (${child.mode})` : ""} — STILL RUNNING. Collect its report when it settles (in-session completion notice, or read its session record at ${sessionRecordPath(child.id)}) before re-dispatching anything similar — do not duplicate live work.`,
+						),
+						``,
+					]
+				: [];
 		try {
 			mkdirSync(directory, { recursive: true });
 			writeFileSync(
@@ -410,6 +427,7 @@ function applyContextWatch(ctx, config) {
 					`- context used before compaction: ~${used ?? "unknown"} tokens`,
 					`- backup fork session: ${backupId ?? "(fork failed — the full history remains in this session's append-only log)"}`,
 					``,
+					...runningSection,
 					`## Task state (filled in by the agent right after the handover)`,
 					``,
 					`- goal / objective in flight:`,
@@ -433,11 +451,23 @@ function applyContextWatch(ctx, config) {
 	 *  uses: agent.followup + sessions.flush) instructing the agent to fill
 	 *  in the handover document from the compaction summary now in context
 	 *  and continue the unfinished task. */
-	const armContinuation = async (agent, backupId, docPath) => {
+	const armContinuation = async (agent, backupId, docPath, running) => {
 		if (typeof agent?.followup !== "function") {
 			warn("handover continuation skipped: agent exposes no followup()");
 			return;
 		}
+		const runningCount = Array.isArray(running) ? running.length : 0;
+		const runningSentence =
+			runningCount === 0
+				? `No background subagents were detected running at handover time.`
+				: docPath !== null
+					? `${runningCount} background subagent(s) dispatched earlier are STILL RUNNING and are listed in the handover document — collect their results (in-session completion notices, or their session records) instead of re-dispatching duplicate work.`
+					: `${runningCount} background subagent(s) dispatched earlier are STILL RUNNING (the handover document could not be written; inline list): ${running
+							.map(
+								(child) =>
+									`${child.id}${child.label ? ` (${child.label})` : ""} → record ${sessionRecordPath(child.id)}`,
+							)
+							.join("; ")} — collect their results instead of re-dispatching duplicate work (records live under ${sessionRecordsDir()}/<childId>.json).`;
 		const instruction = [
 			"[SWITCHMAN:HANDOVER] A context handover just completed for this session.",
 			backupId !== null
@@ -446,6 +476,7 @@ function applyContextWatch(ctx, config) {
 			docPath !== null
 				? `The handover document skeleton is at ${docPath}.`
 				: `Create the handover document under .dsh-switchman/handover/ in the working directory.`,
+			runningSentence,
 			"Using the compaction summary now in your context, fill in the handover document (goal, completed, in progress, next steps, files), then continue the unfinished task — do not wait for further instructions.",
 		].join(" ");
 		try {
@@ -486,7 +517,14 @@ function applyContextWatch(ctx, config) {
 			recordHandover(sessionId, { phase: "backup", source, at: Date.now() });
 			const backup = await forkBackup(agent, sessionId, signal);
 			const backupId = backup.childId;
-			const docPath = writeHandoverSkeleton(agent, sessionId, backupId, measureNow(ctx, agent));
+			// Snapshot the live background children BEFORE compaction — a
+			// dispatch racing the handover would otherwise be missed, and the
+			// same snapshot feeds both the document section and the
+			// continuation instruction. The sanctioned services answer first
+			// (live registry, no flush lag); the projcache disk scan below is
+			// the fail-open fallback.
+			const runningSubagents = await enumerateRunningSubagents(ctx, sessionId);
+			const docPath = writeHandoverSkeleton(agent, sessionId, backupId, measureNow(ctx, agent), runningSubagents);
 			const delays = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
 			const outcome = await new Promise((resolve) => {
 				let attempts = 0;
@@ -580,7 +618,7 @@ function applyContextWatch(ctx, config) {
 					text: `/ctx-handover: compaction failed after backup ${backupId ?? "n/a"} — ${outcome.reason}`,
 				};
 			recordHandover(sessionId, { phase: "continuation", source, at: Date.now() });
-			await armContinuation(agent, backupId, docPath);
+			await armContinuation(agent, backupId, docPath, runningSubagents);
 			const backupText = backupId ?? `n/a (${backup.reason ?? "log retains full history"})`;
 			return {
 				kind: "success",
