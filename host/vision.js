@@ -10,17 +10,32 @@
  * text-only session, resolves each admitted object's host path through
  * the attachment store, and re-emits them as a TEXT followup — paths
  * plus dispatch instructions — that any model can act on by delegating
- * to the vision pool (MCP image-analysis tools accept local file
- * paths; calling read_image in a text-only context would only yield a
- * placeholder, so the followup forbids that). With an empty vision
+ * to the vision pool. The store's content-addressed objects carry NO
+ * file extension, which MCP image-analysis tools reject on sight
+ * ("Unsupported image format"), and normalization may hand us formats
+ * some tools refuse outright (e.g. image/webp) — so each image is
+ * first materialized into <DSH_HOME>/dsh-switchman/vision/ as a
+ * durable, extension-named copy (native copy for PNG/JPEG, transcoded
+ * to PNG via the first available converter for everything else).
+ * Calling read_image in a text-only context would only yield a
+ * placeholder, so the followup forbids that. With an empty vision
  * pool the command refuses with setup guidance instead, and the client
  * composer-dock hint (fed by GET /api/dsh-switchman/vision-state)
  * points at the same setting.
  */
 
+import { execFile as execFileCb } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { constants } from "node:fs";
+import { access, copyFile, mkdir, open, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { dshHome } from "./lib/dsh-home.js";
 import { reportedUiLocale } from "./ui-locale.js";
+
+const execFile = promisify(execFileCb);
+
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 /** Read one volatile settings field's plain value (live `.get()` ref or raw). */
 function readPool(field) {
@@ -40,6 +55,138 @@ function imageHostPathOf(store, ref) {
 	const match = /^sha256:([a-f0-9]{64})$/.exec(String(ref?.attachmentId ?? ""));
 	if (match === null) return undefined;
 	return join(dshHome(), "attachments", "v1", "objects", match[1].slice(0, 2), match[1]);
+}
+
+/** Formats MCP image tools accept verbatim — copied as-is with their
+ * native extension. Everything else gets transcoded to PNG. */
+const NATIVE_EXT = new Map([
+	["image/png", "png"],
+	["image/jpeg", "jpg"],
+	["image/pjpeg", "jpg"],
+]);
+
+/** Extension for the best-effort raw fallback when no converter exists. */
+const FALLBACK_EXT = new Map([
+	["image/webp", "webp"],
+	["image/gif", "gif"],
+	["image/bmp", "bmp"],
+	["image/tiff", "tiff"],
+	["image/avif", "avif"],
+]);
+
+/** Transcode-to-PNG chain, first executable wins (sips: macOS built-in;
+ * magick/ffmpeg: common cross-platform installs). */
+const CONVERTERS = [
+	{ bin: "sips", args: (src, dst) => ["-s", "format", "png", src, "--out", dst] },
+	{ bin: "magick", args: (src, dst) => [src, dst] },
+	{ bin: "ffmpeg", args: (src, dst) => ["-y", "-i", src, dst] },
+];
+
+const exists = (path) =>
+	access(path, constants.F_OK)
+		.then(() => true)
+		.catch(() => false);
+
+/** First-8-bytes PNG signature check — a converter killed mid-write
+ * (timeout, full disk) or exiting 0 with garbage output must not leave
+ * a corrupt file behind that the exists() cache would serve forever. */
+async function looksLikePng(path) {
+	let handle;
+	try {
+		handle = await open(path, "r");
+		const buf = Buffer.alloc(8);
+		const { bytesRead } = await handle.read(buf, 0, 8, 0);
+		return bytesRead === 8 && buf.equals(PNG_MAGIC);
+	} catch {
+		return false;
+	} finally {
+		await handle?.close?.().catch(() => {});
+	}
+}
+
+const drop = (path) => rm(path, { force: true }).catch(() => {});
+
+/** Materialize one admitted image into <DSH_HOME>/dsh-switchman/vision/
+ * as an extension-named, tool-readable copy keyed by its content hash
+ * (re-admitting the same object reuses the same file). PNG/JPEG copy
+ * natively; other formats transcode to PNG when a converter is
+ * available, else fall back to a native-extension copy the followup
+ * flags for manual conversion. Absolute last resort: the extension-less
+ * store path itself, clearly marked.
+ * @returns {Promise<{path: string, note?: string} | undefined>}
+ *     undefined only when the store path itself is unresolvable. */
+async function materializeImage(store, ref, warn) {
+	const src = imageHostPathOf(store, ref);
+	if (src === undefined) return undefined;
+	const idMatch = /^sha256:([a-f0-9]{64})$/.exec(String(ref?.attachmentId ?? ""));
+	const hash =
+		idMatch?.[1] ??
+		(String(ref?.attachmentId ?? "").replace(/[^A-Za-z0-9_-]/g, "") || randomUUID());
+	const dir = join(dshHome(), "dsh-switchman", "vision");
+	const native = NATIVE_EXT.get(String(ref?.mediaType ?? "").toLowerCase());
+
+	// Native PNG/JPEG: a plain copy is exactly what image tools want.
+	if (native !== undefined) {
+		const dst = join(dir, `${hash}.${native}`);
+		if (await exists(dst)) return { path: dst };
+		try {
+			await mkdir(dir, { recursive: true });
+			await copyFile(src, dst);
+			return { path: dst };
+		} catch (error) {
+			warn(`vision: native copy failed (${error?.message ?? error})`);
+			return {
+				path: src,
+				note: "extension-less store path — copy it to a .png/.jpg file before image tools can read it",
+			};
+		}
+	}
+
+	// Everything else: transcode to PNG via the first usable converter.
+	const dst = join(dir, `${hash}.png`);
+	if (await exists(dst)) {
+		if (await looksLikePng(dst)) return { path: dst, note: "transcoded to PNG" };
+		await drop(dst); // cached file is corrupt — rebuild it
+	}
+	try {
+		await mkdir(dir, { recursive: true });
+	} catch (error) {
+		warn(`vision: vision dir unavailable (${error?.message ?? error})`);
+		return {
+			path: src,
+			note: "extension-less store path — copy it to a .png file before image tools can read it",
+		};
+	}
+	for (const { bin, args } of CONVERTERS) {
+		try {
+			await execFile(bin, args(src, dst), { timeout: 20_000, windowsHide: true });
+		} catch {
+			// Converter missing or failed on this input — drop any partial
+			// output, then try the next one.
+			await drop(dst);
+			continue;
+		}
+		if (await looksLikePng(dst)) return { path: dst, note: `transcoded to PNG via ${bin}` };
+		await drop(dst); // exited 0 but output is not a PNG — keep trying
+	}
+
+	// No converter: best-effort native-extension copy + explicit flag.
+	const ext = FALLBACK_EXT.get(String(ref?.mediaType ?? "").toLowerCase()) ?? "img";
+	const raw = join(dir, `${hash}.${ext}`);
+	try {
+		await copyFile(src, raw);
+		warn(`vision: no PNG converter available; kept ${ref?.mediaType} copy at ${raw}`);
+		return {
+			path: raw,
+			note: "not transcoded — some image tools reject this format; convert it to PNG yourself first (e.g. sips -s format png <path> --out <out>.png)",
+		};
+	} catch (error) {
+		warn(`vision: fallback copy failed (${error?.message ?? error})`);
+		return {
+			path: src,
+			note: "extension-less store path — copy it to a .png file before image tools can read it",
+		};
+	}
 }
 
 /** Whether the first root session's selected model accepts image input.
@@ -132,8 +279,8 @@ export function applyVision(ctx, config) {
 			const store = ctx.get?.("attachments", false);
 			const lines = [];
 			for (const block of images) {
-				const path = imageHostPathOf(store, block.attachment);
-				if (path === undefined) {
+				const material = await materializeImage(store, block.attachment, warn);
+				if (material === undefined) {
 					warn("vision: could not resolve host path for admitted image");
 					return {
 						kind: "error",
@@ -144,17 +291,24 @@ export function applyVision(ctx, config) {
 				}
 				const ref = block.attachment;
 				const name = typeof ref.name === "string" && ref.name !== "" ? `, ${ref.name}` : "";
-				lines.push(`- ${path} (${ref.mediaType}${name}, ${ref.width}x${ref.height})`);
+				const note = material.note === undefined ? "" : ` — ${material.note}`;
+				lines.push(`- ${material.path} (${ref.mediaType}${name}, ${ref.width}x${ref.height}${note})`);
 			}
 			const followup = [
 				"[SWITCHMAN:VISION] The user sent image attachment(s) that this session model cannot read directly.",
 				`User message: ${message === "" ? "(none)" : message}`,
-				"Admitted normalized objects (absolute host paths):",
+				"Admitted normalized objects, already materialized as extension-named readable copies (absolute host paths):",
 				...lines,
-				"Read them by delegating to the vision pool (vision lane): pass a local file path above to an MCP image-analysis tool that accepts paths (e.g. analyze_image with image_source=<path>). Do NOT call read_image on them yourself — a text-only context would only receive a placeholder. Then answer the user in their language.",
+				"Read them by delegating to the vision pool (vision lane): pass a local file path above to an MCP image-analysis tool that accepts paths (e.g. analyze_image with image_source=<path>). Each path already carries a proper file extension (non-PNG/JPEG formats were transcoded to PNG where a converter was available), so image tools accept the paths directly — do not re-copy files yourself unless a per-file note asks you to. Do NOT call read_image on them yourself — a text-only context would only receive a placeholder. Then answer the user in their language.",
 			].join("\n");
 			try {
 				agent?.followup?.({
+					// The gateway's stored-session validation (assertMessageEventShape)
+					// rejects a user/message whose record lacks a non-empty id/role —
+					// an id-less synthetic message bricks the session on reload
+					// ("session event at seq N lacks an identified message").
+					id: randomUUID(),
+					role: "user",
 					content: [{ type: "text", text: followup }],
 					source: { kind: "user" },
 				});
@@ -171,8 +325,8 @@ export function applyVision(ctx, config) {
 			return {
 				kind: "success",
 				text: isZh()
-					? `[SWITCHMAN:VISION] 已放行 ${images.length} 张图片并把宿主路径+视觉派发指令注入会话。`
-					: `[SWITCHMAN:VISION] ${images.length} image(s) admitted; host paths + vision-dispatch instructions injected into the session.`,
+					? `[SWITCHMAN:VISION] 已放行 ${images.length} 张图片，并把带扩展名的可读副本+视觉派发指令注入会话。`
+					: `[SWITCHMAN:VISION] ${images.length} image(s) admitted; extension-named readable copies + vision-dispatch instructions injected into the session.`,
 			};
 		},
 	});
