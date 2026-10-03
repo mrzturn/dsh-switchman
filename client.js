@@ -955,9 +955,32 @@ window.__ModuleLoader__.load({
 				return () => clearTimeout(timer);
 			}, [promptError, inputActions]);
 			if (vision === null && !notice) return null;
+			// The dock zone spans the full conversation width while the
+			// composer card is a centered column (max-width contract). The
+			// hero state narrows the whole stack, the active state does
+			// not — so a bare <p> lands hard against the far left once a
+			// conversation starts. Mirror the shell's own QueueDock column
+			// formula (same CSS custom properties) to keep every line's
+			// left edge tracking the input card in both states; fallback
+			// values degrade to the shell defaults if a variable is unset.
+			const dockColumnStyle = {
+				boxSizing: 'border-box',
+				width: 'calc(100% - var(--dsh-composer-side-clearance, 16px) - var(--dsh-composer-side-clearance, 16px))',
+				maxWidth: 'var(--dsh-composer-card-max-width, 780px)',
+				margin: '0 auto',
+				flex: 'none',
+				// Keep the rhythm between the notice and hint lines equal to
+				// the composer stack gap they no longer participate in.
+				display: 'flex',
+				flexDirection: 'column',
+				gap: 'var(--dsh-composer-stack-gap, 6px)',
+			};
 			return h(
-				React.Fragment,
-				null,
+				'div',
+				{
+					'data-dsh-switchman': 'vision-dock-column',
+					style: dockColumnStyle,
+				},
 				notice
 					? h(
 							'p',
@@ -965,7 +988,7 @@ window.__ModuleLoader__.load({
 								'data-dsh-switchman': 'vision-auto-converted',
 								style: {
 									margin: '0',
-									padding: '2px 4px',
+									padding: '2px 0',
 									color: 'var(--dsw-alias-label-secondary)',
 									fontSize: '12px',
 									lineHeight: '1.6',
@@ -986,7 +1009,7 @@ window.__ModuleLoader__.load({
 								'data-dsh-switchman': 'vision-hint',
 								style: {
 									margin: '0',
-									padding: '2px 4px',
+									padding: '2px 0',
 									color: 'var(--dsw-alias-label-tertiary)',
 									fontSize: '12px',
 									lineHeight: '1.6',
