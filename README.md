@@ -8,15 +8,18 @@
 
 > Context on a meter. Tasks dispatch themselves.
 
-A plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH). Once installed, your primary model stops doing everything itself and becomes a dispatcher: measure the water level, pick the lane, hand out the task, check the work. Four things:
+A plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH). Once installed, your primary model stops doing everything itself and becomes a dispatcher: measure the water level, pick the lane, hand out the task, check the work. Five things:
 
-**1. Context water-level control.** Every turn measures live session tokens. Soft (default 50k) advises delegating, hard (90k) tightens the per-turn read budget and nudges wrap-up, force (130k) backs the session up and hands it over to compaction — automatically. Run a session all day; your context never drowns in its own history. Every dispatched subagent carries its own hard cap and exits with a HANDOFF summary when it's reached.
+**1. Context water-level control.** Every turn measures live session tokens. Soft (default 50k) advises delegating, hard (90k) tightens the per-turn read budget and nudges wrap-up, force (130k) backs the session up and hands it over to compaction — automatically. Run a session all day; your context never drowns in its own history. Every dispatched subagent carries its own hard cap and exits with a HANDOFF summary when it's reached. At a handover, any still-running background subagents are snapshotted — id, description, report-collection path — into the handover document and the continuation instruction, so the compacted session collects their reports instead of dispatching duplicates.
 
 **2. Six-lane dispatch.** economy / mechanical / main / hard / vision / review — six cognitive lanes. Pick candidate models per lane in the settings page, rank them strongest-first (optional S/A/B/C tier anchoring), and pin a reasoning effort per route — the dropdown lists the levels each model *actually* supports, not a generic three. A `[SWITCHMAN:POOLS]` table ships with every prompt so the model knows who to call; `enforce` mode rejects out-of-pool models outright. Routes the session's DSH settings haven't authorized for explicit subagent selection are marked ⚠ in both the pools table and the settings page, pointing you to DSH Settings (Subagents → model selection) to authorize them — or agents fall back to implicit dispatch. Review independence anchors on the code **author's** model (the agent that produced the diff), not the main session's.
 
 **3. Language preferences.** One dropdown each for replies, code comments, and authored docs. Unset? You get asked once, it's remembered forever, and every later session follows it.
 
 **4. Delegate-by-default doctrine.** Replaces DSH's shipped conservative team policy ("only create teammates when asked"): trivia stays hands-on (<200 lines read, <50 changed), real work gets delegated by default; every change gets verified — >20 lines goes to a tester, >300 lines or core logic goes to a reviewer whose model differs from the code author's (declared DOWNGRADED when the pool can't offer one). Say "don't use teams" and it steps aside instantly.
+
+**5. Vision unlock (`/vision`).** A text-only session model can't read images — DSH refuses the send at the host-side gate. Switchman registers a global `/vision` command that admits composer images past that gate, resolves each one to a host file path, and re-emits them as text, so the model delegates the reading to a vision-pool model or an MCP image tool: attach the image, then type `/vision <question>`. A hint chip appears above the composer whenever the model is text-only (use `/vision`, or fill the vision pool first), and a refused plain image send is rewritten once to `/vision <original text>` and resubmitted on its own — the images reach the vision pool without retyping. With an empty vision pool the command refuses with setup guidance.
+
 
 Only one model? Still worth it — water-level control and the doctrine don't care how many models you have.
 
@@ -71,7 +74,7 @@ bash <install-dir>/skills/db-query/scripts/setup.sh
 
 ## How it works
 
-- The Host half (`index.js` + `host/`) injects three dynamic system-prompt sections, the read-budget and enforce gates, automatic answer capture, and three slash commands. All settings are volatile fields — saved changes apply to the next prompt assembly, no restart.
+- The Host half (`index.js` + `host/`) injects three dynamic system-prompt sections, the read-budget and enforce gates, automatic answer capture, and four slash commands — the ctx trio plus `/vision`, which resolves pasted images to host file paths for vision-pool reading. All settings are volatile fields — saved changes apply to the next prompt assembly, no restart.
 - The Client half (`client.js`) renders the ⚡ badge beside the preset chip and the settings page, through official settings-form services.
 - The home sidebar gets its own **Switchman** entry next to the Skills Center row; one click opens this same configuration page (languages, pools & ranking, watermark) as a central panel. The settings section and the ⚡ badge remain.
 - `cordis.patch.yml` restates each shipped preset's plugin list verbatim and only extends the persona suffix; the Agent Teams tools themselves still come from the shipped `@deepseek-ai/dsh-experimental-agent-team-profile`.
