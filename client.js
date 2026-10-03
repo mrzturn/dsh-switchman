@@ -446,6 +446,8 @@ window.__ModuleLoader__.load({
 					'当前模型不支持读图：请在 dsh-switchman 设置中配置「视觉池」模型，之后用 /vision 发送图片。',
 				visionHintUseVision:
 					'当前模型不支持读图：图片请用 /vision 发送（将自动派发视觉池读取）。',
+				visionAutoConverted:
+					'图片直发被拒：已自动改用 /vision 重发（由视觉池读取）。',
 				settingsTitle: 'dsh-switchman',
 				panelLabel: 'Switchman 调度中心',
 				settingsDescription: '配置 dsh-switchman 的各项偏好。',
@@ -583,6 +585,8 @@ window.__ModuleLoader__.load({
 					'This model cannot read images: add vision-pool models in the dsh-switchman settings, then send images with /vision.',
 				visionHintUseVision:
 					'This model cannot read images: send them with /vision (routed to the vision pool automatically).',
+				visionAutoConverted:
+					'Image send was refused: automatically resubmitting via /vision (read by the vision pool).',
 				settingsTitle: 'dsh-switchman',
 				panelLabel: 'Switchman',
 				settingsDescription: 'Configure dsh-switchman preferences.',
@@ -856,14 +860,28 @@ window.__ModuleLoader__.load({
 			);
 		}
 
-		/** Composer-dock vision hint: DSH refuses to send pasted images while
-		 * the session model has no image input, and switchman's unlock is
-		 * the /vision command backed by the vision pool. This chip renders
-		 * ONLY in the stuck state — text-only model AND empty vision pool —
-		 * pointing at the setting that resolves it. Polls the Host route at
-		 * a slow fixed cadence; any failure renders nothing. */
-		function VisionHint({ t }) {
-			const [hint, setHint] = React.useState(null);
+		/** Composer-dock vision entry. Two jobs:
+		 *
+		 * 1. Guidance chip — DSH refuses to send pasted images while the
+		 *    session model has no image input; switchman's unlock is the
+		 *    /vision command backed by the vision pool. The chip renders
+		 *    whenever the model is text-only (pool ready → "use /vision",
+		 *    pool empty → "configure the pool"), polling the Host route at
+		 *    a slow fixed cadence; any failure renders nothing.
+		 * 2. Reactive auto-conversion (v1) — when a plain send is refused
+		 *    host-side (session/attachment-invalid), rewrite the draft as
+		 *    "/vision <original text>" and resubmit once; the claimed
+		 *    command submit carries the restored draft attachments past
+		 *    the model gate to the /vision handler. Session-scoped dock
+		 *    entries receive the standard kit (inputActions, useInput,
+		 *    useSession) automatically; loop safety = one conversion per
+		 *    promptError object identity + never converting a draft that
+		 *    already starts with "/". */
+		function VisionDockEntry({ t, inputActions, useInput, useSession }) {
+			const [vision, setVision] = React.useState(null);
+			const [notice, setNotice] = React.useState(false);
+			const handled = React.useRef(null);
+			const latest = React.useRef({ vision: null, draft: '', attachmentIds: [] });
 			React.useEffect(() => {
 				let stopped = false;
 				let timer = null;
@@ -871,13 +889,16 @@ window.__ModuleLoader__.load({
 					let next = null;
 					try {
 						const reply = await api.get('vision-state');
-						if (reply?.ok && reply.value && reply.value.imageCapable === false)
-							next = reply.value.poolConfigured ? 'visionHintUseVision' : 'visionHintNeedsPool';
+						if (reply?.ok && reply.value && typeof reply.value === 'object')
+							next = {
+								poolConfigured: reply.value.poolConfigured === true,
+								imageCapable: reply.value.imageCapable,
+							};
 					} catch {
 						next = null;
 					}
 					if (stopped) return;
-					setHint(next);
+					setVision(next);
 					timer = setTimeout(tick, 15_000);
 				};
 				void tick();
@@ -886,21 +907,81 @@ window.__ModuleLoader__.load({
 					if (timer !== null) clearTimeout(timer);
 				};
 			}, []);
-			if (hint === null) return null;
+			// Standard kit props are guaranteed by the session scope, but the
+			// hooks must be called unconditionally — degrade to no-op sources
+			// if a future shell ever mounts this entry outside that scope.
+			const inputHook =
+				typeof useInput === 'function' ? useInput : () => () => ({ draft: '', attachmentIds: [] });
+			const sessionHook =
+				typeof useSession === 'function' ? useSession : () => () => null;
+			const input = inputHook((s) => s) ?? {};
+			const promptError = sessionHook((s) => s.promptError);
+			latest.current = {
+				vision,
+				draft: typeof input.draft === 'string' ? input.draft : '',
+				attachmentIds: Array.isArray(input.attachmentIds) ? input.attachmentIds : [],
+			};
+			React.useEffect(() => {
+				if (promptError == null || promptError === handled.current) return;
+				handled.current = promptError;
+				if (promptError.op !== 'send') return; // stop failures are not ours
+				const code = promptError.error?.code;
+				if (code !== 'session/attachment-invalid' && code !== 'subagent/attachment-invalid') return;
+				// Let InputBar's failure restore of the draft and attachments
+				// land before reading them.
+				const timer = setTimeout(() => {
+					const snap = latest.current;
+					if (snap.vision?.imageCapable !== false) return; // capable or unknown: not ours
+					const text = snap.draft.trim();
+					if (text.startsWith('/')) return; // already a command path — never loop
+					if (snap.attachmentIds.length === 0) return;
+					if (typeof inputActions?.setDraft !== 'function' || typeof inputActions?.submit !== 'function')
+						return;
+					inputActions.setDraft(text === '' ? '/vision' : `/vision ${text}`);
+					inputActions.submit();
+					setNotice(true);
+					setTimeout(() => setNotice(false), 6_000);
+				}, 300);
+				return () => clearTimeout(timer);
+			}, [promptError, inputActions]);
+			if (vision === null && !notice) return null;
 			return h(
-				'p',
-				{
-					'data-dsh-switchman': 'vision-hint',
-					style: {
-						margin: '0',
-						padding: '2px 4px',
-						color: 'var(--dsw-alias-label-tertiary)',
-						fontSize: '12px',
-						lineHeight: '1.6',
-					},
-				},
-				'⚠ ',
-				t(hint),
+				React.Fragment,
+				null,
+				notice
+					? h(
+							'p',
+							{
+								'data-dsh-switchman': 'vision-auto-converted',
+								style: {
+									margin: '0',
+									padding: '2px 4px',
+									color: 'var(--dsw-alias-label-secondary)',
+									fontSize: '12px',
+									lineHeight: '1.6',
+								},
+							},
+							'↻ ',
+							t('visionAutoConverted'),
+						)
+					: null,
+				vision !== null && vision.imageCapable === false
+					? h(
+							'p',
+							{
+								'data-dsh-switchman': 'vision-hint',
+								style: {
+									margin: '0',
+									padding: '2px 4px',
+									color: 'var(--dsw-alias-label-tertiary)',
+									fontSize: '12px',
+									lineHeight: '1.6',
+								},
+							},
+							'⚠ ',
+							t(vision.poolConfigured ? 'visionHintUseVision' : 'visionHintNeedsPool'),
+						)
+					: null,
 			);
 		}
 
@@ -2858,11 +2939,14 @@ window.__ModuleLoader__.load({
 						SwitchmanPanelPage,
 					),
 				);
-				// Composer-adjacent vision hint (conversation.input.dock: the
-				// full-width list ABOVE the composer card): shows the
-				// "configure the vision pool" chip only while the root model
-				// is text-only and the pool is empty — the exact state where
-				// a pasted image can neither be sent nor delegated.
+				// Composer-adjacent vision entry (conversation.input.dock: the
+				// full-width list ABOVE the composer card): guidance chip
+				// while the root model is text-only, plus reactive
+				// auto-conversion of refused image sends into /vision
+				// submits. The session scope automatically provides
+				// inputActions/useInput/useSession to the registered
+				// component; the wrapper forwards that standard kit through
+				// alongside the closure-bound t.
 				ctx.slots.inject('conversation.input.dock', () =>
 					ctx.slots.register(
 						{
@@ -2870,7 +2954,7 @@ window.__ModuleLoader__.load({
 							id: 'dsh-switchman-vision-hint',
 							order: 90,
 						},
-						() => h(VisionHint, { t }),
+						(kit) => h(VisionDockEntry, { ...kit, t }),
 					),
 				);
 				// Settings page: one settings.section entry. The restricted
