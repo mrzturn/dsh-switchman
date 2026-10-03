@@ -865,18 +865,23 @@ window.__ModuleLoader__.load({
 		 * 1. Guidance chip — DSH refuses to send pasted images while the
 		 *    session model has no image input; switchman's unlock is the
 		 *    /vision command backed by the vision pool. The chip renders
-		 *    whenever the model is text-only (pool ready → "use /vision",
-		 *    pool empty → "configure the pool"), polling the Host route at
-		 *    a slow fixed cadence; any failure renders nothing.
+		 *    whenever image support is not positively confirmed (probe
+		 *    false, or null = unresolved — the common live case: the
+		 *    Host-side model-info resolution often cannot resolve custom
+		 *    routes), polling the Host route at a slow fixed cadence;
+		 *    any failure renders nothing.
 		 * 2. Reactive auto-conversion (v1) — when a plain send is refused
 		 *    host-side (session/attachment-invalid), rewrite the draft as
 		 *    "/vision <original text>" and resubmit once; the claimed
 		 *    command submit carries the restored draft attachments past
-		 *    the model gate to the /vision handler. Session-scoped dock
-		 *    entries receive the standard kit (inputActions, useInput,
-		 *    useSession) automatically; loop safety = one conversion per
-		 *    promptError object identity + never converting a draft that
-		 *    already starts with "/". */
+		 *    the model gate to the /vision handler. The refusal code is
+		 *    the authoritative image-gate signal; the probe's
+		 *    imageCapable only brakes the conversion when it positively
+		 *    says true. Session-scoped dock entries receive the standard
+		 *    kit (inputActions, useInput, useSession) automatically;
+		 *    loop safety = one conversion per promptError object
+		 *    identity + never converting a draft that already starts
+		 *    with "/". */
 		function VisionDockEntry({ t, inputActions, useInput, useSession }) {
 			const [vision, setVision] = React.useState(null);
 			const [notice, setNotice] = React.useState(false);
@@ -931,7 +936,12 @@ window.__ModuleLoader__.load({
 				// land before reading them.
 				const timer = setTimeout(() => {
 					const snap = latest.current;
-					if (snap.vision?.imageCapable !== false) return; // capable or unknown: not ours
+					// The refusal code below is the authoritative image-gate
+					// signal; vision.imageCapable is only a secondary brake.
+					// The Host probe legitimately yields null (unknown) when
+					// its model-info resolution fails, so skip ONLY when the
+					// probe positively says the model reads images.
+					if (snap.vision?.imageCapable === true) return;
 					const text = snap.draft.trim();
 					if (text.startsWith('/')) return; // already a command path — never loop
 					if (snap.attachmentIds.length === 0) return;
@@ -965,7 +975,11 @@ window.__ModuleLoader__.load({
 							t('visionAutoConverted'),
 						)
 					: null,
-				vision !== null && vision.imageCapable === false
+				// Hint whenever the probe cannot positively confirm image
+				// input — false (confirmed text-only) or null (unresolved,
+				// the common live case): /vision is harmless either way and
+				// this chip is the only composer-surface affordance for it.
+				vision !== null && vision.imageCapable !== true
 					? h(
 							'p',
 							{
