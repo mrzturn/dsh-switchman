@@ -42,7 +42,9 @@ import { applyDispatch } from "./host/dispatch.js";
 
 // Context-watermark layer (banner + read budget + handover + /ctx-* commands).
 import { applyContextWatch } from "./host/context-watch.js";
-
+// Vision dispatch gate (/vision command + vision-state route for the
+// composer-dock hint): unlocks image sending on text-only models.
+import { applyVision } from "./host/vision.js";
 // Client-bridge routes (config snapshot/fenced write + model catalog for the
 // restricted browser half, which has no configForms/remote services).
 import { applyRoutes } from "./host/routes.js";
@@ -151,6 +153,7 @@ function apply(ctx, config) {
 	applyLanguage(ctx, config);
 	applyDispatch(ctx, config);
 	applyContextWatch(ctx, config);
+	applyVision(ctx, config);
 	applyRoutes(ctx, config);
 }
 

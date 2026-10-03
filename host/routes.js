@@ -30,6 +30,7 @@
 import { authorizedChildRoutes } from "./dispatch.js";
 import { handoverSnapshot } from "./handover-state.js";
 import { reportedUiLocale, setReportedUiLocale } from "./ui-locale.js";
+import { visionStateOf } from "./vision.js";
 
 /** Route paths (client.js mirrors these literals). */
 const ROUTES = {
@@ -38,6 +39,7 @@ const ROUTES = {
 	models: "/api/dsh-switchman/models",
 	authorized: "/api/dsh-switchman/authorized",
 	handoverState: "/api/dsh-switchman/handover-state",
+	visionState: "/api/dsh-switchman/vision-state",
 	uiLocale: "/api/dsh-switchman/ui-locale",
 };
 
@@ -426,6 +428,19 @@ export function makeRoutes(ctx, config) {
 				// so the GUI shows an animated "handover in progress" cue.
 				const handovers = handoverSnapshot();
 				writeJson(res, 200, { count: handovers.length, handovers });
+			},
+		},
+		{
+			kind: "exact",
+			path: ROUTES.visionState,
+			handler: async (req, res) => {
+				if (!guard(req, res, "GET")) return;
+				try {
+					writeJson(res, 200, await visionStateOf(ctx, config));
+				} catch (error) {
+					ctx.logger.warn(`dsh-switchman: vision-state read failed: ${error?.message ?? error}`);
+					writeJson(res, 500, { error: error?.message ?? String(error) });
+				}
 			},
 		},
 		{

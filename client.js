@@ -442,6 +442,10 @@ window.__ModuleLoader__.load({
 				handoverPhaseContinuation: '唤醒续接',
 				handoverActiveTip:
 					'Switchman 正在后台交接：fork 备份会话并压缩上下文，完成后自动继续任务；期间会话静止属正常现象。',
+				visionHintNeedsPool:
+					'当前模型不支持读图：请在 dsh-switchman 设置中配置「视觉池」模型，之后用 /vision 发送图片。',
+				visionHintUseVision:
+					'当前模型不支持读图：图片请用 /vision 发送（将自动派发视觉池读取）。',
 				settingsTitle: 'dsh-switchman',
 				panelLabel: 'Switchman 调度中心',
 				settingsDescription: '配置 dsh-switchman 的各项偏好。',
@@ -575,6 +579,10 @@ window.__ModuleLoader__.load({
 				handoverPhaseContinuation: 'waking continuation',
 				handoverActiveTip:
 					'Switchman is handing over in the background: forking a backup session and compacting context; the task continues automatically when done. A still session during this window is expected.',
+				visionHintNeedsPool:
+					'This model cannot read images: add vision-pool models in the dsh-switchman settings, then send images with /vision.',
+				visionHintUseVision:
+					'This model cannot read images: send them with /vision (routed to the vision pool automatically).',
 				settingsTitle: 'dsh-switchman',
 				panelLabel: 'Switchman',
 				settingsDescription: 'Configure dsh-switchman preferences.',
@@ -845,6 +853,54 @@ window.__ModuleLoader__.load({
 				},
 				h('span', { 'aria-hidden': true, style: { flex: 'none' } }, '⚡'),
 				h('span', null, text),
+			);
+		}
+
+		/** Composer-dock vision hint: DSH refuses to send pasted images while
+		 * the session model has no image input, and switchman's unlock is
+		 * the /vision command backed by the vision pool. This chip renders
+		 * ONLY in the stuck state — text-only model AND empty vision pool —
+		 * pointing at the setting that resolves it. Polls the Host route at
+		 * a slow fixed cadence; any failure renders nothing. */
+		function VisionHint({ t }) {
+			const [hint, setHint] = React.useState(null);
+			React.useEffect(() => {
+				let stopped = false;
+				let timer = null;
+				const tick = async () => {
+					let next = null;
+					try {
+						const reply = await api.get('vision-state');
+						if (reply?.ok && reply.value && reply.value.imageCapable === false)
+							next = reply.value.poolConfigured ? 'visionHintUseVision' : 'visionHintNeedsPool';
+					} catch {
+						next = null;
+					}
+					if (stopped) return;
+					setHint(next);
+					timer = setTimeout(tick, 15_000);
+				};
+				void tick();
+				return () => {
+					stopped = true;
+					if (timer !== null) clearTimeout(timer);
+				};
+			}, []);
+			if (hint === null) return null;
+			return h(
+				'p',
+				{
+					'data-dsh-switchman': 'vision-hint',
+					style: {
+						margin: '0',
+						padding: '2px 4px',
+						color: 'var(--dsw-alias-label-tertiary)',
+						fontSize: '12px',
+						lineHeight: '1.6',
+					},
+				},
+				'⚠ ',
+				t(hint),
 			);
 		}
 
@@ -2800,6 +2856,21 @@ window.__ModuleLoader__.load({
 							inject: () => ({ t, locale: ctx.locale }),
 						},
 						SwitchmanPanelPage,
+					),
+				);
+				// Composer-adjacent vision hint (conversation.input.dock: the
+				// full-width list ABOVE the composer card): shows the
+				// "configure the vision pool" chip only while the root model
+				// is text-only and the pool is empty — the exact state where
+				// a pasted image can neither be sent nor delegated.
+				ctx.slots.inject('conversation.input.dock', () =>
+					ctx.slots.register(
+						{
+							name: 'conversation.input.dock',
+							id: 'dsh-switchman-vision-hint',
+							order: 90,
+						},
+						() => h(VisionHint, { t }),
 					),
 				);
 				// Settings page: one settings.section entry. The restricted
