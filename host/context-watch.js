@@ -18,14 +18,19 @@
  *   compaction only inside each preset's isolated per-agent group
  *   (isolate: { compaction: true }), so no root-level inject or lookup can
  *   reach it — the borrowed handler's closure carries the right composition.
- *   Auto handover is fire-and-forget with a session-level in-flight flag
- *   plus a 10-minute cooldown. Manual /ctx-handover is the full four-step
- *   flow: fork a dormant backup session (subagents' fork provider, economy
- *   pool model), write the handover document skeleton, compact, then wake
- *   this session (agent.followup + sessions.flush, the schedule service's
- *   delivery channel) to fill in the document and continue the unfinished
- *   task. /ctx-pause and /ctx-resume toggle process-lifetime pause
- *   state (a restart resumes enforcement — the safe side).
+ *   Every handover trigger — the force-tier automation (fire-and-forget,
+ *   session-level in-flight flag plus a 10-minute cooldown) and manual
+ *   /ctx-handover — shares one four-step flow: fork a dormant backup
+ *   session (subagents' fork provider, economy pool model), write the
+ *   handover document skeleton, compact via the borrowed per-agent
+ *   /compact (retried on a growing backoff until the agent goes idle,
+ *   because the automation fires mid-turn), then wake this session
+ *   (agent.followup + sessions.flush, the schedule service's delivery
+ *   channel) to fill in the document and continue the unfinished task.
+ *   The live handover phase feeds the force-tier banner so progress is
+ *   visible instead of silent. /ctx-pause and /ctx-resume toggle
+ *   process-lifetime pause state (a restart resumes enforcement — the
+ *   safe side).
  *
  * All session state is in-process Maps; every path is fail-open (a failing
  * measurement or missing service degrades the banner to "" or the gate to
@@ -140,8 +145,9 @@ function measureNow(ctx, agent) {
 
 // ---- banner rendering (pure given state + measurement) ---------------------
 
-/** Root-session banner: byte-stable anchor line + tier advice lines. */
-function renderRootBanner(level, used, th, autoHandover) {
+/** Root-session banner: byte-stable anchor line + tier advice lines plus
+ * the live handover progress (phase/attempt) and auto-cooldown state. */
+function renderRootBanner(level, used, th, status) {
 	const head =
 		`[SWITCHMAN:WATERMARK] level=${level} used=${kilo(used)}` +
 		` budget=${kilo(th.soft)}/${kilo(th.hard)}/${kilo(th.force)}`;
@@ -153,11 +159,22 @@ function renderRootBanner(level, used, th, autoHandover) {
 	if (level === "hard") lines.push(`hard tier: stop broad reading (read/glob/grep are budget-limited this turn) and start wrapping up.`);
 	if (level === "force") {
 		lines.push(`force tier: MANDATORY wrap-up now — produce the final answer from what you already hold.`);
-		lines.push(
-			autoHandover
-				? `an automatic context handover (compaction) is armed and will fire at the next step boundary.`
-				: `run /ctx-handover to trigger a manual context handover.`,
-		);
+		const phase = status?.phase;
+		if (phase === "backup") {
+			lines.push(`context handover running: forking the backup session and writing the handover document…`);
+		} else if (phase === "compacting") {
+			lines.push(`context handover running: compaction attempt ${status?.attempt ?? "?"} (retries while the turn is still running)…`);
+		} else if (phase === "continuation") {
+			lines.push(`context handover completing: waking this session to fill in the document and continue the task…`);
+		} else if (status?.autoHandover) {
+			lines.push(
+				status?.cooldownMin > 0
+					? `automatic handover cooldown: ${status.cooldownMin} min left; run /ctx-handover${status?.tool ? " or call the ctx_handover tool" : ""} to force one now.`
+					: `an automatic context handover (backup + document + compaction + continuation) is armed and will fire at the next step boundary${status?.tool ? "; calling the ctx_handover tool triggers it immediately" : ""}.`,
+			);
+		} else {
+			lines.push(`run /ctx-handover${status?.tool ? " or call the ctx_handover tool" : ""} to trigger a manual context handover.`);
+		}
 	}
 	return lines.join("\n");
 }
@@ -199,7 +216,15 @@ function renderBanner(ctx, config, state, agent) {
 			return renderSubBanner(used, subTh);
 		}
 		const level = state.paused.has(sessionId) ? "paused" : levelOf(used, th);
-		return renderRootBanner(level, used, th, readBool(config.wmAutoHandover, true));
+		const live = state.handover.get(sessionId);
+		const elapsed = Date.now() - (state.lastHandover.get(sessionId) ?? 0);
+		return renderRootBanner(level, used, th, {
+			autoHandover: readBool(config.wmAutoHandover, true),
+			phase: live?.phase,
+			attempt: live?.attempt,
+			cooldownMin: Math.max(0, Math.ceil((HANDOVER_COOLDOWN_MS - elapsed) / 60_000)),
+			tool: state.handoverTool ?? undefined,
+		});
 	} catch {
 		return "";
 	}
@@ -260,6 +285,8 @@ function applyContextWatch(ctx, config) {
 	const state = {
 		paused: new Set(),
 		inflight: new Set(),
+		handover: new Map(),
+		handoverTool: null,
 		lastHandover: new Map(),
 		readUsed: new Map(),
 	};
@@ -282,14 +309,19 @@ function applyContextWatch(ctx, config) {
 	// ctx.commands.find(agent, "compact") merges that agent's scoped layer and
 	// returns the definition whose handler closure already carries the right
 	// composition context with compaction injected.
-	const sessionCompact = (agent, commandId, signal) => {
-		let definition;
+	/** Find the agent's scoped /compact definition without invoking it. */
+	const compactDefinition = (agent) => {
 		try {
-			definition = ctx.commands?.find?.(agent, "compact");
+			const definition = ctx.commands?.find?.(agent, "compact");
+			return typeof definition?.handler === "function" ? definition : undefined;
 		} catch {
-			definition = undefined;
+			return undefined;
 		}
-		if (definition === undefined || typeof definition.handler !== "function") return undefined;
+	};
+
+	const sessionCompact = (agent, commandId, signal) => {
+		const definition = compactDefinition(agent);
+		if (definition === undefined) return undefined;
 		const invocation = Object.freeze({
 			commandId,
 			agent,
@@ -301,55 +333,6 @@ function applyContextWatch(ctx, config) {
 			signal: signal ?? new AbortController().signal,
 		});
 		return Promise.resolve(definition.handler(invocation));
-	};
-
-	const startHandover = (agent, sessionId) => {
-		state.inflight.add(sessionId);
-		// The borrowed /compact runs through agent.runMaintenance, which only
-		// accepts an IDLE agent; the auto trigger fires mid-turn from tools/
-		// post-execute, so the first attempt usually loses the race with the
-		// still-running turn. compactNow wraps that as ManualCompactionError
-		// "busy" and the command layer resolves {kind:"error"} (not a
-		// rejection), so BOTH branches must funnel into the retry. Once the
-		// agent goes idle the compact lands before the next turn's driver
-		// (maintenance latches wake requests by design).
-		const delays = [5_000, 15_000, 30_000, 60_000];
-		const settle = () => state.inflight.delete(sessionId);
-		const attempt = (index) => {
-			let promise;
-			try {
-				promise = sessionCompact(agent, `switchman-auto-${sessionId}`, undefined);
-				if (promise === undefined) {
-					warn(`auto handover found no per-agent /compact command for session ${sessionId} — nothing to do`);
-					settle();
-					return;
-				}
-			} catch (error) {
-				warn(`handover failed to start: ${error?.message ?? error}`);
-				settle();
-				return;
-			}
-			const retryOrFail = (reason) => {
-				if (index < delays.length) {
-					setTimeout(() => attempt(index + 1), delays[index]);
-					return;
-				}
-				warn(`context handover failed for session ${sessionId}: ${reason}`);
-				settle();
-			};
-			promise.then(
-				(value) => {
-					if (value !== null && typeof value === "object" && value.kind === "error") {
-						retryOrFail(value.text ?? "compact returned an error result");
-						return;
-					}
-					ctx.logger?.info?.(`dsh-switchman: context handover settled for session ${sessionId}`);
-					settle();
-				},
-				(error) => retryOrFail(error?.message ?? String(error)),
-			);
-		};
-		attempt(0);
 	};
 
 	/** First {provider, model} route of a volatile pool field, or null. */
@@ -478,39 +461,127 @@ function applyContextWatch(ctx, config) {
 		}
 	};
 
-	/** Manual /ctx-handover — the full opencode-switchman handover flow on
-	 *  DSH primitives: (1) fork a dormant backup session, (2) write the
-	 *  handover document skeleton, (3) compact via the session's own
-	 *  per-agent /compact handler (borrowed through ctx.commands.find; the
-	 *  preset isolates compaction per agent, so no root-level access exists),
-	 *  and (4) wake this session to fill in the document and continue the
-	 *  unfinished task. Every step degrades independently; compaction is the
-	 *  only mandatory one. */
-	const manualHandover = async (agent, sessionId, commandId, signal) => {
+	/** The shared four-step handover (see the header comment), used by
+	 *  manual /ctx-handover and the force-tier automation alike. The
+	 *  compaction step retries on a growing backoff: both triggers usually
+	 *  fire mid-turn, the runMaintenance behind the borrowed /compact only
+	 *  accepts an IDLE agent, and "busy" arrives as a RESOLVED
+	 *  {kind:"error"} (not a rejection) — so both branches funnel into
+	 *  retryOrFail. Once the agent goes idle the compact lands before the
+	 *  next turn's driver (maintenance latches wake requests by design).
+	 *  The per-session phase map feeds the force-tier banner so the wait is
+	 *  visible instead of silent. */
+	const runHandover = async (agent, sessionId, commandId, signal, source = "manual") => {
 		if (sessionId === null || agent?.session === undefined)
 			return { kind: "error", text: "/ctx-handover: no active session" };
 		if (state.inflight.has(sessionId))
 			return { kind: "success", text: "[SWITCHMAN:WATERMARK] a handover is already in progress for this session." };
-		const borrowed = sessionCompact(agent, commandId, signal);
-		if (borrowed === undefined)
+		if (compactDefinition(agent) === undefined)
 			return {
 				kind: "error",
 				text: "/ctx-handover: this session's preset exposes no /compact command, so no compaction backend is reachable.",
 			};
 		state.inflight.add(sessionId);
 		try {
+			state.handover.set(sessionId, { phase: "backup", at: Date.now() });
 			const backup = await forkBackup(agent, sessionId, signal);
 			const backupId = backup.childId;
 			const docPath = writeHandoverSkeleton(agent, sessionId, backupId, measureNow(ctx, agent));
-			const result = await borrowed;
-			if (result?.kind === "error")
+			const delays = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
+			const outcome = await new Promise((resolve) => {
+				let attempts = 0;
+				let attempting = false;
+				let timer = null;
+				let watchdog = null;
+				let finished = false;
+				let offStatus = null;
+				const finish = (ok, reason) => {
+					if (finished) return;
+					finished = true;
+					if (timer !== null) clearTimeout(timer);
+					if (watchdog !== null) clearTimeout(watchdog);
+					if (offStatus !== null) {
+						try {
+							offStatus();
+						} catch {
+							/* best-effort listener dispose */
+						}
+					}
+					resolve({ ok, reason });
+				};
+				const attempt = () => {
+					if (finished || attempting) return;
+					attempting = true;
+					attempts += 1;
+					if (timer !== null) {
+						clearTimeout(timer);
+						timer = null;
+					}
+					state.handover.set(sessionId, { phase: "compacting", attempt: attempts, at: Date.now() });
+					let promise;
+					try {
+						promise = sessionCompact(agent, commandId ?? `switchman-${source}-${sessionId}`, signal);
+					} catch (error) {
+						attempting = false;
+						finish(false, `handover failed to start: ${error?.message ?? error}`);
+						return;
+					}
+					if (promise === undefined) {
+						attempting = false;
+						finish(false, "the per-agent /compact command disappeared");
+						return;
+					}
+					const settleAttempt = (ok, reason) => {
+						attempting = false;
+						if (ok) {
+							finish(true);
+							return;
+						}
+						if (attempts <= delays.length) timer = setTimeout(attempt, delays[attempts - 1]);
+						else finish(false, String(reason));
+					};
+					promise.then(
+						(value) => {
+							if (value !== null && typeof value === "object" && value.kind === "error") {
+								settleAttempt(false, value.text ?? "compact returned an error result");
+								return;
+							}
+							settleAttempt(true);
+						},
+						(error) => settleAttempt(false, error?.message ?? String(error)),
+					);
+				};
+				// Promptness: the agent/status idle transition (the same event
+				// the official compaction layer uses for overflow-retry
+				// cleanup) attempts the moment the turn really ends; the
+				// timers above stay as the backstop for missed or filtered
+				// events. Status reads "idle" externally while our own
+				// maintenance runs, and the `attempting` latch collapses
+				// those re-entrant events.
+				try {
+					offStatus = ctx.on("agent/status", (payload) => {
+						if (payload?.agent === agent && payload?.status === "idle") attempt();
+					});
+				} catch {
+					/* timer-only fallback */
+				}
+				// Watchdog: a borrowed /compact that never settles would hold
+				// the in-flight latch (and this listener) forever; 20 min is
+				// far beyond any real compaction (~2 min observed) yet finite.
+				watchdog = setTimeout(
+					() => finish(false, "handover watchdog timeout — the borrowed /compact never settled"),
+					20 * 60_000,
+				);
+				attempt();
+			});
+			if (!outcome.ok)
 				return {
 					kind: "error",
-					text: `/ctx-handover: compaction failed after backup ${backupId ?? "n/a"} — ${result.text ?? "unknown error"}`,
+					text: `/ctx-handover: compaction failed after backup ${backupId ?? "n/a"} — ${outcome.reason}`,
 				};
+			state.handover.set(sessionId, { phase: "continuation", at: Date.now() });
 			await armContinuation(agent, backupId, docPath);
-			const backupText =
-				backupId ?? `n/a (${backup.reason ?? "log retains full history"})`;
+			const backupText = backupId ?? `n/a (${backup.reason ?? "log retains full history"})`;
 			return {
 				kind: "success",
 				text: `[SWITCHMAN:WATERMARK] handover complete — backup ${backupText}, document ${docPath ?? "agent-created"}, compaction done, continuation armed.`,
@@ -518,6 +589,7 @@ function applyContextWatch(ctx, config) {
 		} catch (error) {
 			return { kind: "error", text: `/ctx-handover failed: ${error?.message ?? error}` };
 		} finally {
+			state.handover.delete(sessionId);
 			state.inflight.delete(sessionId);
 		}
 	};
@@ -534,7 +606,13 @@ function applyContextWatch(ctx, config) {
 			const used = measureNow(ctx, agent);
 			if (used === null || levelOf(used, readThresholds(config)) !== "force") return;
 			state.lastHandover.set(sessionId, now);
-			startHandover(agent, sessionId);
+			runHandover(agent, sessionId, `switchman-auto-${sessionId}`, undefined, "auto").then(
+				(result) =>
+					ctx.logger?.[result?.kind === "error" ? "warn" : "info"]?.(
+						`dsh-switchman: ${result?.text ?? "handover ended"}`,
+					),
+				(error) => warn(`auto handover crashed: ${error?.message ?? error}`),
+			);
 		} catch {
 			/* fail-open: the banner still reports force */
 		}
@@ -641,10 +719,63 @@ function applyContextWatch(ctx, config) {
 	});
 	ctx.commands.register({
 		name: "ctx-handover",
-		description: "Trigger a manual context handover (compaction) for this session now.",
+		description: "Trigger a full context handover for this session now (backup fork + document + compaction + continuation).",
 		handler: (invocation) =>
-			manualHandover(invocation?.agent, sessionIdOf(invocation?.agent), invocation?.commandId, invocation?.signal),
+			runHandover(invocation?.agent, sessionIdOf(invocation?.agent), invocation?.commandId, invocation?.signal, "manual"),
 	});
+
+	// --- E. ctx_handover: the agent-callable front door to the same
+	// four-step handover. The definition uses the register-level shape —
+	// bare ctx.tools.register does not run defineTool's DSL compilation,
+	// so parameters is a full object-root JSON Schema — and registers
+	// best-effort: a validation rejection only skips the tool, never the
+	// plugin. execute returns
+	// fast on purpose — awaiting the compaction here would keep the agent
+	// busy and starve the idle-only /compact — so the flow runs detached
+	// and the result tells the model to end its turn immediately.
+	try {
+		ctx.tools?.register?.({
+			name: "ctx_handover",
+			description:
+				"Trigger a full dsh-switchman context handover for this session NOW: fork a dormant backup session, write the handover document, compact this session at the idle boundary, then wake it to fill in the document and continue the task. Call it when the watermark banner reaches the force tier or the user asks for a handover, then END the turn immediately.",
+			parameters: {
+				type: "object",
+				properties: {
+					reason: {
+						type: "string",
+						description: "Why the handover is triggered now (e.g. 'force tier watermark reached', 'user request'). Optional.",
+					},
+				},
+			},
+			output: {
+				schema: { type: "string" },
+				render: (_args, value) => [{ type: "text", text: value }],
+			},
+			async execute(_args, exec) {
+				const agent = exec?.agent;
+				const sessionId = sessionIdOf(agent);
+				// No exec.signal here on purpose: the compact must outlive the
+				// calling turn, and a turn-scoped AbortSignal could abort it.
+				runHandover(agent, sessionId, `switchman-tool-${sessionId ?? "session"}`, undefined, "tool").then(
+					(result) =>
+						ctx.logger?.[result?.kind === "error" ? "warn" : "info"]?.(
+							`dsh-switchman: ${result?.text ?? "handover ended"}`,
+						),
+					(error) => warn(`ctx_handover handover crashed: ${error?.message ?? error}`),
+				);
+				return "[SWITCHMAN:WATERMARK] ctx_handover scheduled: backup fork + handover document + compaction + continuation are running. END this turn now — reply briefly and call no more tools, so the compaction lands at the idle boundary.";
+			},
+			presentCall: (args) => ({
+				card: "generic",
+				title: "Switchman context handover",
+				kind: "other",
+				rawInput: args,
+			}),
+		});
+		state.handoverTool = "ctx_handover";
+	} catch (error) {
+		warn(`ctx_handover tool registration failed: ${error?.message ?? error}`);
+	}
 }
 
 export { applyContextWatch };

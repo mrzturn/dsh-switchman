@@ -20,8 +20,10 @@
  *
  * Phase 3 mounts the context-watermark layer (host/context-watch.js): the
  * `[SWITCHMAN:WATERMARK]` tiered banner from the live token meter, a per-turn
- * read budget with deny/cap gates, force-tier fire-and-forget handover into
- * compaction, and the /ctx-pause, /ctx-resume, /ctx-handover commands.
+ * read budget with deny/cap gates, the four-step force-tier handover
+ * (backup fork + document + compaction + continuation) plus the
+ * ctx_handover agent tool, and the /ctx-pause, /ctx-resume,
+ * /ctx-handover commands.
  */
 
 import { readdirSync, readFileSync } from "node:fs";
@@ -51,14 +53,15 @@ const name = "dsh-switchman";
 /** Services this plugin contributes to: the bundled-skill registry, the
  * system-prompt section registry, the settings store it writes back to, the
  * token meter and agent registry the watermark reads, the command registry
- * for /ctx-*, the subagents service the handover's backup fork goes through,
- * and the sessions persistence the handover's continuation flush uses.
+ * for /ctx-*, the tools registry for the ctx_handover agent tool, the
+ * subagents service the handover's backup fork goes through, and the
+ * sessions persistence the handover's continuation flush uses.
  * Compaction is deliberately NOT injected: the desktop profile provides it
  * only inside each preset's per-agent isolated group (isolate: { compaction:
  * true }), never at this root — host/context-watch.js reaches it by borrowing
  * the session's own per-agent /compact handler through
  * ctx.commands.find(agent, "compact"). */
-const inject = ["skills", "systemPrompt", "settings", "tokenMeter", "commands", "agents", "webServer", "subagents", "sessions"];
+const inject = ["skills", "systemPrompt", "settings", "tokenMeter", "commands", "tools", "agents", "webServer", "subagents", "sessions"];
 
 /** Must equal `BUNDLED_SKILL_RANK` of @deepseek-ai/dsh-skill (packaged skill
  *  providers and local bundled roots; below user entries, above none). Not
