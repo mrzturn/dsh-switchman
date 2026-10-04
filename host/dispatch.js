@@ -139,7 +139,10 @@ function authorizedChildRoutes(ctx) {
  *  stored array order, auto lanes use the modelRank+capability ordering;
  *  `efforts` holds the lane's manually pinned reasoning efforts.
  *  `authorized` is the DSH-side child-model whitelist snapshot (null when
- *  unreadable — drift markers are then omitted). */
+ *  unreadable — drift markers are then omitted). The detection only runs
+ *  while teamsMode is ON: OFF removes it entirely (authorized stays null, so
+ *  the ⚠not-authorized markers and their guidance never render), while the
+ *  dispatchEnforce pool gate below is untouched. */
 function readDispatchState(ctx, config) {
 	const lanePools = LANES.map((lane) => ({
 		lane,
@@ -152,7 +155,7 @@ function readDispatchState(ctx, config) {
 		modelRank: readList(config.modelRank).filter(isModelRoute),
 		enforce: readField(config.dispatchEnforce),
 		defaults: loadCapabilityDefaults(ctx?.logger),
-		authorized: authorizedChildRoutes(ctx),
+		authorized: readBool(config.teamsMode) === true ? authorizedChildRoutes(ctx) : null,
 	};
 }
 
@@ -177,7 +180,9 @@ function effortMapOf(pool) {
 /** The `[SWITCHMAN:POOLS]` block: anchor line, one line per configured lane,
  *  then the guidance lines (byte-stable for a given configuration). Routes
  *  outside the session's DSH-authorized child models carry a ⚠not-authorized
- *  marker (after any @effort suffix) whenever the whitelist is readable. */
+ *  marker (after any @effort suffix) — teams mode only: with teamsMode OFF
+ *  the whitelist is never read, `state.authorized` stays null, and neither
+ *  the markers nor the drift guidance lines render. */
 function renderPoolsBlock(state) {
 	const configured = state.lanePools.filter((pool) => pool.routes.length > 0);
 	const lines = [`[SWITCHMAN:POOLS] configured=${configured.length}/6 enforce=${state.enforce}`];

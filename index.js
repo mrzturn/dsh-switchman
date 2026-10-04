@@ -24,6 +24,15 @@
  * (backup fork + document + compaction + continuation) plus the
  * ctx_handover agent tool, and the /ctx-pause, /ctx-resume,
  * /ctx-handover commands.
+ *
+ * Teams mode mounts two more layers: host/teams.js carries the team clauses
+ * extracted from the cordis.patch.yml suffix in a `[SWITCHMAN:TEAMS]` section
+ * (order 10250, injected only while teamsMode is ON) plus the deferred ON
+ * orchestration (agent-team bundle enable, then the optional six-pool
+ * → DSH whitelist replace-sync); host/subagent-model.js annotates successful
+ * subagent / subagent_fork results with one `model: provider/model@effort`
+ * line from the child session's modelSelection projection (the same channel
+ * host/vision.js reuses for the per-session vision-state verdict).
  */
 
 import { readdirSync, readFileSync } from "node:fs";
@@ -39,6 +48,12 @@ import { applyLanguage } from "./host/lang.js";
 
 // Dispatch-pool layer (pools recommendation section + enforce gate).
 import { applyDispatch } from "./host/dispatch.js";
+
+// Agent Teams layer (teams-mode doctrine section + bundle/whitelist
+// orchestration; the clause text extracted from the cordis.patch.yml suffix).
+import { applyTeams } from "./host/teams.js";
+// Subagent model-visibility layer (post-execute `model:` annotation).
+import { applySubagentModel } from "./host/subagent-model.js";
 
 // Context-watermark layer (banner + read budget + handover + /ctx-* commands).
 import { applyContextWatch } from "./host/context-watch.js";
@@ -56,14 +71,22 @@ const name = "dsh-switchman";
  * system-prompt section registry, the settings store it writes back to, the
  * token meter and agent registry the watermark reads, the command registry
  * for /ctx-*, the tools registry for the ctx_handover agent tool, the
- * subagents service the handover's backup fork goes through, and the
- * sessions persistence the handover's continuation flush uses.
+ * subagents service the handover's backup fork goes through, the sessions
+ * persistence the handover's continuation flush uses, the plugin-manager
+ * service the teams layer's bundle enable goes through, and the session
+ * query engine the subagent model annotation + per-session vision verdicts
+ * read child modelSelection projections from. pluginManager and
+ * sessionQuery are profile-composition services (the plugin-manager bundle
+ * is disabled without profileContext; session-query ships in the base
+ * patch): deployments lacking them leave this fiber INACTIVE — a documented
+ * runtime precondition, not a degraded mode. The defensive ctx.get calls
+ * inside teams.js / subagent-model.js guard API drift, not absence.
  * Compaction is deliberately NOT injected: the desktop profile provides it
  * only inside each preset's per-agent isolated group (isolate: { compaction:
  * true }), never at this root — host/context-watch.js reaches it by borrowing
  * the session's own per-agent /compact handler through
  * ctx.commands.find(agent, "compact"). */
-const inject = ["skills", "systemPrompt", "settings", "tokenMeter", "commands", "tools", "agents", "webServer", "subagents", "sessions"];
+const inject = ["skills", "systemPrompt", "settings", "tokenMeter", "commands", "tools", "agents", "webServer", "subagents", "sessions", "pluginManager", "sessionQuery"];
 
 /** Must equal `BUNDLED_SKILL_RANK` of @deepseek-ai/dsh-skill (packaged skill
  *  providers and local bundled roots; below user entries, above none). Not
@@ -135,8 +158,9 @@ function loadSkillCandidates(root, warn) {
 }
 
 /** Register the bundled dsh-switchman skill provider on `ctx.skills` and
- *  mount the language (lang), dispatch (dispatch), and watermark
- *  (context-watch) layers. */
+ *  mount the language (lang), dispatch (dispatch), teams (teams), watermark
+ *  (context-watch), vision (vision), subagent model visibility
+ *  (subagent-model), and client-bridge (routes) layers. */
 function apply(ctx, config) {
 	const root = fileURLToPath(new URL("./skills/", import.meta.url));
 	const warn = (message) => ctx.logger.warn(`dsh-switchman: ${message}`);
@@ -152,8 +176,10 @@ function apply(ctx, config) {
 	ctx.skills.registerProvider(() => provider);
 	applyLanguage(ctx, config);
 	applyDispatch(ctx, config);
+	applyTeams(ctx, config);
 	applyContextWatch(ctx, config);
 	applyVision(ctx, config);
+	applySubagentModel(ctx);
 	applyRoutes(ctx, config);
 }
 

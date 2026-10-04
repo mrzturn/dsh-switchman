@@ -7,16 +7,25 @@
  * plugin established). This module owns that route family:
  *
  *   GET  /api/dsh-switchman/health   — liveness probe for the client page.
- *   GET  /api/dsh-switchman/config   — current settings values snapshot.
+ *   GET  /api/dsh-switchman/config   — current settings values snapshot plus
+ *                                      `whitelistSync` (null unless teamsMode
+ *                                      && syncWhitelist, else the teams
+ *                                      layer's last replace-sync outcome).
  *   POST /api/dsh-switchman/config   — { expected, values } fenced write
  *                                      through ctx.settings.update; a stale
  *                                      `expected` answers 409 + fresh values.
+ *                                      A successful write schedules the teams
+ *                                      orchestration (fire-and-forget).
  *   GET  /api/dsh-switchman/models   — model-catalog pass-through from the
  *                                      host sessionController (degrades to
  *                                      llm.listProviders, then []).
  *   GET  /api/dsh-switchman/authorized — the session's DSH-authorized child
  *                                      models ({enabled, routes}; both null
  *                                      when the host service is unreadable).
+ *   GET  /api/dsh-switchman/vision-state — composer-dock hint; the optional
+ *                                      `session` query parameter judges image
+ *                                      capability against THAT session's
+ *                                      model (unknown/missing → root model).
  *   POST /api/dsh-switchman/ui-locale — the client half reports its active
  *                                      UI locale (feeds the ask guidance's
  *                                      question language; no settings write).
@@ -29,6 +38,7 @@
 
 import { authorizedChildRoutes } from "./dispatch.js";
 import { handoverSnapshot } from "./handover-state.js";
+import { pumpTeamsOrchestration, scheduleTeamsOrchestration, SWITCHMAN_SETTINGS_NS, teamsBundleState, teamsSyncSnapshot } from "./teams.js";
 import { reportedUiLocale, setReportedUiLocale } from "./ui-locale.js";
 import { visionStateOf } from "./vision.js";
 
@@ -45,8 +55,11 @@ const ROUTES = {
 
 /** Settings namespace this plugin's writes target: the LOADER ENTRY id from
  * cordis.patch.yml (`- id: dsh-switchman-host`), not the plugin's `name`
- * export — dsh-settings' write() looks entries up by entry.options.id. */
-const NS = "dsh-switchman-host";
+ * export — dsh-settings' write() looks entries up by entry.options.id.
+ * Single-sourced as SWITCHMAN_SETTINGS_NS in host/teams.js (whose
+ * settings/document-updated listener keys on it); aliased here for the
+ * write call sites below. */
+const NS = SWITCHMAN_SETTINGS_NS;
 
 /** All settings field names, grouped for coercion (mirrors host/config.js). */
 const STRING_FIELDS = ["langConversation", "langComments", "langDocs"];
@@ -75,6 +88,9 @@ const BOOLEAN_FIELDS = [
 	"poolHardManual",
 	"poolVisionManual",
 	"poolReviewManual",
+	// teams 开关（mirrors host/config.js 的 teams* 组）
+	"teamsMode",
+	"syncWhitelist",
 ];
 /** Per-pool effort-route lists (mirrors host/config.js pool*Efforts). */
 const EFFORTS_FIELDS = [
@@ -172,9 +188,17 @@ function isAllowed(ctx, request) {
 	);
 }
 
-/** Read one volatile settings field's raw value (live `.get()` reference). */
+/** Read one volatile settings field's raw value (live `.get()` reference;
+ * undefined when the getter itself throws — same guard as teams.js's
+ * readValue, kept on this GET-config hot path). */
 function rawOf(field) {
-	if (field !== null && typeof field === "object" && typeof field.get === "function") return field.get();
+	if (field !== null && typeof field === "object" && typeof field.get === "function") {
+		try {
+			return field.get();
+		} catch {
+			return undefined;
+		}
+	}
 	return field;
 }
 
@@ -235,6 +259,15 @@ export function snapshotOf(config) {
 		: "cap";
 	for (const field of BOOLEAN_FIELDS) values[field] = Boolean(rawOf(config?.[field]));
 	return values;
+}
+
+/** The whitelistSync status for config responses: null unless syncWhitelist
+ *  is ON (an INDEPENDENT switch — teamsMode is not required), else the teams
+ *  layer's last replace-sync outcome ({ ok, count, at, error? } — itself
+ *  null before the first sync). */
+function whitelistSyncOf(config) {
+	if (rawOf(config?.syncWhitelist) !== true) return null;
+	return teamsSyncSnapshot();
 }
 
 /** Coerce and validate a client-submitted values object; null when invalid. */
@@ -346,7 +379,11 @@ export function makeRoutes(ctx, config) {
 					return;
 				}
 				if (req.method === "GET") {
-					writeJson(res, 200, { values: snapshotOf(config) });
+					// Clean-context retry pump: HTTP handlers never run inside an
+					// HMR transaction, so an orchestration deferred by the nested
+					// rejection re-runs here (no-op when nothing is pending).
+					pumpTeamsOrchestration(ctx, config);
+					writeJson(res, 200, { values: snapshotOf(config), whitelistSync: whitelistSyncOf(config), teamsBundle: teamsBundleState() });
 					return;
 				}
 				if (req.method !== "POST") {
@@ -382,7 +419,14 @@ export function makeRoutes(ctx, config) {
 					writeJson(res, 500, { error: error?.message ?? String(error) });
 					return;
 				}
-				writeJson(res, 200, { values: snapshotOf(config) });
+				// Teams orchestration hook (fire-and-forget: the teams layer defers
+				// the real work to a setImmediate turn, so the bundle enable +
+				// optional whitelist replace-sync never block this response; a
+				// nested-HMR rejection is retried from the next clean trigger —
+				// see host/teams.js). Runs when EITHER switch is on (they are
+				// independent); each half gates itself inside the orchestration.
+				scheduleTeamsOrchestration(ctx, config);
+				writeJson(res, 200, { values: snapshotOf(config), whitelistSync: whitelistSyncOf(config), teamsBundle: teamsBundleState() });
 			},
 		},
 		{
@@ -435,8 +479,15 @@ export function makeRoutes(ctx, config) {
 			path: ROUTES.visionState,
 			handler: async (req, res) => {
 				if (!guard(req, res, "GET")) return;
+				pumpTeamsOrchestration(ctx, config); // clean-context retry pump (see GET config)
 				try {
-					writeJson(res, 200, await visionStateOf(ctx, config));
+					// Optional `session` query parameter (a child session id):
+					// judge image capability against THAT session's model
+					// instead of the root's (the root verdict misreported for
+					// children on a different route). A missing or unknown
+					// session falls back to the root verdict.
+					const session = new URL(req.url ?? "/", "http://localhost").searchParams.get("session");
+					writeJson(res, 200, await visionStateOf(ctx, config, typeof session === "string" && session !== "" ? session : null));
 				} catch (error) {
 					ctx.logger.warn(`dsh-switchman: vision-state read failed: ${error?.message ?? error}`);
 					writeJson(res, 500, { error: error?.message ?? String(error) });

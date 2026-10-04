@@ -11,6 +11,7 @@
  * - lang*        project language preference (Phase 1)
  * - pool/rank    dispatch pools and capability ranking (Phase 2)
  * - wm*          context watermark control (Phase 3)
+ * - teams*       Agent Teams doctrine mode + whitelist sync (teams mode)
  *
  * Ported from opencode-switchman's opencode-switchman.jsonc surface
  * (oc/src/config.ts:23-51, oc/src/types.ts:281-344) onto DSH settings.
@@ -105,6 +106,24 @@ export const Config = z.object({
 	wmSubagentCap: z.boolean().default(true).volatile(),
 	/** Subagent hard cap; 0 = share wmForceTokens. */
 	wmSubagentForceTokens: z.number().min(0).default(0).volatile(),
+
+	// --- Teams mode: doctrine injection + whitelist sync -------------------
+	/** Agent Teams master switch. ON = inject the `[SWITCHMAN:TEAMS]` doctrine
+	 *  section (order 10250), keep the DSH child-model whitelist detection in
+	 *  the pools table, and asynchronously ensure the agent-team-profile
+	 *  bundle is enabled. OFF = plain subagent dispatch mode: no teams
+	 *  doctrine, no whitelist detection (the DSH factory conservative team
+	 *  policy takes over); the bundle is never disabled and the whitelist is
+	 *  never cleared. */
+	teamsMode: z.boolean().default(false).volatile(),
+	/** Replace-sync the six-pool union into DSH's subagent model-selection
+	 *  whitelist (`subagent-model-selection-settings`) whenever the teams
+	 *  orchestration runs — an INDEPENDENT switch: it does not require
+	 *  teamsMode, and teamsMode alone does not sync. switchman is the single
+	 *  source of truth: the deduplicated union overwrites allowedModels
+	 *  wholesale. The whitelist only applies to top-level sessions composed
+	 *  afterwards. */
+	syncWhitelist: z.boolean().default(false).volatile(),
 });
 
 /** The six dispatch lanes, in display order. */
