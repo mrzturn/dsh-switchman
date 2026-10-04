@@ -791,16 +791,14 @@ window.__ModuleLoader__.load({
 			);
 		}
 
-		/** Stable fallback for the badge's session-list reads when the
-		 *  sessions service is absent (degraded kit): one frozen-shaped empty
-		 *  snapshot with stable identities for useSyncExternalStore. */
-		const EMPTY_SESSION_LIST = { byId: {}, projectionsBySession: {} };
-		const SESSION_LIST_SOURCE = {
-			subscribe: () => () => {},
-			getSnapshot: () => EMPTY_SESSION_LIST,
-		};
+		function SwitchmanBadge({
+		locale,
+		t,
+		sessionId,
+		useProjection,
+		useSessions,
+	}) {
 
-		function SwitchmanBadge({ locale, t, sessionId, useProjection, sessions }) {
 			// Subscription only: stable snapshot via getLocale() re-renders on switch.
 			React.useSyncExternalStore(
 				(fn) => locale.subscribe(fn),
@@ -849,47 +847,56 @@ window.__ModuleLoader__.load({
 			const projectionHook =
 				typeof useProjection === 'function' ? useProjection : () => undefined;
 			const liveSelection = projectionHook('modelSelection');
-			const listSource =
-				typeof sessions?.list?.subscribe === 'function' &&
-				typeof sessions?.list?.getSnapshot === 'function'
-					? sessions.list
-					: SESSION_LIST_SOURCE;
-			const list = React.useSyncExternalStore(
-				listSource.subscribe,
-				listSource.getSnapshot,
-			);
-			const summary = sessionId != null ? list.byId?.[sessionId] : undefined;
+			// NEVER touch services this plugin did not declare in inject:
+			// the dynamic-module guard THROWS on `ctx.<undeclared>` access
+			// (ctx.sessions did exactly that and the slot occurrence error
+			// boundary swallowed it — the badge silently vanished this way).
+			// Session facts arrive only through framework-bound kit hooks, and
+			// every selector must return a value-stable primitive.
+			const sessionsHook =
+				typeof useSessions === 'function' ? useSessions : () => undefined;
 			// Durable metadata separates subagent sessions from root ones
 			// (summary `origin`/`parentId`). A root session's model already has
 			// the composer's model selector, so the line stays subagent-only.
-			const isSubagent =
-				summary !== undefined &&
-				(summary.origin === 'subagent' || summary.parentId !== undefined);
+			const subagentKey = sessionsHook((list) => {
+				if (list == null) return 'absent';
+				const summary =
+					sessionId != null ? list.byId?.[sessionId] : undefined;
+				if (summary === undefined) return 'absent';
+				return summary.origin === 'subagent' ||
+					summary.parentId !== undefined
+					? 'subagent'
+					: 'root';
+			});
+			const isSubagent = subagentKey === 'subagent';
 			// Fallback for sessions whose retained face has not carried the
-			// key yet: the manager's shared list snapshot holds explicitly
-			// loaded projections, and refreshProjections loads a baseline once
-			// (single-flight) into that same subscribed snapshot.
-			React.useEffect(() => {
-				if (!isSubagent || liveSelection !== undefined) return;
-				if (typeof sessions?.refreshProjections !== 'function') return;
-				if (list.projectionsBySession?.[sessionId]?.state === 'ready') return;
-				Promise.resolve(sessions.refreshProjections(sessionId)).catch(() => {});
-			}, [isSubagent, liveSelection, sessions, sessionId, list]);
-			const selection =
-				liveSelection ??
-				(sessionId != null
-					? list.projectionsBySession?.[sessionId]?.values?.modelSelection
-					: undefined) ??
-				null;
-			const model = selection?.next ?? selection?.lastUsed ?? null;
+			// key yet: the manager's shared list snapshot often already holds
+			// explicitly loaded projections (sidebar-visible subagents).
+			const fallbackText = sessionsHook((list) => {
+				if (list == null) return '';
+				const selection =
+					sessionId != null
+						? list.projectionsBySession?.[sessionId]?.values
+								?.modelSelection
+						: undefined;
+				const model = selection?.next ?? selection?.lastUsed;
+				if (model == null) return '';
+				return `${model.provider}/${model.model}${
+					model.reasoningEffort ? `@${model.reasoningEffort}` : ''
+				}`;
+			});
+			const liveModel =
+				liveSelection?.next ?? liveSelection?.lastUsed ?? null;
 			const modelText =
-				model === null
-					? ''
-					: `${model.provider}/${model.model}${
-							model.reasoningEffort ? `@${model.reasoningEffort}` : ''
+				liveModel == null
+					? (fallbackText ?? '')
+					: `${liveModel.provider}/${liveModel.model}${
+							liveModel.reasoningEffort
+								? `@${liveModel.reasoningEffort}`
+								: ''
 						}`;
 			const modelChip =
-				isSubagent && model !== null
+				isSubagent && modelText !== ''
 					? h(
 							'span',
 							{
@@ -3233,7 +3240,6 @@ window.__ModuleLoader__.load({
 								...kit,
 								locale: ctx.locale,
 								t,
-								sessions: ctx.sessions,
 							}),
 					),
 				);
