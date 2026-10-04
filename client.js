@@ -4,8 +4,9 @@
  * bundle per package; sibling files cannot be synchronously required).
  *
  * Surfaces, all reading the shared "dsh-switchman" locale namespace (zh/en):
- * - Phase 0: the team-autonomy badge in `conversation.session.header.actions`.
- * - Phase 0: the team-autonomy badge in `conversation.session.header.actions`.
+ * - Phase 0: the team-autonomy badge in `conversation.session.header.actions`,
+ *   extended with the current session's actual model (provider/model@effort)
+ *   for subagent sessions (live projection face, shared-snapshot fallback).
  * - Phase 1: a `settings.section` page with a "Language" card:
  *   conversation / code-comment / document language preferences.
  * - Phase 2: a "Dispatch pools & ranking" card on the same page: six lane
@@ -19,6 +20,10 @@
  *   automatic handover, and the subagent context cap — number inputs with
  *   per-field minimum plus soft<hard<force order validation, folded into
  *   the same staged draft and one atomic save.
+ * - Phase 4: an "Agent teams" card on the same page: the teams-mode master
+ *   switch, the whitelist-sync sub-switch (teams mode only), and the
+ *   whitelist sync status line. The ⚠ unauthorized badges and hint render
+ *   only in teams mode (plain subagent dispatch names no routes).
  */
 
 window.__ModuleLoader__.load({
@@ -150,6 +155,8 @@ window.__ModuleLoader__.load({
 			'wmDenyMode',
 			'wmAutoHandover',
 			'wmSubagentCap',
+			'teamsMode',
+			'syncWhitelist',
 		];
 
 		/** Stable identity of one provider/model route. */
@@ -266,6 +273,8 @@ window.__ModuleLoader__.load({
 				wmDenyMode: value?.wmDenyMode === 'deny' ? 'deny' : 'cap',
 				wmAutoHandover: bool('wmAutoHandover', true),
 				wmSubagentCap: bool('wmSubagentCap', true),
+				teamsMode: bool('teamsMode', false),
+				syncWhitelist: bool('syncWhitelist', false),
 			};
 		}
 
@@ -313,6 +322,8 @@ window.__ModuleLoader__.load({
 				wmDenyMode: values.wmDenyMode,
 				wmAutoHandover: values.wmAutoHandover,
 				wmSubagentCap: values.wmSubagentCap,
+				teamsMode: values.teamsMode,
+				syncWhitelist: values.syncWhitelist,
 			});
 		}
 
@@ -570,6 +581,19 @@ window.__ModuleLoader__.load({
 				wmSubagentFollowForce: '跟随 force 档（0）',
 				wmCommands:
 					'命令：/ctx-pause 暂停水位干预 · /ctx-resume 恢复干预 · /ctx-handover 立即备份并交接压缩。',
+				teamsSectionTitle: '智能体团队',
+				teamsSectionDescription:
+					'切换派发形态：关闭为纯 subagent 派发（DSH 出厂保守团队策略接管）；开启后注入自主团队规程并启用 Agent Teams。',
+				teamsModeLabel: '智能体团队模式',
+				teamsModeHelp:
+					'开启后注入团队规程（默认委派 + 分级验证 + 任务板纪律），并自动启用 DSH 的 Agent Teams bundle；派发池的 ⚠ 授权徽标仅在开启时显示。',
+				syncWhitelistLabel: '同步子智能体模型白名单',
+				syncWhitelistHelp:
+					'独立开关（不依赖智能体团队模式）：把六池选中模型的并集整体写入 DSH「设置 → 子智能体 → 模型选择」的授权列表；dsh-switchman 成为唯一事实源。',
+				whitelistSyncOk: '已同步 {count} 条（{time}）。',
+				whitelistSyncError: '同步失败：{error}',
+				whitelistSyncPending: '等待同步…',
+				whitelistSyncNote: '白名单变更仅对之后新建的会话生效。',
 			},
 			en: {
 				badge: 'Team autonomy',
@@ -710,6 +734,19 @@ window.__ModuleLoader__.load({
 				wmSubagentFollowForce: 'Follow the force tier (0)',
 				wmCommands:
 					'Commands: /ctx-pause suspends watermark actions · /ctx-resume resumes them · /ctx-handover backs up and hands over now.',
+				teamsSectionTitle: 'Agent teams',
+				teamsSectionDescription:
+					"Switch the dispatch shape: off is plain subagent dispatch (DSH's factory conservative team policy takes over); on injects the autonomous team doctrine and enables Agent Teams.",
+				teamsModeLabel: 'Agent teams mode',
+				teamsModeHelp:
+					'When on, the team doctrine (delegate by default + tiered verification + task-board discipline) is injected and the DSH Agent Teams bundle is enabled; the dispatch pools ⚠ authorization badges show only in this mode.',
+				syncWhitelistLabel: 'Sync the subagent model whitelist',
+				syncWhitelistHelp:
+					'Independent switch (does not require agent teams mode): writes the union of the six pools over the DSH "Settings → Subagents → model selection" authorization list; dsh-switchman becomes the single source of truth.',
+				whitelistSyncOk: 'Synced {count} entries ({time}).',
+				whitelistSyncError: 'Sync failed: {error}',
+				whitelistSyncPending: 'Waiting to sync…',
+				whitelistSyncNote: 'Whitelist changes only affect sessions created afterwards.',
 			},
 		};
 
@@ -754,7 +791,16 @@ window.__ModuleLoader__.load({
 			);
 		}
 
-		function SwitchmanBadge({ locale, t }) {
+		/** Stable fallback for the badge's session-list reads when the
+		 *  sessions service is absent (degraded kit): one frozen-shaped empty
+		 *  snapshot with stable identities for useSyncExternalStore. */
+		const EMPTY_SESSION_LIST = { byId: {}, projectionsBySession: {} };
+		const SESSION_LIST_SOURCE = {
+			subscribe: () => () => {},
+			getSnapshot: () => EMPTY_SESSION_LIST,
+		};
+
+		function SwitchmanBadge({ locale, t, sessionId, useProjection, sessions }) {
 			// Subscription only: stable snapshot via getLocale() re-renders on switch.
 			React.useSyncExternalStore(
 				(fn) => locale.subscribe(fn),
@@ -772,8 +818,8 @@ window.__ModuleLoader__.load({
 				let timer = null;
 				const tick = async () => {
 					let live = null;
-					// NOTE: the slot hands the badge no session id, so this
-					// reflects ANY in-flight handover (cross-session bleed
+					// NOTE: the handover-state route is not session-scoped, so
+					// this reflects ANY in-flight handover (cross-session bleed
 					// with several open sessions) — accepted: cosmetic, and
 					// the desktop GUI renders one session header at a time.
 					try {
@@ -793,6 +839,83 @@ window.__ModuleLoader__.load({
 					if (timer !== null) clearTimeout(timer);
 				};
 			}, []);
+			// ---- Session model line ----
+			// The slot is session-scoped, so `sessionId` names the open session
+			// and `useProjection` reads its live projection faces (standard kit
+			// members; both degrade to no-ops outside the kit, same guard shape
+			// as the vision dock entry). Switching sessions re-materializes the
+			// standard props, so the face re-binds and the old subscription is
+			// dropped by the hook machinery — no manual lifecycle here.
+			const projectionHook =
+				typeof useProjection === 'function' ? useProjection : () => undefined;
+			const liveSelection = projectionHook('modelSelection');
+			const listSource =
+				typeof sessions?.list?.subscribe === 'function' &&
+				typeof sessions?.list?.getSnapshot === 'function'
+					? sessions.list
+					: SESSION_LIST_SOURCE;
+			const list = React.useSyncExternalStore(
+				listSource.subscribe,
+				listSource.getSnapshot,
+			);
+			const summary = sessionId != null ? list.byId?.[sessionId] : undefined;
+			// Durable metadata separates subagent sessions from root ones
+			// (summary `origin`/`parentId`). A root session's model already has
+			// the composer's model selector, so the line stays subagent-only.
+			const isSubagent =
+				summary !== undefined &&
+				(summary.origin === 'subagent' || summary.parentId !== undefined);
+			// Fallback for sessions whose retained face has not carried the
+			// key yet: the manager's shared list snapshot holds explicitly
+			// loaded projections, and refreshProjections loads a baseline once
+			// (single-flight) into that same subscribed snapshot.
+			React.useEffect(() => {
+				if (!isSubagent || liveSelection !== undefined) return;
+				if (typeof sessions?.refreshProjections !== 'function') return;
+				if (list.projectionsBySession?.[sessionId]?.state === 'ready') return;
+				Promise.resolve(sessions.refreshProjections(sessionId)).catch(() => {});
+			}, [isSubagent, liveSelection, sessions, sessionId, list]);
+			const selection =
+				liveSelection ??
+				(sessionId != null
+					? list.projectionsBySession?.[sessionId]?.values?.modelSelection
+					: undefined) ??
+				null;
+			const model = selection?.next ?? selection?.lastUsed ?? null;
+			const modelText =
+				model === null
+					? ''
+					: `${model.provider}/${model.model}${
+							model.reasoningEffort ? `@${model.reasoningEffort}` : ''
+						}`;
+			const modelChip =
+				isSubagent && model !== null
+					? h(
+							'span',
+							{
+								title: modelText,
+								'data-dsh-switchman': 'session-model',
+								style: {
+									borderRadius: 'var(--dsw-radius-xs)',
+									height: '22px',
+									color: 'var(--dsw-alias-label-tertiary)',
+									whiteSpace: 'nowrap',
+									display: 'inline-flex',
+									alignItems: 'center',
+									gap: '4px',
+									padding: '0 8px',
+									fontSize: '12px',
+									lineHeight: '22px',
+									flex: 'none',
+								},
+							},
+							h('span', { 'aria-hidden': true, style: { flex: 'none' } }, '◇'),
+							h('span', null, modelText),
+						)
+					: null;
+			/** Append the model chip without disturbing the status chip shapes. */
+			const withModelChip = (chip) =>
+				modelChip === null ? chip : h(React.Fragment, null, chip, modelChip);
 			if (handover !== null) {
 				const phaseKey =
 					handover.phase === 'backup'
@@ -804,7 +927,7 @@ window.__ModuleLoader__.load({
 					0,
 					Math.round((Date.now() - (handover.at ?? Date.now())) / 1000),
 				);
-				return h(
+				const status = h(
 					'span',
 					{
 						title: `${t('handoverActiveTip')}（${seconds}s）`,
@@ -828,10 +951,11 @@ window.__ModuleLoader__.load({
 					h(HandoverSpinner, null),
 					h('span', null, `${t('handoverActive')} · ${t(phaseKey)}`),
 				);
+				return withModelChip(status);
 			}
 			const text = t('badge');
 			const tip = t('badgeTip');
-			return h(
+			const status = h(
 				'span',
 				{
 					title: tip,
@@ -858,6 +982,7 @@ window.__ModuleLoader__.load({
 				h('span', { 'aria-hidden': true, style: { flex: 'none' } }, '⚡'),
 				h('span', null, text),
 			);
+			return withModelChip(status);
 		}
 
 		/** Composer-dock vision entry. Two jobs:
@@ -882,7 +1007,7 @@ window.__ModuleLoader__.load({
 		 *    loop safety = one conversion per promptError object
 		 *    identity + never converting a draft that already starts
 		 *    with "/". */
-		function VisionDockEntry({ t, inputActions, useInput, useSession }) {
+		function VisionDockEntry({ t, sessionId, inputActions, useInput, useSession }) {
 			const [vision, setVision] = React.useState(null);
 			const [notice, setNotice] = React.useState(false);
 			const handled = React.useRef(null);
@@ -890,10 +1015,20 @@ window.__ModuleLoader__.load({
 			React.useEffect(() => {
 				let stopped = false;
 				let timer = null;
+				// The probe must judge the CURRENT conversation's model: pass
+				// the session scope's identity so the Host resolves
+				// imageCapable from that session's model selection (subagent
+				// sessions included); without it the Host falls back to the
+				// root session and mislabels text-only children. Restarting
+				// the loop on `sessionId` re-probes immediately on a switch.
+				const query =
+					typeof sessionId === 'string' && sessionId !== ''
+						? `?session=${encodeURIComponent(sessionId)}`
+						: '';
 				const tick = async () => {
 					let next = null;
 					try {
-						const reply = await api.get('vision-state');
+						const reply = await api.get(`vision-state${query}`);
 						if (reply?.ok && reply.value && typeof reply.value === 'object')
 							next = {
 								poolConfigured: reply.value.poolConfigured === true,
@@ -911,7 +1046,7 @@ window.__ModuleLoader__.load({
 					stopped = true;
 					if (timer !== null) clearTimeout(timer);
 				};
-			}, []);
+			}, [sessionId]);
 			// Standard kit props are guaranteed by the session scope, but the
 			// hooks must be called unconditionally — degrade to no-op sources
 			// if a future shell ever mounts this entry outside that scope.
@@ -1234,7 +1369,7 @@ window.__ModuleLoader__.load({
 				cursor: 'pointer',
 			},
 			poolList: {
-				maxHeight: '190px',
+				maxHeight: '320px',
 				overflowY: 'auto',
 				display: 'grid',
 				gap: '2px',
@@ -1289,9 +1424,12 @@ window.__ModuleLoader__.load({
 				color: 'var(--dsw-alias-label-primary)',
 				fontSize: '12.5px',
 				lineHeight: 1.6,
-				overflow: 'hidden',
-				textOverflow: 'ellipsis',
-				whiteSpace: 'nowrap',
+				// Wrap instead of ellipsize: provider/model pairs must stay
+				// fully readable in the narrow panel (the hover title remains
+				// a convenience, not the only way to read the full route).
+				whiteSpace: 'normal',
+				wordBreak: 'break-word',
+				minWidth: 0,
 			},
 			rankActions: { display: 'flex', gap: '4px', flex: 'none' },
 			effortSelect: {
@@ -1407,6 +1545,7 @@ window.__ModuleLoader__.load({
 			manual,
 			editable,
 			authorized,
+			teamsMode,
 			onToggle,
 			onToggleManual,
 			onSetEffort,
@@ -1418,8 +1557,10 @@ window.__ModuleLoader__.load({
 			const hasCandidates = rows.length > 0 || extras.length > 0;
 			/** 授权漂移判定：该路由不在本会话 DSH 授权的子智能体模型内
 			 *  （authorized === null = 未知，不标）。enabled === false 时
-			 *  一切显式指定都会被拒，所有已选路由都算漂移。 */
+			 *  一切显式指定都会被拒，所有已选路由都算漂移。仅团队模式
+			 *  显示：纯 subagent 模式不做显式路由注入，徽标无意义。 */
 			const drift = (route) =>
+				teamsMode === true &&
 				authorized !== null &&
 				(authorized.enabled === false ||
 					!authorized.keys.has(routeKey(route)));
@@ -1796,6 +1937,10 @@ window.__ModuleLoader__.load({
 		const [saving, setSaving] = React.useState(false);
 		const [failed, setFailed] = React.useState(false);
 		const [conflicted, setConflicted] = React.useState(false);
+		/** Last whitelist sync status from the Host config answer: null when
+		 *  both teams switches are off (the Host omits the field), otherwise
+		 *  { ok, count, at, error? }. */
+		const [whitelistSync, setWhitelistSync] = React.useState(null);
 
 		// Mirror the editable state for async save flows below (setState
 		// alone is too late inside stale closures).
@@ -1805,6 +1950,20 @@ window.__ModuleLoader__.load({
 		/** Values this page loaded — the optimistic-concurrency baseline the
 		 *  Host route fences writes against. */
 		const loadedRef = React.useRef(null);
+		/** Unmount guard for the post-save sync-status re-reads. */
+		const syncAlive = React.useRef(true);
+		React.useEffect(() => () => {
+			syncAlive.current = false;
+		}, []);
+
+		/** Re-read the config answer for the whitelist sync status line: the
+		 *  Host syncs after a successful write, so one immediate and one
+		 *  delayed read bracket the async window. */
+		const refreshWhitelistSync = React.useCallback(async () => {
+			const response = await api.get('config');
+			if (!syncAlive.current || !response.ok) return;
+			setWhitelistSync(response.value?.whitelistSync ?? null);
+		}, []);
 
 		const assignDraft = (next) => {
 			draftRef.current = next;
@@ -1820,6 +1979,9 @@ window.__ModuleLoader__.load({
 				if (response.ok && response.value?.values !== undefined) {
 					loadedRef.current = response.value.values;
 					setForm({ status: 'ready', writable: true, values: response.value.values });
+					// Whitelist sync status travels beside the values (null
+					// unless both teams switches are on).
+					setWhitelistSync(response.value.whitelistSync ?? null);
 				} else setForm({ status: 'error', writable: false });
 			})();
 			return () => {
@@ -2139,6 +2301,8 @@ window.__ModuleLoader__.load({
 				wmDenyMode: values.wmDenyMode,
 				wmAutoHandover: values.wmAutoHandover,
 				wmSubagentCap: values.wmSubagentCap,
+				teamsMode: values.teamsMode,
+				syncWhitelist: values.syncWhitelist,
 			};
 			if (sameValues(current, desired)) {
 				// Whitespace-only differences: nothing to write, close the draft.
@@ -2173,6 +2337,17 @@ window.__ModuleLoader__.load({
 					writable: true,
 					values: response.value.values,
 				});
+				// The write triggers the whitelist sync Host-side; the answer
+				// may already carry fresh status, and the delayed re-read
+				// covers the async tail.
+				if (response.value?.whitelistSync !== undefined)
+					setWhitelistSync(response.value.whitelistSync);
+				if (desired.syncWhitelist === true) {
+					void refreshWhitelistSync();
+					setTimeout(() => {
+						void refreshWhitelistSync();
+					}, 2000);
+				}
 				assignDraft(null);
 				setCustomArmed(false);
 				clearNumText();
@@ -2318,11 +2493,17 @@ window.__ModuleLoader__.load({
 				enforce: 'enforceHelpEnforce',
 			};
 			const display = rankDisplay(values, catalogIndex);
+			// Teams mode (draft value, consistent with the rest of the page):
+			// gates the ⚠ authorization badges/hint — plain subagent dispatch
+			// names no explicit routes, so drift marks would be noise.
+			const teamsMode = values.teamsMode === true;
 			/** Authorization drift exists when at least one selected pool
 			 *  route is outside the DSH-authorized child models (or the
 			 *  whitelist is readable and explicit selection is disabled
-			 *  while any pool is configured) — drives the section hint. */
+			 *  while any pool is configured) — drives the section hint.
+			 *  Teams mode only (see above). */
 			const anyUnauthorized =
+				teamsMode &&
 				authorized !== null &&
 				(authorized.enabled === false
 					? poolsSet > 0
@@ -2334,6 +2515,8 @@ window.__ModuleLoader__.load({
 
 			// ---- watermark section derived state ----
 			const wmId = `${headingId}-wm`;
+			// ---- teams section ids ----
+			const teamsId = `${headingId}-teams`;
 
 			/** One watermark number input: raw-text overlay over the draft
 			 * value (0 renders as the placeholder for the follow-force row),
@@ -2429,8 +2612,10 @@ window.__ModuleLoader__.load({
 				POOL_FIELDS.flatMap(({ field }) => values[field].map(routeKey)),
 			);
 			/** Pool-scoped drift check for rank rows (same semantics as the
-			 *  PoolCard drift helper, which is not in scope here). */
+			 *  PoolCard drift helper, which is not in scope here). Teams mode
+			 *  only, matching the pool cards. */
 			const rankDrift = (route) =>
+				teamsMode === true &&
 				authorized !== null &&
 				(authorized.enabled === false ||
 					!authorized.keys.has(routeKey(route)));
@@ -2692,6 +2877,7 @@ window.__ModuleLoader__.load({
 								manual: values[manualField],
 								editable,
 								authorized,
+								teamsMode,
 								onToggle: (meta) => {
 									togglePool(field, meta);
 								},
@@ -2862,6 +3048,102 @@ window.__ModuleLoader__.load({
 					h('p', { style: STYLE.progress }, t('wmCommands')),
 				),
 				h(
+					'section',
+					{
+						'aria-labelledby': teamsId,
+						style: { ...STYLE.section, ...STYLE.sectionDivider },
+					},
+					h(
+						'h3',
+						{ id: teamsId, style: STYLE.heading },
+						t('teamsSectionTitle'),
+					),
+					h(
+						'p',
+						{ style: STYLE.description },
+						t('teamsSectionDescription'),
+					),
+					h(
+						'div',
+						{ style: STYLE.rows },
+						h(SettingsRow, {
+							key: 'teamsMode',
+							id: `${teamsId}-mode`,
+							label: t('teamsModeLabel'),
+							help: t('teamsModeHelp'),
+							control: h('input', {
+								type: 'checkbox',
+								id: `${teamsId}-mode`,
+								checked: values.teamsMode,
+								onChange: () => {
+									edit('teamsMode', !values.teamsMode);
+								},
+								disabled: !editable,
+								style: STYLE.checkbox,
+							}),
+							lines: [],
+						}),
+						h(SettingsRow, {
+							key: 'syncWhitelist',
+							id: `${teamsId}-sync`,
+							label: t('syncWhitelistLabel'),
+							help: t('syncWhitelistHelp'),
+							control: h('input', {
+								type: 'checkbox',
+								id: `${teamsId}-sync`,
+								checked: values.syncWhitelist,
+								onChange: () => {
+									edit('syncWhitelist', !values.syncWhitelist);
+								},
+								disabled: !editable,
+								style: STYLE.checkbox,
+							}),
+							// Status line reads the Host-reported sync state;
+							// visible whenever the (independent) sync switch
+							// is on — the only shape the Host reports for.
+							lines:
+								values.syncWhitelist === true
+									? [
+											whitelistSync == null
+												? {
+														text: t('whitelistSyncPending'),
+														invalid: false,
+													}
+												: whitelistSync.ok === true
+													? {
+															text: t('whitelistSyncOk', {
+																count: whitelistSync.count ?? 0,
+																time:
+																	typeof whitelistSync.at ===
+																		'number' &&
+																	whitelistSync.at > 0
+																		? new Date(
+																				whitelistSync.at,
+																			).toLocaleString()
+																		: '—',
+															}),
+															invalid: false,
+														}
+													: {
+															text: t('whitelistSyncError', {
+																error:
+																	typeof whitelistSync.error ===
+																		'string' &&
+																	whitelistSync.error !== ''
+																		? whitelistSync.error
+																		: 'unknown',
+															}),
+															invalid: true,
+														},
+										]
+									: [],
+						}),
+					),
+					teamsMode
+						? h('p', { style: STYLE.progress }, t('whitelistSyncNote'))
+						: null,
+				),
+				h(
 					'div',
 					{ style: STYLE.footer },
 					h(
@@ -2936,6 +3218,9 @@ window.__ModuleLoader__.load({
 					});
 				reportUiLocale();
 				setTimeout(reportUiLocale, 3000);
+				// The session scope hands the badge the standard kit: the open
+				// session's id and its live projection face (the model line),
+				// plus the sessions service for the un-retained fallback.
 				ctx.slots.inject('conversation.session.header.actions', () =>
 					ctx.slots.register(
 						{
@@ -2943,7 +3228,13 @@ window.__ModuleLoader__.load({
 							id: 'dsh-switchman',
 							order: -9,
 						},
-						() => h(SwitchmanBadge, { locale: ctx.locale, t }),
+						(kit) =>
+							h(SwitchmanBadge, {
+								...kit,
+								locale: ctx.locale,
+								t,
+								sessions: ctx.sessions,
+							}),
 					),
 				);
 				// Home left-sidebar entry + central panel: the same slot pair
@@ -2977,10 +3268,10 @@ window.__ModuleLoader__.load({
 					),
 				);
 				// Composer-adjacent vision entry (conversation.input.dock: the
-				// full-width list ABOVE the composer card): guidance chip
-				// while the root model is text-only, plus reactive
-				// auto-conversion of refused image sends into /vision
-				// submits. The session scope automatically provides
+				// full-width list ABOVE the composer card): guidance chip while
+				// the current session's model cannot read images, plus reactive
+				// auto-conversion of refused image sends into /vision submits.
+				// The session scope automatically provides
 				// inputActions/useInput/useSession to the registered
 				// component; the wrapper forwards that standard kit through
 				// alongside the closure-bound t.
