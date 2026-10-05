@@ -1,31 +1,31 @@
 'use strict';
 
 /**
- * Redis 只读命令白名单校验
- * 未知命令一律拒绝（fail-closed）；精确参数保护
+ * Redis read-only command allowlist validation
+ * Unknown commands are always rejected (fail-closed); precise argument protection
  *
- * 设计要点：
- * - Object.freeze 白名单，运行时不可篡改
- * - policy.shape 指导输出格式
- * - KEYS/HGETALL 等无界命令需显式 --allow-unbounded
- * - SCAN 类命令只接受结构化参数（MATCH/COUNT/TYPE）
+ * Design notes:
+ * - Object.freeze'd allowlist, tamper-proof at runtime
+ * - policy.shape drives the output format
+ * - Unbounded commands like KEYS/HGETALL require an explicit --allow-unbounded
+ * - SCAN-family commands accept only structured arguments (MATCH/COUNT/TYPE)
  */
 
-// ── 白名单策略 ──
+// ── Allowlist policy ──
 
 /**
- * 策略字段说明：
- * - arity: 参数个数（不含命令本身），null 表示不固定
- * - shape: 输出形状 'scalar' | 'list' | 'pairs' | 'scan' | 'info' | 'client_list'
- * - validate: (args) => void，参数校验函数
- * - unbounded: true 表示结果集可能很大，需要 --allow-unbounded
+ * Policy fields:
+ * - arity: argument count (excluding the command itself), null for variable
+ * - shape: output shape 'scalar' | 'list' | 'pairs' | 'scan' | 'info' | 'client_list'
+ * - validate: (args) => void, argument validation function
+ * - unbounded: true means the result set can be large and needs --allow-unbounded
  */
 const _READ_ONLY_COMMANDS = {
-  // ── 通用/键 ──
+  // ── Generic/keys ──
   PING:       { arity: 0, shape: 'scalar', validate: () => {} },
   GET:        { arity: 1, shape: 'scalar', validate: () => {} },
-  MGET:       { arity: null, shape: 'list', validate: (a) => { if (!a.length) throw 'MGET 至少需要一个 key'; } },
-  EXISTS:     { arity: null, shape: 'scalar', validate: (a) => { if (!a.length) throw 'EXISTS 至少需要一个 key'; } },
+  MGET:       { arity: null, shape: 'list', validate: (a) => { if (!a.length) throw 'MGET requires at least one key'; } },
+  EXISTS:     { arity: null, shape: 'scalar', validate: (a) => { if (!a.length) throw 'EXISTS requires at least one key'; } },
   TYPE:       { arity: 1, shape: 'scalar', validate: () => {} },
   TTL:        { arity: 1, shape: 'scalar', validate: () => {} },
   PTTL:       { arity: 1, shape: 'scalar', validate: () => {} },
@@ -37,7 +37,7 @@ const _READ_ONLY_COMMANDS = {
 
   // ── Hash ──
   HGET:       { arity: 2, shape: 'scalar', validate: () => {} },
-  HMGET:      { arity: null, shape: 'list', validate: (a) => { if (a.length < 2) throw 'HMGET 至少需要 field 和 2 个参数'; } },
+  HMGET:      { arity: null, shape: 'list', validate: (a) => { if (a.length < 2) throw 'HMGET requires at least a key and one field'; } },
   HEXISTS:    { arity: 2, shape: 'scalar', validate: () => {} },
   HLEN:       { arity: 1, shape: 'scalar', validate: () => {} },
   HGETALL:    { arity: 1, shape: 'pairs', unbounded: true, validate: () => {} },
@@ -66,113 +66,116 @@ const _READ_ONLY_COMMANDS = {
   ZRANGEBYSCORE: { arity: null, shape: 'list', validate: validateZrangeByScore },
   ZSCAN:      { arity: null, shape: 'scan', validate: validateScan },
 
-  // ── 服务信息 ──
+  // ── Server info ──
   INFO:       { arity: null, shape: 'info', validate: () => {} },
   CLIENT:     { arity: null, shape: 'client_list', validate: validateClient },
   CONFIG:     { arity: null, shape: 'list', validate: validateConfig },
 };
 
-/** 冻结白名单防止运行时篡改 */
+/** Freeze the allowlist to prevent runtime tampering */
 const READ_ONLY_COMMANDS = Object.freeze(_READ_ONLY_COMMANDS);
 
-// ── 参数校验函数 ──
+// ── Argument validators ──
 
 /**
- * SCAN/HSCAN/SSCAN/ZSCAN 参数结构化校验
- * 只接受 MATCH pattern COUNT n [TYPE type]；不允许重复选项
+ * Structured argument validation for SCAN/HSCAN/SSCAN/ZSCAN
+ * Only MATCH pattern COUNT n [TYPE type] are accepted; duplicate options are rejected
  *
- * 修复：cursor 位置因命令而异——SCAN 无 key 前缀，cursor 在首位；
- * HSCAN/SSCAN/ZSCAN 第一个参数是 key，cursor 在第二位。
- * 旧实现统一按 SCAN 处理，导致 HSCAN/SSCAN/ZSCAN 合法的 cursor=0 被误拒。
+ * Fix: the cursor position differs per command — SCAN has no key prefix and
+ * the cursor comes first; HSCAN/SSCAN/ZSCAN take a key first, so the cursor
+ * is second. The old implementation treated everything like SCAN and wrongly
+ * rejected a legal cursor=0 for HSCAN/SSCAN/ZSCAN.
  */
 function validateScan(args, command) {
-  // SCAN 的参数布局：cursor 在首位；其余三个命令首位是 key，第二位才是 cursor
+  // SCAN argument layout: the cursor comes first; the other three commands
+  // take a key first and the cursor second
   const hasKey = command !== 'SCAN';
   let i;
   if (hasKey) {
-    if (args.length < 2) throw `${command} 至少需要 key 和 cursor`;
+    if (args.length < 2) throw `${command} requires at least a key and a cursor`;
     const cursor = Number(args[1]);
-    if (!Number.isInteger(cursor) || cursor < 0) throw 'cursor 必须是非负整数';
-    i = 2; // 选项从第三位开始解析
+    if (!Number.isInteger(cursor) || cursor < 0) throw 'cursor must be a non-negative integer';
+    i = 2; // options start at the third position
   } else {
-    if (args.length === 0) throw 'SCAN 至少需要 cursor 参数';
+    if (args.length === 0) throw 'SCAN requires at least a cursor argument';
     const cursor = Number(args[0]);
-    if (!Number.isInteger(cursor) || cursor < 0) throw 'cursor 必须是非负整数';
-    i = 1; // 选项从第二位开始解析
+    if (!Number.isInteger(cursor) || cursor < 0) throw 'cursor must be a non-negative integer';
+    i = 1; // options start at the second position
   }
 
   const seen = new Set();
   for (; i < args.length; i++) {
     const opt = String(args[i]).toUpperCase();
-    if (seen.has(opt)) throw `重复的 SCAN 选项: ${opt}`;
+    if (seen.has(opt)) throw `Duplicate SCAN option: ${opt}`;
     seen.add(opt);
 
     if (opt === 'MATCH') {
-      if (i + 1 >= args.length) throw 'MATCH 需要一个 pattern 参数';
-      i++; // 跳过 pattern 值
+      if (i + 1 >= args.length) throw 'MATCH requires a pattern argument';
+      i++; // skip the pattern value
     } else if (opt === 'COUNT') {
-      if (i + 1 >= args.length) throw 'COUNT 需要一个数值参数';
+      if (i + 1 >= args.length) throw 'COUNT requires a numeric argument';
       const count = Number(args[i + 1]);
-      if (!Number.isInteger(count) || count < 1) throw 'COUNT 必须是正整数';
-      if (count > 5000) throw 'COUNT 超过上限 5000';
+      if (!Number.isInteger(count) || count < 1) throw 'COUNT must be a positive integer';
+      if (count > 5000) throw 'COUNT exceeds the cap of 5000';
       i++;
     } else if (opt === 'TYPE') {
-      // TYPE 只支持 SCAN，HSCAN/SSCAN/ZSCAN 不支持 TYPE 选项（交给服务端拒不如显式拒绝）
-      if (hasKey) throw `${command} 不支持 TYPE 选项（仅 SCAN 支持）`;
-      if (i + 1 >= args.length) throw 'TYPE 需要一个类型名参数';
+      // TYPE is SCAN-only; HSCAN/SSCAN/ZSCAN do not support it (reject
+      // explicitly rather than deferring to the server)
+      if (hasKey) throw `${command} does not support the TYPE option (SCAN only)`;
+      if (i + 1 >= args.length) throw 'TYPE requires a type-name argument';
       i++;
     } else {
-      throw `SCAN 不支持的选项: ${opt}`;
+      throw `Unsupported SCAN option: ${opt}`;
     }
   }
 }
 
 /**
- * LRANGE 范围校验：防客户端内存 DoS
- * stop < 0（负索引）→ 长度未知，要求 --allow-unbounded
- * start < 0 或 stop ≥ 0 时，检查 (stop - start + 1) ≤ maxItems
+ * LRANGE range validation: prevents client-side memory DoS
+ * stop < 0 (negative index) → length unknown, require --allow-unbounded
+ * when start < 0 or stop ≥ 0, check (stop - start + 1) ≤ maxItems
  */
 function validateLrange(args, command, limits) {
-  if (args.length < 3) throw '至少需要 3 个参数（key start stop）';
+  if (args.length < 3) throw 'At least 3 arguments required (key start stop)';
   const start = Number(args[1]);
   const stop = Number(args[2]);
   if (!Number.isInteger(start) || !Number.isInteger(stop)) {
-    throw 'start/stop 必须是整数';
+    throw 'start/stop must be integers';
   }
   const maxItems = (limits && limits.maxItems) || 200;
 
-  // 负索引（stop < 0）表示到末尾，实际长度未知 → 要求显式放行
+  // A negative stop index means "to the end"; the actual length is unknown → require explicit opt-in
   if (stop < 0) {
     if (!(limits && limits.allowUnbounded)) {
-      throw 'stop 为负索引时范围不确定，需 --allow-unbounded 或用 SCAN/LRANGE + 正索引';
+      throw 'A negative stop index makes the range unbounded; use --allow-unbounded or SCAN/LRANGE with non-negative indexes';
     }
-    return; // 已放行，不再算范围
+    return; // opted in; skip the range check
   }
-  // start 为负索引时，Redis 换算后实际起始位置不确定 → 同样要求放行
+  // A negative start index resolves to an unpredictable position in Redis → also require opt-in
   if (start < 0) {
     if (!(limits && limits.allowUnbounded)) {
-      throw 'start 为负索引时范围不确定，需 --allow-unbounded 或用 LRANGE + 正索引';
+      throw 'A negative start index makes the range unbounded; use --allow-unbounded or LRANGE with non-negative indexes';
     }
     return;
   }
-  // 双方都是非负索引，可精确计算返回数量
+  // Both indexes non-negative: the returned count can be computed exactly
   const count = stop - start + 1;
   if (count > maxItems) {
-    throw `范围 ${start}..${stop} 共 ${count} 项，超过 maxItems=${maxItems}`;
+    throw `Range ${start}..${stop} yields ${count} items, exceeding maxItems=${maxItems}`;
   }
 }
 
 /**
- * ZRANGE Redis 6.2+ 完整语法校验
- * 支持 BYSCORE / BYLEX / REV / LIMIT / WITHSCORES 选项
- * BYLEX 模式无 LIMIT 时要求 --allow-unbounded（词法范围可能很长）
- * 含 LIMIT 时 count 必须 ≤ maxItems
+ * Full ZRANGE syntax validation for Redis 6.2+
+ * Supports BYSCORE / BYLEX / REV / LIMIT / WITHSCORES options
+ * BYLEX without LIMIT requires --allow-unbounded (lexicographic ranges can be long)
+ * With LIMIT, count must be ≤ maxItems
  */
 function validateZrange(args, command, limits) {
-  if (args.length < 3) throw 'ZRANGE 至少需要 key min max';
+  if (args.length < 3) throw 'ZRANGE requires at least key min max';
   const maxItems = (limits && limits.maxItems) || 200;
 
-  // 收集选项关键字（跳过前 3 个必选参数 key min max）
+  // Collect option keywords (skip the 3 required arguments key min max)
   const optsUpper = args.slice(3).map(a => String(a).toUpperCase());
   let hasByscore = false;
   let hasBylex = false;
@@ -188,94 +191,95 @@ function validateZrange(args, command, limits) {
     if (opt === 'WITHSCORES') { continue; }
     if (opt === 'LIMIT') {
       hasLimit = true;
-      // LIMIT 后需要 offset 和 count
-      if (i + 2 >= optsUpper.length) throw 'LIMIT 需要 offset 和 count';
-      const offset = Number(args[3 + i + 1]); // 原始 args 中对应位置
+      // LIMIT takes offset and count
+      if (i + 2 >= optsUpper.length) throw 'LIMIT requires offset and count';
+      const offset = Number(args[3 + i + 1]); // corresponding position in the original args
       limitCount = Number(args[3 + i + 2]);
       if (!Number.isInteger(offset) || !Number.isInteger(limitCount) || offset < 0 || limitCount < 0) {
-        throw 'LIMIT offset/count 必须是非负整数';
+        throw 'LIMIT offset/count must be non-negative integers';
       }
-      if (limitCount > maxItems) throw `LIMIT count ${limitCount} 超过 maxItems=${maxItems}`;
-      i += 2; // 跳过 offset 和 count
+      if (limitCount > maxItems) throw `LIMIT count ${limitCount} exceeds maxItems=${maxItems}`;
+      i += 2; // skip offset and count
       continue;
     }
-    throw `ZRANGE 不支持的选项: ${opt}`;
+    throw `Unsupported ZRANGE option: ${opt}`;
   }
 
-  // BYLEX 模式无 LIMIT → 词法范围可能很大，要求放行
+  // BYLEX without LIMIT → the lexicographic range can be huge; require opt-in
   if (hasBylex && !hasLimit) {
     if (!(limits && limits.allowUnbounded)) {
-      throw 'BYLEX 模式无 LIMIT 时范围不确定，需 --allow-unbounded';
+      throw 'BYLEX without LIMIT has an unbounded range; use --allow-unbounded';
     }
   }
-  // BYSCORE 默认索引范围（如 0 -1）无 LIMIT → 同样要求放行
+  // BYSCORE with the default index range (e.g. 0 -1) and no LIMIT → also require opt-in
   if (hasByscore && !hasLimit) {
     if (!(limits && limits.allowUnbounded)) {
-      throw 'BYSCORE 模式无 LIMIT 时范围不确定，需 --allow-unbounded';
+      throw 'BYSCORE without LIMIT has an unbounded range; use --allow-unbounded';
     }
   }
-  // 默认索引模式（非 BYSCORE/BYLEX），检查 min/max 范围
+  // Default index mode (not BYSCORE/BYLEX): check the min/max range
   if (!hasByscore && !hasBylex) {
-    // min/max 作为 rank 索引时，负索引表示到末尾，范围不确定
+    // With min/max as rank indexes, a negative index means "to the end"; the
+    // range is unbounded
     const minVal = Number(args[1]);
     const maxVal = Number(args[2]);
     if ((minVal < 0 || maxVal < 0) && !hasLimit) {
       if (!(limits && limits.allowUnbounded)) {
-        throw 'ZRANGE 含负索引且无 LIMIT，范围不确定，需 --allow-unbounded';
+        throw 'ZRANGE with a negative index and no LIMIT has an unbounded range; use --allow-unbounded';
       }
     }
-    // 非负索引且有 LIMIT 时，LIMIT 已校验 count，安全
-    // 非负索引且无 LIMIT 时，需计算范围
+    // Non-negative indexes with LIMIT: LIMIT already validated the count; safe
+    // Non-negative indexes without LIMIT: compute the range
     if (minVal >= 0 && maxVal >= 0 && !hasLimit) {
       const rangeCount = maxVal - minVal + 1;
       if (rangeCount > maxItems) {
-        throw `范围 ${minVal}..${maxVal} 共 ${rangeCount} 项，超过 maxItems=${maxItems}`;
+        throw `Range ${minVal}..${maxVal} yields ${rangeCount} items, exceeding maxItems=${maxItems}`;
       }
     }
   }
 }
 
 /**
- * ZRANGEBYSCORE 必须带 LIMIT offset count 且 count 不超上限
+ * ZRANGEBYSCORE must carry LIMIT offset count, and count must not exceed the cap
  */
 function validateZrangeByScore(args) {
-  if (args.length < 3) throw 'ZRANGEBYSCORE 至少需要 key min max';
-  // 检查是否含 LIMIT
+  if (args.length < 3) throw 'ZRANGEBYSCORE requires at least key min max';
+  // Check for LIMIT
   const argsUpper = args.map(a => String(a).toUpperCase());
   const limitIdx = argsUpper.indexOf('LIMIT');
   if (limitIdx === -1) {
-    throw 'ZRANGEBYSCORE 必须带 LIMIT 子句（防止无界结果集）';
+    throw 'ZRANGEBYSCORE requires a LIMIT clause (prevents unbounded result sets)';
   }
   if (limitIdx + 2 >= args.length) {
-    throw 'LIMIT 需要 offset 和 count 两个参数';
+    throw 'LIMIT requires both offset and count arguments';
   }
   const count = Number(args[limitIdx + 2]);
-  if (!Number.isInteger(count) || count < 0) throw 'LIMIT count 必须是非负整数';
-  if (count > 5000) throw 'LIMIT count 超过上限 5000';
+  if (!Number.isInteger(count) || count < 0) throw 'LIMIT count must be a non-negative integer';
+  if (count > 5000) throw 'LIMIT count exceeds the cap of 5000';
 }
 
 /**
- * CLIENT 只允许 LIST 子命令
- * KILL/PAUSE/UNBLOCK 可中断其他连接，拒绝
+ * CLIENT allows only the LIST subcommand
+ * KILL/PAUSE/UNBLOCK can disrupt other connections; reject them
  */
 function validateClient(args) {
-  if (args.length === 0) throw 'CLIENT 需要子命令';
+  if (args.length === 0) throw 'CLIENT requires a subcommand';
   const sub = String(args[0]).toUpperCase();
-  if (sub !== 'LIST') throw `不允许 CLIENT ${sub}（只允许 CLIENT LIST）`;
+  if (sub !== 'LIST') throw `CLIENT ${sub} is not allowed (only CLIENT LIST is allowed)`;
 }
 
 /**
- * CONFIG 只允许 GET 子命令，且 config key 在安全白名单内
- * 拒绝 *（转储全部配置）、requirepass、masterauth 等敏感项
+ * CONFIG allows only the GET subcommand, and the config key must be on the safe list
+ * Reject * (dumps the whole config) and sensitive keys like requirepass and masterauth
  */
 function validateConfig(args) {
-  if (args.length === 0) throw 'CONFIG 需要子命令';
+  if (args.length === 0) throw 'CONFIG requires a subcommand';
   const sub = String(args[0]).toUpperCase();
-  if (sub !== 'GET') throw `不允许 CONFIG ${sub}（只允许 CONFIG GET）`;
+  if (sub !== 'GET') throw `CONFIG ${sub} is not allowed (only CONFIG GET is allowed)`;
 
-  if (args.length < 2) throw 'CONFIG GET 至少需要一个参数';
+  if (args.length < 2) throw 'CONFIG GET requires at least one argument';
 
-  // 安全白名单：只允许查看非敏感的运行时配置
+  // Safe list: only non-sensitive runtime configs may be viewed
   const SAFE_CONFIG_KEYS = new Set([
     'databases', 'maxmemory', 'maxmemory-policy', 'maxmemory-samples',
     'timeout', 'tcp-keepalive', 'appendonly', 'appendfsync',
@@ -287,60 +291,61 @@ function validateConfig(args) {
 
   for (let i = 1; i < args.length; i++) {
     const key = String(args[i]).toLowerCase();
-    if (key === '*') throw '不允许 CONFIG GET *（会转储全部配置含密码）';
+    if (key === '*') throw 'CONFIG GET * is not allowed (dumps the entire config including passwords)';
     if (key === 'requirepass' || key === 'masterauth') {
-      throw `不允许查询 ${key}（可能暴露密码）`;
+      throw `Querying ${key} is not allowed (may expose passwords)`;
     }
-    // 包含 tls/key/pass/secret/acl 等关键词的一律拒绝
+    // Reject any key containing markers like tls/key/pass/secret/acl
     if (/tls[_-]?key|pass|secret|acl[_-]file|unixsocket/i.test(key)) {
-      throw `不允许查询敏感配置: ${key}`;
+      throw `Querying sensitive config is not allowed: ${key}`;
     }
     if (!SAFE_CONFIG_KEYS.has(key)) {
-      throw `CONFIG GET ${key} 不在安全白名单中`;
+      throw `CONFIG GET ${key} is not on the safe list`;
     }
   }
 }
 
-// ── 主校验入口 ──
+// ── Main validation entry ──
 
 /**
- * 校验 Redis 命令是否在只读白名单内，并校验参数
- * 未知命令一律拒绝（fail-closed）
+ * Validate that a Redis command is on the read-only allowlist and validate its arguments
+ * Unknown commands are always rejected (fail-closed)
  *
- * @param {string[]} argv - 完整命令数组，[cmd, ...args]
+ * @param {string[]} argv - full command array, [cmd, ...args]
  * @param {object} limits - { maxItems: number, allowUnbounded: boolean }
  * @returns {{ command: string, args: string[], shape: string, unbounded: boolean }}
  */
 function validateRedisCommand(argv, limits) {
   if (!Array.isArray(argv) || argv.length === 0) {
-    throw new RedisReadonlyError('Redis 命令不能为空');
+    throw new RedisReadonlyError('Redis command must not be empty');
   }
 
   const command = String(argv[0]).toUpperCase();
   const policy = READ_ONLY_COMMANDS[command];
 
   if (!policy) {
-    throw new RedisReadonlyError(`不允许的命令: ${command}（不在只读白名单中）`);
+    throw new RedisReadonlyError(`Command not allowed: ${command} (not on the read-only allowlist)`);
   }
 
-  // 检查 arity（参数个数约束）
+  // Check arity (argument count constraint)
   if (policy.arity !== null && argv.length - 1 !== policy.arity) {
-    throw new RedisReadonlyError(`${command} 需要 ${policy.arity} 个参数，收到 ${argv.length - 1} 个`);
+    throw new RedisReadonlyError(`${command} requires ${policy.arity} argument(s), got ${argv.length - 1}`);
   }
 
-  // 无界命令需要显式放行
+  // Unbounded commands require explicit opt-in
   if (policy.unbounded && !(limits && limits.allowUnbounded)) {
     throw new RedisReadonlyError(
-      `${command} 可能返回大量数据，需添加 --allow-unbounded 参数确认（建议优先使用 SCAN 类命令）`
+      `${command} may return a large amount of data; add --allow-unbounded to confirm (prefer SCAN-family commands)`
     );
   }
 
-  // 运行策略特定的参数校验；传入命令名和 limits 以便各函数做范围/无界校验
+  // Run the policy-specific argument validator; pass the command name and
+  // limits so each function can do range/unbounded checks
   const args = argv.slice(1);
   try {
     policy.validate(args, command, limits);
   } catch (msg) {
-    throw new RedisReadonlyError(`${command} 参数错误: ${msg}`);
+    throw new RedisReadonlyError(`${command} argument error: ${msg}`);
   }
 
   return {

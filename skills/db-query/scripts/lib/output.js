@@ -1,18 +1,18 @@
 'use strict';
 
 /**
- * 结果输出：表格/JSON 格式化 + 类型规范化 + 截断保护
- * JSON 写 stdout、状态信息写 stderr，保证 stdout 是合法 JSON
+ * Result output: table/JSON formatting + value normalization + truncation guards
+ * JSON goes to stdout and status to stderr so stdout stays valid JSON
  */
 
-// ── 类型规范化 ──
+// ── Value normalization ──
 
 /**
- * 规范化单个值为安全输出格式
- * - BigInt → 十进制字符串
- * - Buffer/Uint8Array → UTF-8 可打印则字符串，否则 base64
- * - Date → ISO 字符串
- * - 其他对象 → 安全 JSON 化
+ * Normalize a single value into a safe output format
+ * - BigInt → decimal string
+ * - Buffer/Uint8Array → string if printable UTF-8, otherwise base64
+ * - Date → ISO string
+ * - other objects → safe JSON
  *
  * @param {*} val
  * @param {object} opts - { maxValueBytes: number }
@@ -21,22 +21,23 @@
 function normalizeValue(val, opts) {
   const maxSize = (opts && opts.maxValueBytes) || 4096;
 
-  // BigInt 保留字符串精度
+  // BigInt keeps string precision
   if (typeof val === 'bigint') {
     return { value: val.toString(10), truncated: false };
   }
 
-  // Buffer / Uint8Array 按二进制处理
+  // Treat Buffer / Uint8Array as binary
   if (Buffer.isBuffer(val) || (val instanceof Uint8Array)) {
     return normalizeBuffer(val, maxSize);
   }
 
-  // Date → ISO 字符串（dateStrings 已在连接选项中处理，这里兜底）
+  // Date → ISO string (dateStrings already handles this in the connection
+  // options; fallback here)
   if (val instanceof Date) {
     return { value: val.toISOString(), truncated: false };
   }
 
-  // 对象（含数组）→ JSON 安全化
+  // Objects (including arrays) → JSON-safe
   if (typeof val === 'object' && val !== null) {
     try {
       const json = safeJsonStringify(val);
@@ -50,19 +51,19 @@ function normalizeValue(val, opts) {
     }
   }
 
-  // 基本类型直接返回
+  // Primitives pass through
   return { value: val, truncated: false };
 }
 
 /**
- * Buffer/Uint8Array → 可打印 UTF-8 字符串或 base64
- * 超过 maxValueBytes 时截断并标注
+ * Buffer/Uint8Array → printable UTF-8 string or base64
+ * Truncate and mark when larger than maxValueBytes
  */
 function normalizeBuffer(buf, maxSize) {
-  // Uint8Array → Buffer（共享底层内存，零拷贝视图）
+  // Uint8Array → Buffer (zero-copy view over the same memory)
   const buffer = Buffer.isBuffer(buf) ? buf : Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
 
-  // 尝试 UTF-8 解码
+  // Try UTF-8 decoding
   let str;
   let isPrintable = false;
   try {
@@ -77,7 +78,7 @@ function normalizeBuffer(buf, maxSize) {
 
   if (byteLength > maxSize) {
     truncated = true;
-    // 截断到 maxSize 字节再解码
+    // Truncate to maxSize bytes, then decode
     const sliced = buffer.subarray(0, maxSize);
     if (isPrintable) {
       str = sliced.toString('utf8') + '…';
@@ -85,7 +86,7 @@ function normalizeBuffer(buf, maxSize) {
       str = sliced.toString('base64') + '…';
     }
   } else if (isPrintable) {
-    str = str; // 已经解码
+    str = str; // already decoded
   } else {
     str = buffer.toString('base64');
   }
@@ -97,19 +98,19 @@ function normalizeBuffer(buf, maxSize) {
   };
 }
 
-/** 检查字符串是否为可打印 UTF-8（无控制字符，允许常见空白） */
+/** Check whether a string is printable UTF-8 (no control characters; common whitespace allowed) */
 function isPrintableUtf8(str) {
   for (let i = 0; i < str.length; i++) {
     const code = str.charCodeAt(i);
     if (code < 0x20 && code !== 0x09 && code !== 0x0A && code !== 0x0D) return false;
     if (code === 0x7F) return false; // DEL
-    if (code >= 0xFFFE) return false; // 非字符
+    if (code >= 0xFFFE) return false; // noncharacter
   }
   return true;
 }
 
 /**
- * 安全 JSON 字符串化，处理循环引用等异常
+ * Safe JSON.stringify that handles circular references and similar pitfalls
  */
 function safeJsonStringify(val) {
   const seen = new WeakSet();
@@ -122,22 +123,22 @@ function safeJsonStringify(val) {
   });
 }
 
-/** 截断字符串到指定字节数（UTF-8 安全） */
+/** Truncate a string to a byte budget (UTF-8 safe) */
 function truncateString(str, maxBytes) {
   const buf = Buffer.from(str, 'utf8');
   if (buf.length <= maxBytes) return { value: str, truncated: false };
-  // 找到不超过 maxBytes 的最后完整 UTF-8 字符边界
+  // Find the last complete UTF-8 character boundary not exceeding maxBytes
   let end = maxBytes;
-  while (end > 0 && (buf[end] & 0xC0) === 0x80) end--; // 跳过多字节续字节
+  while (end > 0 && (buf[end] & 0xC0) === 0x80) end--; // skip multibyte continuation bytes
   return { value: buf.subarray(0, end).toString('utf8') + '…', truncated: true };
 }
 
-// ── MySQL 表格输出 ──
+// ── MySQL table output ──
 
 /**
- * 格式化 MySQL 查询结果为表格（按 fields 顺序）
+ * Format MySQL query results as a table (in field order)
  * @param {Array} rows
- * @param {Array} fields - mysql2 返回的 field metadata
+ * @param {Array} fields - field metadata returned by mysql2
  * @param {object} opts - { maxRows, maxValueBytes, truncated }
  */
 function formatMysqlTable(rows, fields, opts) {
@@ -145,7 +146,7 @@ function formatMysqlTable(rows, fields, opts) {
   const maxValueBytes = (opts && opts.maxValueBytes) || 4096;
   const resultTruncated = opts && opts.truncated;
 
-  // 规范化行数据
+  // Normalize row data
   const normalizedRows = [];
   const fieldNames = (fields || []).map(f => f.name);
 
@@ -161,27 +162,27 @@ function formatMysqlTable(rows, fields, opts) {
   }
 
   if (normalizedRows.length === 0) {
-    return '(空结果集)';
+    return '(empty result set)';
   }
 
-  // 计算列宽
+  // Compute column widths
   const colWidths = fieldNames.map((name, colIdx) => {
     let w = name.length;
     for (const row of normalizedRows) {
       w = Math.max(w, String(row[colIdx]).length);
     }
-    return Math.min(w, 60); // 单列最大 60 字符
+    return Math.min(w, 60); // cap each column at 60 chars
   });
 
-  // 构建表格
+  // Build the table
   const sep = colWidths.map(w => '-'.repeat(w + 2)).join('+');
   const lines = [sep];
 
-  // 表头
+  // Header
   lines.push('|' + fieldNames.map((name, i) => ' ' + name.padEnd(colWidths[i]) + ' ').join('|') + '|');
   lines.push(sep);
 
-  // 数据行
+  // Data rows
   for (const row of normalizedRows) {
     lines.push('|' + row.map((cell, i) => ' ' + String(cell).padEnd(colWidths[i]) + ' ').join('|') + '|');
   }
@@ -189,27 +190,27 @@ function formatMysqlTable(rows, fields, opts) {
 
   let output = lines.join('\n');
   if (resultTruncated) {
-    output += `\n⚠ 结果已截断（仅显示前 ${maxRows} 行）`;
+    output += `\n⚠ Results truncated (showing first ${maxRows} rows)`;
   }
   return output;
 }
 
-/** 格式化单个单元格（附加截断标记） */
+/** Format a single cell (append truncation marker) */
 function formatCell(norm) {
   if (norm.truncated && norm.byteLength) {
     return String(norm.value) + ` [${norm.byteLength}B]`;
   }
   if (norm.truncated) {
-    return String(norm.value) + ' [截断]';
+    return String(norm.value) + ' [truncated]';
   }
   return norm.value;
 }
 
-// ── Redis 表格输出 ──
+// ── Redis table output ──
 
 /**
- * 格式化 Redis 结果为可读表格
- * @param {*} result - Redis 返回的原始数据
+ * Format a Redis result as a readable table
+ * @param {*} result - raw data returned by Redis
  * @param {object} info - { shape, command, maxItems, maxValueBytes }
  * @returns {string}
  */
@@ -222,36 +223,36 @@ function formatRedisTable(result, info) {
     if (result === null) return '(nil)';
     if (typeof result === 'number') return String(result);
     const norm = normalizeValue(result, { maxValueBytes: info && info.maxValueBytes });
-    return String(norm.value) + (norm.truncated ? ' [截断]' : '');
+    return String(norm.value) + (norm.truncated ? ' [truncated]' : '');
   }
 
   // list
   if (shape === 'list') {
     const items = Array.isArray(result) ? result : [result];
-    if (items.length === 0) return '(空列表)';
+    if (items.length === 0) return '(empty list)';
     const lines = [];
     const count = Math.min(items.length, maxItems);
     for (let i = 0; i < count; i++) {
       const norm = normalizeValue(items[i], { maxValueBytes: info && info.maxValueBytes });
-      lines.push(`${i + 1}) ${String(norm.value)}${norm.truncated ? ' [截断]' : ''}`);
+      lines.push(`${i + 1}) ${String(norm.value)}${norm.truncated ? ' [truncated]' : ''}`);
     }
-    if (items.length > maxItems) lines.push(`⚠ 仅显示前 ${maxItems} 条（共 ${items.length} 条）`);
+    if (items.length > maxItems) lines.push(`⚠ Showing first ${maxItems} of ${items.length} item(s)`);
     return lines.join('\n');
   }
 
-  // pairs (HGETALL 等)
+  // pairs (HGETALL etc.)
   if (shape === 'pairs') {
     const arr = Array.isArray(result) ? result : [];
-    if (arr.length === 0) return '(空映射)';
+    if (arr.length === 0) return '(empty map)';
     const lines = [];
     const pairCount = Math.min(Math.floor(arr.length / 2), maxItems);
     for (let i = 0; i < pairCount; i++) {
       const field = String(arr[i * 2] || '');
       const val = normalizeValue(arr[i * 2 + 1], { maxValueBytes: info && info.maxValueBytes });
-      lines.push(`${field}: ${String(val.value)}${val.truncated ? ' [截断]' : ''}`);
+      lines.push(`${field}: ${String(val.value)}${val.truncated ? ' [truncated]' : ''}`);
     }
     if (Math.floor(arr.length / 2) > maxItems) {
-      lines.push(`⚠ 仅显示前 ${maxItems} 个字段`);
+      lines.push(`⚠ Showing first ${maxItems} field(s)`);
     }
     return lines.join('\n');
   }
@@ -266,7 +267,7 @@ function formatRedisTable(result, info) {
     for (let i = 0; i < count; i++) {
       lines.push(`${i + 1}) ${String(items[i])}`);
     }
-    if (items.length > maxItems) lines.push(`⚠ 仅显示前 ${maxItems} 条`);
+    if (items.length > maxItems) lines.push(`⚠ Showing first ${maxItems} item(s)`);
     return lines.join('\n');
   }
 
@@ -282,10 +283,10 @@ function formatRedisTable(result, info) {
       const count = Math.min(clients.length, maxItems);
       const lines = [];
       for (let i = 0; i < count; i++) {
-        lines.push(`--- 客户端 ${i + 1} ---`);
+        lines.push(`--- Client ${i + 1} ---`);
         lines.push(clients[i]);
       }
-      if (clients.length > maxItems) lines.push(`⚠ 仅显示前 ${maxItems} 个客户端`);
+      if (clients.length > maxItems) lines.push(`⚠ Showing first ${maxItems} client(s)`);
       return lines.join('\n');
     }
     return String(result);
@@ -297,16 +298,16 @@ function formatRedisTable(result, info) {
 // ── JSON envelope ──
 
 /**
- * 构建 JSON 输出 envelope
+ * Build the JSON output envelope
  * @param {object} params - { source, target, elapsedMs, count, truncated, result }
  * @returns {string}
  */
 function formatJson(params) {
   const envelope = {
     source: params.source,      // 'mysql' | 'redis'
-    target: params.target,       // 脱敏目标
+    target: params.target,       // sanitized target
     elapsedMs: params.elapsedMs,
-    count: params.count,         // 行/元素数
+    count: params.count,         // row/item count
     truncated: params.truncated,
     result: params.result,
   };

@@ -2,7 +2,7 @@
   "name": "db-query-skill",
   "version": "1.0.0",
   "private": true,
-  "description": "pi 技能：数据库只读查询核验（MySQL / Redis）",
+  "description": "Read-only database query verification skill (MySQL / Redis)",
   "engines": {
     "node": ">=18"
   },

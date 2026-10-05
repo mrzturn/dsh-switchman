@@ -1,9 +1,9 @@
 'use strict';
 
 /**
- * 严格 CLI 参数解析器
- * 支持 --key=value、--key value、布尔 flag、-- 分隔 SQL/Redis 命令
- * 未知选项、重复冲突、越界数字 → 立即失败（fail-closed）
+ * Strict CLI argument parser
+ * Supports --key=value, --key value, boolean flags, and -- to separate SQL/Redis commands
+ * Unknown options, duplicate conflicts, out-of-range numbers → fail immediately (fail-closed)
  */
 
 class CliError extends Error {
@@ -11,16 +11,16 @@ class CliError extends Error {
 }
 
 /**
- * 解析 CLI 参数，返回 { options: {}, rest: string[] }
+ * Parse CLI arguments and return { options: {}, rest: string[] }
  * @param {string[]} argv - process.argv.slice(2)
- * @param {object} spec - 参数规格 { name: { type, default, min, max, alias } }
+ * @param {object} spec - option spec { name: { type, default, min, max, alias } }
  */
 function parseCli(argv, spec) {
   const options = {};
   const rest = [];
   const seen = new Set();
 
-  // 填充默认值
+  // Fill in defaults
   for (const [key, def] of Object.entries(spec)) {
     if (def.default !== undefined) options[key] = def.default;
   }
@@ -29,13 +29,13 @@ function parseCli(argv, spec) {
   while (i < argv.length) {
     const arg = argv[i];
 
-    // -- 分隔符：后续全部作为位置参数
+    // -- separator: everything after it is positional
     if (arg === '--') {
       rest.push(...argv.slice(i + 1));
       break;
     }
 
-    // --option=value 或 --option value 形式
+    // --option=value or --option value form
     if (arg.startsWith('--')) {
       let key, value;
       const eqIdx = arg.indexOf('=');
@@ -44,29 +44,29 @@ function parseCli(argv, spec) {
         value = arg.slice(eqIdx + 1);
       } else {
         key = arg.slice(2);
-        // 查找规格中该选项的类型
+        // Look up the option's type in the spec
         const s = findSpec(spec, key);
-        if (!s) throw new CliError(`未知选项: --${key}`);
+        if (!s) throw new CliError(`Unknown option: --${key}`);
         if (s.type === 'boolean') {
           value = true;
         } else {
           i++;
-          if (i >= argv.length) throw new CliError(`--${key} 需要值`);
+          if (i >= argv.length) throw new CliError(`--${key} requires a value`);
           value = argv[i];
         }
       }
 
       const resolved = resolveAlias(spec, key);
-      if (!resolved) throw new CliError(`未知选项: --${key}`);
+      if (!resolved) throw new CliError(`Unknown option: --${key}`);
 
-      // 重复选项检查
-      if (seen.has(resolved)) throw new CliError(`重复选项: --${resolved}`);
+      // Duplicate option check
+      if (seen.has(resolved)) throw new CliError(`Duplicate option: --${resolved}`);
       seen.add(resolved);
 
       const s = spec[resolved];
       options[resolved] = coerceValue(resolved, value, s);
     } else {
-      // 非选项参数 → 位置参数
+      // Non-option argument → positional
       rest.push(arg);
     }
     i++;
@@ -75,7 +75,7 @@ function parseCli(argv, spec) {
   return { options, rest };
 }
 
-/** 在 spec 或 alias 中查找选项名 */
+/** Find an option name in the spec or its aliases */
 function findSpec(spec, key) {
   if (spec[key]) return spec[key];
   for (const s of Object.values(spec)) {
@@ -84,7 +84,7 @@ function findSpec(spec, key) {
   return null;
 }
 
-/** 解析别名到规范名 */
+/** Resolve an alias to its canonical name */
 function resolveAlias(spec, key) {
   if (spec[key]) return key;
   for (const [name, s] of Object.entries(spec)) {
@@ -93,23 +93,23 @@ function resolveAlias(spec, key) {
   return null;
 }
 
-/** 类型转换 + 边界检查 */
+/** Type coercion + bounds checking */
 function coerceValue(key, raw, spec) {
   if (spec.type === 'boolean') {
     if (raw === 'true' || raw === true) return true;
     if (raw === 'false' || raw === false) return false;
-    throw new CliError(`--${key} 期望布尔值，收到: ${raw}`);
+    throw new CliError(`--${key} expects a boolean, got: ${raw}`);
   }
   if (spec.type === 'integer') {
     const n = Number(raw);
-    if (!Number.isInteger(n)) throw new CliError(`--${key} 期望整数，收到: ${raw}`);
-    if (spec.min !== undefined && n < spec.min) throw new CliError(`--${key} 最小值 ${spec.min}，收到: ${n}`);
-    if (spec.max !== undefined && n > spec.max) throw new CliError(`--${key} 最大值 ${spec.max}，收到: ${n}`);
+    if (!Number.isInteger(n)) throw new CliError(`--${key} expects an integer, got: ${raw}`);
+    if (spec.min !== undefined && n < spec.min) throw new CliError(`--${key} minimum is ${spec.min}, got: ${n}`);
+    if (spec.max !== undefined && n > spec.max) throw new CliError(`--${key} maximum is ${spec.max}, got: ${n}`);
     return n;
   }
   if (spec.type === 'string' && spec.choices) {
     const lower = String(raw).toLowerCase();
-    if (!spec.choices.includes(lower)) throw new CliError(`--${key} 必须为 ${spec.choices.join('|')} 之一，收到: ${raw}`);
+    if (!spec.choices.includes(lower)) throw new CliError(`--${key} must be one of ${spec.choices.join('|')}, got: ${raw}`);
     return lower;
   }
   return String(raw);

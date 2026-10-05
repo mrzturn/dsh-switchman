@@ -2,21 +2,21 @@
 'use strict';
 
 /**
- * MySQL 只读查询入口
- * 编排流程：CLI 解析 → SQL 只读校验 → 建连（只读事务+超时）→ 查询 → 输出 → 回滚关闭
- * 安全要点：客户端 timer + 服务端 MAX_EXECUTION_TIME 双保险；永远 ROLLBACK
+ * MySQL read-only query entry point
+ * Pipeline: CLI parsing → SQL read-only validation → connect (read-only txn + timeout) → query → output → rollback & close
+ * Security: client-side timer + server-side MAX_EXECUTION_TIME as dual safeguards; always ROLLBACK
  */
 
 const fs = require('fs');
 const path = require('path');
 
-// ── 内部模块 ──
+// ── Internal modules ──
 const { parseCli, CliError } = require('./lib/cli');
 const { loadEnvFile, resolveEnv, resolveEnvNumber, ConfigError, sanitizeTarget, safeMessage, buildTlsOptions } = require('./lib/config');
 const { validateMysqlSql, ReadonlyError } = require('./lib/mysql-readonly');
 const { formatMysqlTable, formatJson } = require('./lib/output');
 
-// ── CLI 参数规格 ──
+// ── CLI option spec ──
 const MYSQL_SPEC = {
   host:              { type: 'string', default: '127.0.0.1' },
   port:              { type: 'integer', default: 3306, min: 1, max: 65535 },
@@ -37,28 +37,28 @@ const MYSQL_SPEC = {
 
 const ENV_PREFIX = 'DB_QUERY_MYSQL_';
 
-/** 从文件读取 SQL（限 64KiB 普通文本） */
+/** Read SQL from a file (plain text, max 64KiB) */
 function readSqlFile(filePath) {
   const resolved = path.resolve(filePath);
-  if (!fs.existsSync(resolved)) throw new Error(`SQL 文件不存在: ${resolved}`);
+  if (!fs.existsSync(resolved)) throw new Error(`SQL file not found: ${resolved}`);
   const stat = fs.statSync(resolved);
-  if (stat.size > 64 * 1024) throw new Error(`SQL 文件超过 64KiB: ${resolved}`);
+  if (stat.size > 64 * 1024) throw new Error(`SQL file exceeds 64KiB: ${resolved}`);
   return fs.readFileSync(resolved, 'utf8');
 }
 
-/** 打印校验结果（--validate-only 模式） */
+/** Print validation result (--validate-only mode) */
 function printValidation(checked) {
-  process.stderr.write(`✓ 校验通过: ${checked.kind}${checked.limitInjected ? ' (已注入 LIMIT 截断)' : ''}\n`);
-  process.stderr.write(`处理后的 SQL:\n${checked.sql}\n`);
+  process.stderr.write(`✓ Validation passed: ${checked.kind}${checked.limitInjected ? ' (LIMIT injected for truncation)' : ''}\n`);
+  process.stderr.write(`Processed SQL:\n${checked.sql}\n`);
 }
 
-/** 带超时的查询执行（客户端 timer + 服务端 MAX_EXECUTION_TIME 双保险） */
+/** Execute the query with a timeout (client-side timer + server-side MAX_EXECUTION_TIME as dual safeguards) */
 function queryWithTimeout(conn, sql, timeoutMs) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      // 客户端超时：销毁连接，避免服务端继续传输
+      // Client-side timeout: destroy the connection to stop server transmission
       conn.destroy();
-      reject(new Error(`查询超时 (${timeoutMs}ms)`));
+      reject(new Error(`Query timed out (${timeoutMs}ms)`));
     }, timeoutMs);
 
     conn.query(sql)
@@ -67,56 +67,59 @@ function queryWithTimeout(conn, sql, timeoutMs) {
   });
 }
 
-/** 安全回滚（忽略错误，确保连接一定关闭） */
+/** Roll back safely (ignore errors so the connection always closes) */
 async function safeRollback(conn) {
-  try { await conn.query('ROLLBACK'); } catch (_) { /* 事务不存在等错误忽略 */ }
+  try { await conn.query('ROLLBACK'); } catch (_) { /* ignore errors such as no active transaction */ }
 }
 
-/** 安全关闭连接 */
+/** Close the connection safely */
 async function safeClose(conn) {
-  try { await conn.end(); } catch (_) { /* 连接已断开等错误忽略 */ }
+  try { await conn.end(); } catch (_) { /* ignore errors such as connection already closed */ }
 }
 
-// ── 主函数 ──
+// ── Main ──
 async function main() {
   const { options, rest } = parseCli(process.argv.slice(2), MYSQL_SPEC);
 
-  // SQL 来源校验：--file 和位置参数二选一
+  // SQL source check: --file and a positional argument are mutually exclusive
   if (options.file && rest.length > 0) {
-    throw new CliError('--file 和位置参数 SQL 不能同时指定');
+    throw new CliError('--file and a positional SQL argument cannot both be given');
   }
   if (!options.file && rest.length === 0) {
-    throw new CliError('必须指定 SQL（位置参数或 --file）');
+    throw new CliError('SQL must be provided (positional argument or --file)');
   }
 
-  // 读取 SQL（在任何连接操作之前）
+  // Read the SQL (before any connection setup)
   const rawSql = options.file ? readSqlFile(options.file) : rest[0];
 
-  // 只读校验（纯离线，不依赖任何连接参数）
+  // Read-only validation (fully offline, independent of connection parameters)
   const maxRows = options.maxRows;
   const checked = validateMysqlSql(rawSql, { maxRows });
 
-  // --validate-only：纯离线校验，不解析凭据、不建连
+  // --validate-only: pure offline validation, no credential resolution, no connection
   if (options['validate-only']) {
     return printValidation(checked);
   }
 
-  // ── 以下为连库路径，需要连接参数 ──
-  // 修复：env 文件加载必须在 user/database 必填检查之前，否则 env 文件提供的凭据读不到
+  // ── Connection path below: requires connection parameters ──
+  // Fix: env file loading must happen before the required user/database checks,
+  // otherwise credentials provided by the env file are not visible
   const envPairs = loadEnvFile(options['env-file']);
 
-  // 合并环境变量覆盖（统一用 resolveEnvNumber 做边界校验，防 env 文件绕过硬上限）
+  // Merge environment overrides (resolveEnvNumber uniformly enforces bounds,
+  // so env files cannot bypass hard limits)
   const host = resolveEnv(envPairs, ENV_PREFIX + 'HOST', options.host);
   const port = resolveEnvNumber(envPairs, ENV_PREFIX + 'PORT', options.port, { min: 1, max: 65535 });
   const user = resolveEnv(envPairs, ENV_PREFIX + 'USER', options.user);
   const password = resolveEnv(envPairs, ENV_PREFIX + 'PASSWORD', options.password);
   const database = resolveEnv(envPairs, ENV_PREFIX + 'DATABASE', options.database);
 
-  // user 必填；database 放宽为可选——排查第一步常是 SHOW DATABASES / SELECT 1 /
-  // 带库名前缀的表查询，不强制默认库；查表未指定库时 MySQL 会自报 ER_NO_DB_ERROR
-  if (!user) throw new CliError('缺少 user（用 --user、DB_QUERY_MYSQL_USER、环境变量或 env 文件提供）');
+  // user is required; database is optional — the first triage step is often
+  // SHOW DATABASES / SELECT 1 / db-prefixed table queries with no default db;
+  // MySQL itself reports ER_NO_DB_ERROR when a table query omits the database
+  if (!user) throw new CliError('Missing user (provide via --user, DB_QUERY_MYSQL_USER, environment variable, or env file)');
   if (!database) {
-    process.stderr.write('（未指定 database：仅能执行无默认库的查询，如 SHOW DATABASES / SELECT 1 / 带库名前缀的表）\n');
+    process.stderr.write('(no database specified: only queries that need no default db will work, e.g. SHOW DATABASES / SELECT 1 / db-prefixed tables)\n');
   }
 
   const maxRowsResolved = resolveEnvNumber(envPairs, ENV_PREFIX + 'MAX_ROWS', options.maxRows, { min: 1, max: 5000 });
@@ -124,11 +127,11 @@ async function main() {
   const timeoutMs = resolveEnvNumber(envPairs, ENV_PREFIX + 'TIMEOUT_MS', options['timeout-ms'], { min: 1000, max: 60000 });
   const connectTimeoutMs = resolveEnvNumber(envPairs, ENV_PREFIX + 'CONNECT_TIMEOUT_MS', options['connect-timeout-ms'], { min: 1000, max: 30000 });
 
-  // 打印脱敏目标（连库前确认去向，绝不暴露密码）
+  // Print sanitized target (confirm the destination before connecting; never expose the password)
   const target = sanitizeTarget({ host, port, user, database });
   process.stderr.write(`→ MySQL ${target}\n`);
 
-  // 动态加载 mysql2（只在需要连库时）
+  // Load mysql2 lazily (only when a connection is needed)
   const mysql = require('mysql2/promise');
 
   const conn = await mysql.createConnection({
@@ -138,11 +141,11 @@ async function main() {
     password: password || undefined,
     database,
     connectTimeout: connectTimeoutMs,
-    multipleStatements: false,   // 显式关闭，不依赖驱动默认值
+    multipleStatements: false,   // explicitly disabled; do not rely on driver defaults
     supportBigNumbers: true,
-    bigNumberStrings: true,     // BIGINT/DECIMAL 保留字符串精度
+    bigNumberStrings: true,     // keep BIGINT/DECIMAL as strings for precision
     decimalNumbers: false,
-    dateStrings: true,          // 日期保留服务端文本
+    dateStrings: true,          // keep dates as server-side text
     ...(options.tls || options['ca-file']
       ? { ssl: buildTlsOptions(options['ca-file']) || { rejectUnauthorized: true } }
       : {}),
@@ -150,7 +153,8 @@ async function main() {
 
   const startMs = Date.now();
   try {
-    // 服务端只读事务（不支持的版本会报错，fail-closed 不静默降级）
+    // Server-side read-only transaction (unsupported versions raise an error;
+    // fail-closed, no silent downgrade)
     await conn.query('SET SESSION TRANSACTION READ ONLY');
     await conn.query('SET SESSION MAX_EXECUTION_TIME = ?', [timeoutMs]);
     await conn.query('START TRANSACTION READ ONLY');
@@ -158,12 +162,12 @@ async function main() {
     const [rows, fields] = await queryWithTimeout(conn, checked.sql, timeoutMs);
     const elapsedMs = Date.now() - startMs;
 
-    // 判断是否有截断（LIMIT 注入了 maxRows+1 哨兵行）
+    // Detect truncation (LIMIT injected a maxRows+1 sentinel row)
     const truncated = checked.limitInjected && rows.length > maxRowsResolved;
     const displayRows = truncated ? rows.slice(0, maxRowsResolved) : rows;
 
     if (options.format === 'json') {
-      // JSON 写 stdout，状态写 stderr，保证 stdout 是合法 JSON
+      // JSON to stdout, status to stderr, so stdout stays valid JSON
       process.stdout.write(JSON.stringify({
         source: 'mysql',
         target,
@@ -180,9 +184,9 @@ async function main() {
       }) + '\n');
     }
 
-    process.stderr.write(`✓ ${rows.length} 行${truncated ? '（已截断）' : ''}，${elapsedMs}ms\n`);
+    process.stderr.write(`✓ ${rows.length} row(s)${truncated ? ' (truncated)' : ''} in ${elapsedMs}ms\n`);
   } finally {
-    // 永远 ROLLBACK，不发 COMMIT（防御性，确保不留事务）
+    // Always ROLLBACK, never COMMIT (defensive: guarantees no transaction is left open)
     await safeRollback(conn);
     await safeClose(conn);
   }

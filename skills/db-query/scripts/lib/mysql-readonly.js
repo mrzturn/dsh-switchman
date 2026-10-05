@@ -1,22 +1,22 @@
 'use strict';
 
 /**
- * MySQL 只读校验：有限状态词法扫描器 + 语句分类 + LIMIT 注入
- * 安全核心：任何歧义都拒绝（fail-closed），宁可误杀不可漏过
+ * MySQL read-only validation: finite-state lexer + statement classification + LIMIT injection
+ * Security core: reject any ambiguity (fail-closed); prefer false positives over misses
  *
- * 设计要点：
- * - 状态机正确处理引号内分号/关键字/ doubled quote
- * - 拒绝反斜杠转义（NO_BACKSLASH_ESCAPES 歧义）
- * - 拒绝所有注释（堵住关键字拆分绕过）
- * - 只允许单条语句，最多末尾一个分号
- * - 拒绝 NUL 字符、未闭合引号、括号不平衡、超长 SQL
+ * Design notes:
+ * - The state machine handles semicolons/keywords/doubled quotes inside quotes correctly
+ * - Reject backslash escapes (NO_BACKSLASH_ESCAPES ambiguity)
+ * - Reject all comments (blocks keyword-splitting bypasses)
+ * - Allow only a single statement, with at most one trailing semicolon
+ * - Reject NUL characters, unclosed quotes, unbalanced parentheses, oversized SQL
  */
 
-const MAX_SQL_LENGTH = 64 * 1024; // 64KiB，防超大 payload
+const MAX_SQL_LENGTH = 64 * 1024; // 64KiB, guards against oversized payloads
 
-// ── 词法扫描器 ──
+// ── Lexer ──
 
-/** 词法状态枚举 */
+/** Lexer state enum */
 const STATE = {
   NORMAL: 0,
   SINGLE_QUOTE: 1,  // '...'
@@ -25,28 +25,28 @@ const STATE = {
 };
 
 /**
- * 对 SQL 做有限状态词法扫描，返回 token 数组
- * 每个_token: { type, value, depth }
+ * Run a finite-state lexical scan over the SQL and return a token array
+ * Each token: { type, value, depth }
  * type: 'word' | 'quoted' | 'number' | 'symbol' | 'semicolon' | 'whitespace'
- * depth: 括号嵌套深度（引号内也算外层的 depth）
+ * depth: parenthesis nesting depth (content inside quotes keeps the outer depth)
  *
  * @param {string} sql
  * @returns {Array<{type: string, value: string, depth: number}>}
  */
 function tokenizeMysql(sql) {
-  if (typeof sql !== 'string') throw new ReadonlyError('SQL 必须是字符串');
-  if (sql.length === 0) throw new ReadonlyError('SQL 不能为空');
-  if (sql.length > MAX_SQL_LENGTH) throw new ReadonlyError(`SQL 超长（${sql.length} > ${MAX_SQL_LENGTH}）`);
+  if (typeof sql !== 'string') throw new ReadonlyError('SQL must be a string');
+  if (sql.length === 0) throw new ReadonlyError('SQL must not be empty');
+  if (sql.length > MAX_SQL_LENGTH) throw new ReadonlyError(`SQL too long (${sql.length} > ${MAX_SQL_LENGTH})`);
 
-  // NUL 字节可能导致底层 C 层截断，一律拒绝
-  if (sql.includes('\0')) throw new ReadonlyError('SQL 含 NUL 字符');
+  // NUL bytes can truncate at the underlying C layer; always reject
+  if (sql.includes('\0')) throw new ReadonlyError('SQL contains a NUL character');
 
   const tokens = [];
   let state = STATE.NORMAL;
-  let parenDepth = 0;    // 当前括号深度
+  let parenDepth = 0;    // current parenthesis depth
   let i = 0;
-  let wordBuf = '';       // 累积未引用标识符
-  let numBuf = '';        // 累积数字
+  let wordBuf = '';       // accumulate unquoted identifier
+  let numBuf = '';        // accumulate number
 
   const emit = (type, value, d) => {
     tokens.push({ type, value, depth: d });
@@ -70,23 +70,24 @@ function tokenizeMysql(sql) {
     const ch = sql[i];
 
     if (state === STATE.NORMAL) {
-      // ── 注释检测（注释非查询核验必需，保守拒绝堵住关键字拆分绕过）──
+      // ── Comment detection (comments are unnecessary for query verification;
+      // conservatively reject to block keyword-splitting bypasses) ──
       if (ch === '#') {
-        throw new ReadonlyError('不允许 # 注释（防止关键字拆分绕过）');
+        throw new ReadonlyError('# comments are not allowed (prevents keyword-splitting bypasses)');
       }
       if (ch === '-' && i + 1 < sql.length && sql[i + 1] === '-') {
-        // -- 注释：合法形式是 `-- `（双横线+空格），但不管空格与否一律拒绝
-        throw new ReadonlyError('不允许 -- 注释（防止关键字拆分绕过）');
+        // -- comment: the legal form is `-- ` (dashes + space), but reject regardless of the space
+        throw new ReadonlyError('-- comments are not allowed (prevents keyword-splitting bypasses)');
       }
       if (ch === '/' && i + 1 < sql.length && sql[i + 1] === '*') {
         const nextCh = i + 2 < sql.length ? sql[i + 2] : '';
         if (nextCh === '!' || nextCh === '+') {
-          throw new ReadonlyError(`不允许 /*${nextCh} ${nextCh === '!' ? 'version comment' : 'optimizer hint'}（可能含可执行代码）`);
+          throw new ReadonlyError(`/*${nextCh} ${nextCh === '!' ? 'version comment' : 'optimizer hint'} is not allowed (may contain executable code)`);
         }
-        throw new ReadonlyError('不允许 /* */ 块注释（防止关键字拆分绕过）');
+        throw new ReadonlyError('/* */ block comments are not allowed (prevents keyword-splitting bypasses)');
       }
 
-      // ── 引号状态切换 ──
+      // ── Quote state transitions ──
       if (ch === "'") {
         flushWord(parenDepth);
         flushNum(parenDepth);
@@ -109,7 +110,7 @@ function tokenizeMysql(sql) {
         continue;
       }
 
-      // ── 括号深度追踪 ──
+      // ── Parenthesis depth tracking ──
       if (ch === '(') {
         flushWord(parenDepth);
         flushNum(parenDepth);
@@ -121,14 +122,14 @@ function tokenizeMysql(sql) {
       if (ch === ')') {
         flushWord(parenDepth);
         flushNum(parenDepth);
-        if (parenDepth <= 0) throw new ReadonlyError('括号不匹配：多余的 )');
+        if (parenDepth <= 0) throw new ReadonlyError('Unbalanced parentheses: extra )');
         emit('symbol', ')', parenDepth);
         parenDepth--;
         i++;
         continue;
       }
 
-      // ── 分号 ──
+      // ── Semicolon ──
       if (ch === ';') {
         flushWord(parenDepth);
         flushNum(parenDepth);
@@ -137,11 +138,11 @@ function tokenizeMysql(sql) {
         continue;
       }
 
-      // ── 标点/符号 ──
+      // ── Punctuation/symbols ──
       if (isSymbolChar(ch)) {
-        // 检测 := 赋值运算符
+        // Detect the := assignment operator
         if (ch === ':' && i + 1 < sql.length && sql[i + 1] === '=') {
-          throw new ReadonlyError('不允许 := 赋值运算符');
+          throw new ReadonlyError(':= assignment operator is not allowed');
         }
         flushWord(parenDepth);
         flushNum(parenDepth);
@@ -150,7 +151,7 @@ function tokenizeMysql(sql) {
         continue;
       }
 
-      // ── 空白 ──
+      // ── Whitespace ──
       if (/\s/.test(ch)) {
         flushWord(parenDepth);
         flushNum(parenDepth);
@@ -158,7 +159,7 @@ function tokenizeMysql(sql) {
         continue;
       }
 
-      // ── 数字 ──
+      // ── Numbers ──
       if (/\d/.test(ch)) {
         flushWord(parenDepth);
         numBuf += ch;
@@ -166,7 +167,7 @@ function tokenizeMysql(sql) {
         continue;
       }
 
-      // ── 标识符/关键字（字母、下划线、$）──
+      // ── Identifiers/keywords (letters, underscore, $) ──
       if (/[a-zA-Z_$]/.test(ch)) {
         flushNum(parenDepth);
         wordBuf += ch;
@@ -174,38 +175,38 @@ function tokenizeMysql(sql) {
         continue;
       }
 
-      // ── 不明字符 ──
-      throw new ReadonlyError(`SQL 含无法识别的字符: ${JSON.stringify(ch)} (位置 ${i})`);
+      // ── Unknown character ──
+      throw new ReadonlyError(`SQL contains an unrecognized character: ${JSON.stringify(ch)} (position ${i})`);
     }
 
-    // ── 单引号状态 ──
+    // ── Single-quote state ──
     if (state === STATE.SINGLE_QUOTE) {
       if (ch === '\\') {
-        // 反斜杠转义在 NO_BACKSLASH_ESCAPES 模式下语义不同，
-        // 且可能用于拆分关键字绕过检测，一律拒绝
-        throw new ReadonlyError('不允许反斜杠转义，请改用标准双引号转义（\'\'）');
+        // Backslash escapes mean something different under NO_BACKSLASH_ESCAPES,
+        // and can split keywords to bypass detection; always reject
+        throw new ReadonlyError("Backslash escapes are not allowed; use standard quote doubling ('') instead");
       }
       if (ch === "'" && i + 1 < sql.length && sql[i + 1] === "'") {
-        // 标准双引号转义：'' 转义为单引号
+        // Standard doubled-quote escape: '' is a literal single quote
         i += 2;
         continue;
       }
       if (ch === "'") {
-        // 引号闭合
+        // Quote closes
         emit('quoted', "'", parenDepth);
         state = STATE.NORMAL;
         i++;
         continue;
       }
-      // 引号内内容不逐字符记录，只保留引号边界 token
+      // Quoted content is not recorded char by char; only the quote boundary token is kept
       i++;
       continue;
     }
 
-    // ── 双引号状态 ──
+    // ── Double-quote state ──
     if (state === STATE.DOUBLE_QUOTE) {
       if (ch === '\\') {
-        throw new ReadonlyError('不允许反斜杠转义，请改用标准双引号转义（""）');
+        throw new ReadonlyError('Backslash escapes are not allowed; use standard quote doubling ("") instead');
       }
       if (ch === '"' && i + 1 < sql.length && sql[i + 1] === '"') {
         i += 2;
@@ -221,7 +222,7 @@ function tokenizeMysql(sql) {
       continue;
     }
 
-    // ── 反引号状态 ──
+    // ── Backtick state ──
     if (state === STATE.BACKTICK) {
       if (ch === '`' && i + 1 < sql.length && sql[i + 1] === '`') {
         i += 2;
@@ -238,38 +239,38 @@ function tokenizeMysql(sql) {
     }
   }
 
-  // ── 扫描结束检查 ──
+  // ── End-of-scan checks ──
   flushWord(parenDepth);
   flushNum(parenDepth);
 
   if (state !== STATE.NORMAL) {
-    const stateName = state === STATE.SINGLE_QUOTE ? '单引号' : state === STATE.DOUBLE_QUOTE ? '双引号' : '反引号';
-    throw new ReadonlyError(`未闭合的${stateName}`);
+    const stateName = state === STATE.SINGLE_QUOTE ? 'single quote' : state === STATE.DOUBLE_QUOTE ? 'double quote' : 'backtick';
+    throw new ReadonlyError(`Unclosed ${stateName}`);
   }
   if (parenDepth !== 0) {
-    throw new ReadonlyError(`括号不匹配：缺少 ${parenDepth} 个 )`);
+    throw new ReadonlyError(`Unbalanced parentheses: missing ${parenDepth} )`);
   }
 
   return tokens;
 }
 
-/** 判断是否为 SQL 标点符号字符（非字母、非数字、非空白、非引号、非分号、非括号） */
+/** Check whether a character is SQL punctuation (not letter, digit, whitespace, quote, semicolon, or parenthesis) */
 function isSymbolChar(ch) {
   return /[+\-*/%=<>!&|^~,.\:@]/.test(ch);
 }
 
-// ── 语句分类 ──
+// ── Statement classification ──
 
 /**
- * 根据 token 判断根语句类型
- * 只允许 SELECT / WITH...SELECT / SHOW / DESCRIBE / EXPLAIN
- * @param {Array} tokens - tokenizeMysql 返回值
+ * Classify the root statement from tokens
+ * Only SELECT / WITH...SELECT / SHOW / DESCRIBE / EXPLAIN are allowed
+ * @param {Array} tokens - tokenizeMysql return value
  * @returns {string} 'SELECT' | 'WITH_SELECT' | 'SHOW' | 'DESCRIBE' | 'EXPLAIN'
  */
 function classifyMysqlStatement(tokens) {
-  if (tokens.length === 0) throw new ReadonlyError('无有效 token');
+  if (tokens.length === 0) throw new ReadonlyError('No valid tokens');
 
-  // 找到 depth=0 的首个 word token（跳过前导空白/注释已被拒绝）
+  // Find the first word token at depth=0 (leading whitespace is skipped; comments were rejected)
   let firstWord = null;
   let firstWordIdx = -1;
   for (let i = 0; i < tokens.length; i++) {
@@ -280,15 +281,15 @@ function classifyMysqlStatement(tokens) {
     }
   }
 
-  if (!firstWord) throw new ReadonlyError('未找到根语句关键字');
+  if (!firstWord) throw new ReadonlyError('No root statement keyword found');
 
   switch (firstWord) {
     case 'SELECT':
       return 'SELECT';
 
     case 'WITH': {
-      // CTE：WITH 后的根查询必须是 SELECT（拒绝 WITH ... DELETE/UPDATE）
-      // 策略：找 depth=0 上出现过的所有「语句类关键字」，第一个必须是 SELECT
+      // CTE: the root query after WITH must be SELECT (reject WITH ... DELETE/UPDATE)
+      // Strategy: scan word tokens at depth=0 for statement keywords; the first must be SELECT
       const STATEMENT_KW = new Set([
         'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'REPLACE', 'CALL', 'DO',
       ]);
@@ -301,13 +302,13 @@ function classifyMysqlStatement(tokens) {
           if (w === 'SELECT') {
             foundSelect = true;
           } else {
-            throw new ReadonlyError(`WITH CTE 后的根语句必须是 SELECT，发现: ${w}`);
+            throw new ReadonlyError(`Root statement after a WITH CTE must be SELECT, found: ${w}`);
           }
           break;
         }
       }
       if (!foundSelect) {
-        throw new ReadonlyError('WITH 后未找到根查询 SELECT 语句');
+        throw new ReadonlyError('No root SELECT query found after WITH');
       }
       return 'WITH_SELECT';
     }
@@ -320,10 +321,12 @@ function classifyMysqlStatement(tokens) {
       return 'DESCRIBE';
 
     case 'EXPLAIN': {
-      // 只允许 EXPLAIN [FORMAT=...] SELECT/WITH
-      // 拒绝 EXPLAIN ANALYZE（会实际执行语句并产生写入/锁）、EXPLAIN DML
-      // 修复：旧实现只看 EXPLAIN 后第一个 word，遇到 FORMAT 就误判为非法，
-      // 导致合法的 EXPLAIN FORMAT=JSON SELECT 被拒。这里收集后续所有 word 再判定。
+      // Only EXPLAIN [FORMAT=...] SELECT/WITH is allowed
+      // Reject EXPLAIN ANALYZE (it actually executes the statement and causes
+      // writes/locks) and EXPLAIN DML
+      // Fix: the old implementation looked only at the first word after
+      // EXPLAIN, misjudged FORMAT as illegal, and rejected valid
+      // EXPLAIN FORMAT=JSON SELECT. Collect all following words instead.
       const wordsAfterExplain = [];
       for (let i = firstWordIdx + 1; i < tokens.length; i++) {
         if (tokens[i].type === 'word' && tokens[i].depth === 0) {
@@ -331,25 +334,25 @@ function classifyMysqlStatement(tokens) {
         }
       }
       if (wordsAfterExplain.length === 0) {
-        // EXPLAIN 后没有 SELECT/WITH（如旧式 EXPLAIN tbl_name），不支持
-        throw new ReadonlyError('EXPLAIN 后必须跟 SELECT 或 WITH');
+        // No SELECT/WITH after EXPLAIN (e.g. legacy EXPLAIN tbl_name); unsupported
+        throw new ReadonlyError('EXPLAIN must be followed by SELECT or WITH');
       }
       const explainFirst = wordsAfterExplain[0];
       if (explainFirst === 'ANALYZE') {
-        throw new ReadonlyError('不允许 EXPLAIN ANALYZE（会实际执行语句）');
+        throw new ReadonlyError('EXPLAIN ANALYZE is not allowed (it actually executes the statement)');
       }
       if (explainFirst === 'FORMAT') {
         // EXPLAIN FORMAT=JSON/TRADITIONAL/TREE/WIDTH SELECT ... 
-        // （= 是非 word token，已被跳过；wordsAfterExplain 形如 [FORMAT, JSON, SELECT, ...]）
+        // (= is a non-word token and was skipped; wordsAfterExplain looks like [FORMAT, JSON, SELECT, ...])
         const EXPLAIN_FORMATS = new Set(['JSON', 'TRADITIONAL', 'TREE', 'WIDTH']);
         if (wordsAfterExplain.length < 2) {
-          throw new ReadonlyError('EXPLAIN FORMAT= 需要格式名（JSON/TRADITIONAL/TREE/WIDTH）');
+          throw new ReadonlyError('EXPLAIN FORMAT= requires a format name (JSON/TRADITIONAL/TREE/WIDTH)');
         }
         const fmtName = wordsAfterExplain[1];
         if (!EXPLAIN_FORMATS.has(fmtName)) {
-          throw new ReadonlyError(`EXPLAIN FORMAT= 不支持的格式名: ${fmtName}`);
+          throw new ReadonlyError(`EXPLAIN FORMAT= unsupported format name: ${fmtName}`);
         }
-        // 格式名之后必须紧跟 SELECT/WITH
+        // SELECT/WITH must immediately follow the format name
         let stmtWord = null;
         for (let k = 2; k < wordsAfterExplain.length; k++) {
           if (wordsAfterExplain[k] === 'SELECT' || wordsAfterExplain[k] === 'WITH') {
@@ -358,24 +361,24 @@ function classifyMysqlStatement(tokens) {
           }
         }
         if (!stmtWord) {
-          throw new ReadonlyError('EXPLAIN FORMAT=... 后必须是 SELECT 或 WITH');
+          throw new ReadonlyError('EXPLAIN FORMAT=... must be followed by SELECT or WITH');
         }
         return 'EXPLAIN';
       }
       if (explainFirst !== 'SELECT' && explainFirst !== 'WITH') {
-        throw new ReadonlyError(`不允许 EXPLAIN ${explainFirst}（只允许 EXPLAIN [FORMAT=...] SELECT/WITH）`);
+        throw new ReadonlyError(`EXPLAIN ${explainFirst} is not allowed (only EXPLAIN [FORMAT=...] SELECT/WITH is allowed)`);
       }
       return 'EXPLAIN';
     }
 
     default:
-      throw new ReadonlyError(`不允许的语句类型: ${firstWord}`);
+      throw new ReadonlyError(`Statement type not allowed: ${firstWord}`);
   }
 }
 
-// ── 危险关键字/模式检测 ──
+// ── Dangerous keyword/pattern detection ──
 
-/** 非引用 word token 中遇到即拒绝的关键字 */
+/** Keywords rejected when found in unquoted word tokens */
 const FORBIDDEN_WORDS = new Set([
   'INSERT', 'UPDATE', 'DELETE', 'REPLACE', 'DROP', 'ALTER', 'CREATE',
   'TRUNCATE', 'RENAME', 'GRANT', 'REVOKE', 'CALL', 'DO', 'LOAD',
@@ -385,20 +388,20 @@ const FORBIDDEN_WORDS = new Set([
   'PREPARE', 'EXECUTE', 'DEALLOCATE',
 ]);
 
-/** 需要特殊检测的模式关键字 */
+/** Pattern keywords that need special detection */
 const INTO_FORBIDDEN = 'INTO';
 const FOR_UPDATE_PATTERN = ['FOR', 'UPDATE'];
 const LOCK_SHARE_PATTERN = ['LOCK', 'IN', 'SHARE', 'MODE'];
 
-/** 危险函数名 */
+/** Dangerous function names */
 const DANGEROUS_FUNCTIONS = new Set([
   'SLEEP', 'BENCHMARK', 'GET_LOCK', 'RELEASE_LOCK',
   'IS_FREE_LOCK', 'IS_USED_LOCK', 'LOAD_FILE', 'MASTER_POS_WAIT',
 ]);
 
 /**
- * 检查 token 流中是否包含禁止的关键字/模式
- * SELECT/WITH 内出现任何写操作关键字都拒绝
+ * Check the token stream for forbidden keywords/patterns
+ * Reject any write keyword appearing inside SELECT/WITH
  */
 function checkForbiddenPatterns(tokens) {
   for (let i = 0; i < tokens.length; i++) {
@@ -407,48 +410,48 @@ function checkForbiddenPatterns(tokens) {
 
     const upper = tok.value.toUpperCase();
 
-    // 危险函数检测（即使在子查询中也拒绝）
+    // Dangerous function detection (rejected even inside subqueries)
     if (DANGEROUS_FUNCTIONS.has(upper)) {
-      throw new ReadonlyError(`不允许危险函数: ${upper}`);
+      throw new ReadonlyError(`Dangerous function not allowed: ${upper}`);
     }
 
-    // INTO 可以出现在各种合法位置（SELECT INTO 不常见但存在），
-    // 但 SELECT INTO OUTFILE/DUMPFILE 是写文件操作，风险太高一律拒绝
+    // INTO can appear in various legal positions (SELECT INTO is uncommon but exists),
+    // but SELECT INTO OUTFILE/DUMPFILE writes files — too risky, reject unconditionally
     if (upper === INTO_FORBIDDEN) {
-      // 检查后续是否紧跟 OUTFILE/DUMPFILE 或变量赋值模式
+      // Check whether OUTFILE/DUMPFILE or a variable-assignment pattern follows
       for (let j = i + 1; j < tokens.length && j < i + 4; j++) {
         const next = tokens[j];
         if (next.type !== 'word') continue;
         const nextUpper = next.value.toUpperCase();
         if (nextUpper === 'OUTFILE' || nextUpper === 'DUMPFILE' || nextUpper === '@') {
-          throw new ReadonlyError(`不允许 INTO ${nextUpper}（数据写出风险）`);
+          throw new ReadonlyError(`INTO ${nextUpper} is not allowed (data exfiltration risk)`);
         }
       }
-      // 保守策略：即使不是 OUTFILE/DUMPFILE 也拒绝 INTO
-      // 因为 INTO 还能做变量赋值，可能间接导致写操作
-      throw new ReadonlyError('不允许 INTO（覆盖 OUTFILE/DUMPFILE/变量赋值）');
+      // Conservative policy: reject INTO even outside OUTFILE/DUMPFILE
+      // because INTO can also assign variables and indirectly cause writes
+      throw new ReadonlyError('INTO is not allowed (covers OUTFILE/DUMPFILE/variable assignment)');
     }
 
-    // FOR UPDATE 锁定检测
+    // FOR UPDATE lock detection
     if (upper === 'FOR' && tok.depth === 0) {
       const subsequent = getSubsequentRootWords(tokens, i);
       if (subsequent.length >= 1 && subsequent[0] === 'UPDATE') {
-        throw new ReadonlyError('不允许 FOR UPDATE（排他锁定）');
+        throw new ReadonlyError('FOR UPDATE is not allowed (exclusive lock)');
       }
       if (subsequent.length >= 3 &&
           subsequent[0] === 'LOCK' && subsequent[1] === 'IN' && subsequent[2] === 'SHARE' && subsequent[3] === 'MODE') {
-        throw new ReadonlyError('不允许 LOCK IN SHARE MODE（共享锁定）');
+        throw new ReadonlyError('LOCK IN SHARE MODE is not allowed (shared lock)');
       }
     }
 
-    // 禁止关键字（在 SELECT/WITH 内）
+    // Forbidden keywords (inside SELECT/WITH)
     if (FORBIDDEN_WORDS.has(upper)) {
-      throw new ReadonlyError(`不允许在只读查询中使用: ${upper}`);
+      throw new ReadonlyError(`Not allowed in read-only queries: ${upper}`);
     }
   }
 }
 
-/** 从 tokens[i] 之后取连续 depth=0 的 word token（跳过空白/非word） */
+/** Collect consecutive depth=0 word tokens after tokens[i] (skip whitespace/non-word) */
 function getSubsequentRootWords(tokens, startIdx) {
   const result = [];
   for (let j = startIdx + 1; j < tokens.length; j++) {
@@ -457,15 +460,15 @@ function getSubsequentRootWords(tokens, startIdx) {
     if (tok.type === 'word' && tok.depth === 0) {
       result.push(tok.value.toUpperCase());
     }
-    if (result.length >= 4) break; // 只需检查前几个
+    if (result.length >= 4) break; // only the first few are needed
   }
   return result;
 }
 
-// ── 单语句校验 ──
+// ── Single-statement check ──
 
 /**
- * 校验 SQL 只包含一条语句，最多末尾一个分号
+ * Verify the SQL contains a single statement with at most one trailing semicolon
  * @param {Array} tokens
  */
 function checkSingleStatement(tokens) {
@@ -473,39 +476,40 @@ function checkSingleStatement(tokens) {
   for (const tok of tokens) {
     if (tok.type === 'semicolon') {
       semicolons++;
-      // 分号必须在 depth=0（不在括号/子查询内）
+      // A semicolon must sit at depth=0 (not inside parentheses/subqueries)
       if (tok.depth !== 0) {
-        throw new ReadonlyError('语句中括号内不允许分号');
+        throw new ReadonlyError('Semicolons inside parentheses are not allowed');
       }
     }
   }
   if (semicolons > 1) {
-    throw new ReadonlyError(`只允许单条语句，发现 ${semicolons} 个分号`);
+    throw new ReadonlyError(`Only a single statement is allowed; found ${semicolons} semicolons`);
   }
-  // 如果有分号，必须在最后一个 token
+  // If there is a semicolon, it must be the last token
   if (semicolons === 1) {
     const last = tokens[tokens.length - 1];
     if (last.type !== 'semicolon') {
-      throw new ReadonlyError('分号只能在 SQL 末尾');
+      throw new ReadonlyError('A semicolon is allowed only at the end of the SQL');
     }
   }
 }
 
-// ── LIMIT 处理 ──
+// ── LIMIT handling ──
 
 /**
- * 分析 depth=0 层的 LIMIT 子句，严格只允许三种形式：
- *   LIMIT <单个非负整数>
- *   LIMIT <非负整数> OFFSET <非负整数>
- *   LIMIT <非负整数>, <非负整数>  （MySQL 旧式 offset,count）
- * 任何表达式、变量、运算符 → 拒绝（防绕过 maxRows）
+ * Analyze the depth=0 LIMIT clause, strictly allowing only three forms:
+ *   LIMIT <single non-negative integer>
+ *   LIMIT <non-negative integer> OFFSET <non-negative integer>
+ *   LIMIT <non-negative integer>, <non-negative integer>  (MySQL legacy offset,count)
+ * Any expression, variable, or operator → reject (prevents bypassing maxRows)
  *
- * @param {Array} tokens - tokenizeMysql 返回值
- * @param {number} maxRows - 允许的最大行数
+ * @param {Array} tokens - tokenizeMysql return value
+ * @param {number} maxRows - maximum allowed row count
  * @returns {{ hasLimit: boolean, limitCount: number }}
  */
 function analyzeTopLevelLimit(tokens, maxRows) {
-  // 定位 depth=0 的最后一个 LIMIT 关键字（子查询内的 LIMIT 在 depth>0，自然排除）
+  // Locate the last LIMIT keyword at depth=0 (LIMITs inside subqueries sit at
+  // depth>0 and are excluded naturally)
   let lastLimitIdx = -1;
   let foundSelect = false;
   for (let i = 0; i < tokens.length; i++) {
@@ -513,7 +517,7 @@ function analyzeTopLevelLimit(tokens, maxRows) {
     if (tok.depth > 0) continue;
     if (tok.type === 'word') {
       const upper = tok.value.toUpperCase();
-      // 遇到 SELECT/UNION 等顶层关键字说明有新的子查询段
+      // A top-level SELECT/UNION keyword means a new query segment
       if (upper === 'SELECT' || upper === 'UNION') foundSelect = true;
     }
     if (tok.type === 'word' && tok.value.toUpperCase() === 'LIMIT' && tok.depth === 0 && foundSelect) {
@@ -522,82 +526,84 @@ function analyzeTopLevelLimit(tokens, maxRows) {
   }
   if (lastLimitIdx === -1) return { hasLimit: false };
 
-  // 收集 LIMIT 之后的 depth=0 token（到语句结尾或下一个顶层关键字）
+  // Collect depth=0 tokens after LIMIT (until end of statement or the next
+  // top-level keyword)
   const limitTokens = [];
   for (let i = lastLimitIdx + 1; i < tokens.length; i++) {
     const tok = tokens[i];
     if (tok.depth > 0) continue;
-    // 遇到 UNION 等顶层关键字说明 LIMIT 属于前一个段，停止收集
+    // A top-level UNION keyword means the LIMIT belongs to the previous
+    // segment; stop collecting
     if (tok.type === 'word' && tok.value.toUpperCase() === 'UNION') break;
     limitTokens.push(tok);
   }
 
-  // 解析 LIMIT 后的 token 序列，只允许三种形式
+  // Parse the token sequence after LIMIT; only the three forms are allowed
   return parseLimitClause(limitTokens, maxRows);
 }
 
 /**
- * 解析 LIMIT 子句 token 序列，严格校验形式和 count ≤ maxRows
- * @param {Array} limitTokens - LIMIT 关键字之后、depth=0 的 token
+ * Parse the LIMIT clause token sequence, strictly validating the form and count ≤ maxRows
+ * @param {Array} limitTokens - depth=0 tokens after the LIMIT keyword
  * @param {number} maxRows
  * @returns {{ hasLimit: boolean, limitCount: number }}
  */
 function parseLimitClause(limitTokens, maxRows) {
-  // 过滤空白，只保留有意义的 token
+  // Drop whitespace; keep only meaningful tokens
   const meaningful = limitTokens.filter(t => t.type !== 'whitespace');
 
-  if (meaningful.length === 0) throw new ReadonlyError('LIMIT 后缺少参数');
+  if (meaningful.length === 0) throw new ReadonlyError('LIMIT is missing its arguments');
 
-  // 必须以 number 开头
+  // Must start with a number
   const first = meaningful[0];
-  if (first.type !== 'number') throw new ReadonlyError('LIMIT 参数必须是纯整数（不接受表达式或变量）');
+  if (first.type !== 'number') throw new ReadonlyError('LIMIT arguments must be plain integers (expressions or variables are not accepted)');
   const firstVal = Number(first.value);
-  if (!Number.isInteger(firstVal) || firstVal < 0) throw new ReadonlyError('LIMIT 必须是非负整数');
+  if (!Number.isInteger(firstVal) || firstVal < 0) throw new ReadonlyError('LIMIT must be a non-negative integer');
 
-  // ── 检查后续是否含运算符/占位符（表达式绕过）──
-  // LIMIT 后的任何 symbol token（, 除外）都说明是表达式
+  // ── Check the remainder for operators/placeholders (expression bypass) ──
+  // Any symbol token after LIMIT (except ,) implies an expression
   for (const tok of meaningful) {
     if (tok.type === 'symbol' && tok.value !== ',') {
-      throw new ReadonlyError(`LIMIT 不允许运算符 ${tok.value}（必须是纯整数）`);
+      throw new ReadonlyError(`LIMIT does not allow operator ${tok.value} (plain integers only)`);
     }
   }
 
-  // ── 形式 1：LIMIT <count>（单个整数）──
+  // ── Form 1: LIMIT <count> (single integer) ──
   if (meaningful.length === 1) {
-    if (firstVal > maxRows) throw new ReadonlyError(`LIMIT ${firstVal} 超过最大行数 ${maxRows}`);
+    if (firstVal > maxRows) throw new ReadonlyError(`LIMIT ${firstVal} exceeds the maximum row count ${maxRows}`);
     return { hasLimit: true, limitCount: firstVal };
   }
 
-  // ── 形式 2：LIMIT <offset>, <count>（逗号分隔）──
+  // ── Form 2: LIMIT <offset>, <count> (comma-separated) ──
   if (meaningful.length === 3 && meaningful[1].type === 'symbol' && meaningful[1].value === ',') {
-    if (meaningful[2].type !== 'number') throw new ReadonlyError('LIMIT 偏移量/行数必须是纯整数');
+    if (meaningful[2].type !== 'number') throw new ReadonlyError('LIMIT offset/count must be plain integers');
     const countVal = Number(meaningful[2].value);
-    if (!Number.isInteger(countVal) || countVal < 0) throw new ReadonlyError('LIMIT 行数必须是非负整数');
-    if (countVal > maxRows) throw new ReadonlyError(`LIMIT ${countVal} 超过最大行数 ${maxRows}`);
+    if (!Number.isInteger(countVal) || countVal < 0) throw new ReadonlyError('LIMIT count must be a non-negative integer');
+    if (countVal > maxRows) throw new ReadonlyError(`LIMIT ${countVal} exceeds the maximum row count ${maxRows}`);
     return { hasLimit: true, limitCount: countVal };
   }
 
-  // ── 形式 3：LIMIT <count> OFFSET <offset>（关键字分隔）──
+  // ── Form 3: LIMIT <count> OFFSET <offset> (keyword-separated) ──
   if (meaningful.length === 3 && meaningful[1].type === 'word' && meaningful[1].value.toUpperCase() === 'OFFSET') {
-    if (meaningful[2].type !== 'number') throw new ReadonlyError('LIMIT OFFSET 值必须是纯整数');
+    if (meaningful[2].type !== 'number') throw new ReadonlyError('LIMIT OFFSET value must be a plain integer');
     const offsetVal = Number(meaningful[2].value);
-    if (!Number.isInteger(offsetVal) || offsetVal < 0) throw new ReadonlyError('LIMIT OFFSET 必须是非负整数');
-    // firstVal 是 count，offset 不影响返回行数
-    if (firstVal > maxRows) throw new ReadonlyError(`LIMIT ${firstVal} 超过最大行数 ${maxRows}`);
+    if (!Number.isInteger(offsetVal) || offsetVal < 0) throw new ReadonlyError('LIMIT OFFSET must be a non-negative integer');
+    // firstVal is the count; the offset does not affect the returned row count
+    if (firstVal > maxRows) throw new ReadonlyError(`LIMIT ${firstVal} exceeds the maximum row count ${maxRows}`);
     return { hasLimit: true, limitCount: firstVal };
   }
 
-  // 不符合以上任何形式 → 拒绝
-  throw new ReadonlyError('LIMIT 只允许：纯整数 / 整数,整数 / 整数 OFFSET 整数');
+  // None of the allowed forms → reject
+  throw new ReadonlyError('LIMIT only allows: plain integer / integer,integer / integer OFFSET integer');
 }
 
-// ── 主校验入口 ──
+// ── Main validation entry ──
 
 /**
- * 对 SQL 做完整只读校验，返回处理后的 SQL 和元信息
- * 任何歧义都 throw，绝不放过
+ * Fully validate the SQL as read-only and return the processed SQL plus metadata
+ * Throw on any ambiguity; never let it pass
  *
- * @param {string} sql - 原始 SQL
+ * @param {string} sql - raw SQL
  * @param {object} opts - { maxRows: number }
  * @returns {{ sql: string, kind: string, limitInjected: boolean }}
  */
@@ -609,26 +615,29 @@ function validateMysqlSql(sql, { maxRows } = {}) {
 
   const kind = classifyMysqlStatement(tokens);
 
-  // 修复：SHOW/DESCRIBE 是元数据查询，其文本里合法包含 CREATE/PROCEDURE 等词
-  // （如 SHOW CREATE TABLE），若走 checkForbiddenPatterns 会被禁止词表误杀。
-  // 这两类语句全部为只读元数据查询，安全，提前返回跳过禁止词检查。
+  // Fix: SHOW/DESCRIBE are metadata queries whose text legally contains words
+  // like CREATE/PROCEDURE (e.g. SHOW CREATE TABLE); running
+  // checkForbiddenPatterns would false-positive on the forbidden-word list.
+  // Both statement kinds are read-only metadata queries and safe, so return
+  // early and skip the forbidden-word check.
   if (kind === 'SHOW' || kind === 'DESCRIBE') {
     return { sql: sql.trimEnd(), kind, limitInjected: false };
   }
 
-  // SELECT / WITH_SELECT / EXPLAIN 才做禁止关键字/危险函数检查
+  // Only SELECT / WITH_SELECT / EXPLAIN get the forbidden-keyword/dangerous-function check
   checkForbiddenPatterns(tokens);
 
-  // SELECT / WITH_SELECT / EXPLAIN 处理 LIMIT
+  // LIMIT handling for SELECT / WITH_SELECT / EXPLAIN
   const limitInfo = analyzeTopLevelLimit(tokens, maxRows);
 
   if (limitInfo.hasLimit) {
-    // analyzeTopLevelLimit 已校验 count ≤ maxRows，这里直接返回
+    // analyzeTopLevelLimit already verified count ≤ maxRows; return directly
     return { sql: sql.trimEnd(), kind, limitInjected: false };
   }
 
-  // 无 LIMIT → 注入截断哨兵
-  // 去掉尾部分号后追加 LIMIT (maxRows+1)，哨兵用于判断是否有截断
+  // No LIMIT → inject a truncation sentinel
+  // Strip the trailing semicolon and append LIMIT (maxRows+1); the sentinel
+  // detects truncation
   let boundedSql = sql.trimEnd();
   if (boundedSql.endsWith(';')) {
     boundedSql = boundedSql.slice(0, -1).trimEnd();
@@ -638,7 +647,7 @@ function validateMysqlSql(sql, { maxRows } = {}) {
   return { sql: boundedSql, kind, limitInjected: true };
 }
 
-// ── 自定义错误 ──
+// ── Custom error ──
 
 class ReadonlyError extends Error {
   constructor(msg) {
