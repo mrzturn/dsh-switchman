@@ -11,3 +11,6 @@ node_modules/
 
 # dsh-switchman runtime state
 .switchman/
+
+# local agent notes (not for publish)
+AGENT.md
