@@ -2,94 +2,82 @@
 
 **English** | [简体中文](./README.zh.md) | [繁體中文](./README.zh-TW.md) | [日本語](./README.ja.md) | [한국어](./README.ko.md) | [Español](./README.es.md) | [Français](./README.fr.md) | [Deutsch](./README.de.md) | [Italiano](./README.it.md) | [Português](./README.pt.md) | [Русский](./README.ru.md)
 
-> **The switchman family**, same author, same orchestration: [opencode-switchman](https://github.com/mrzturn/opencode-switchman) (the OpenCode original) · [zcode-switchman](https://github.com/mrzturn/zcode-switchman) (the ZCode port) · **dsh-switchman** (this repo, the DeepSeek Harness edition).
+> **The switchman family**, same author, same dispatch doctrine: [opencode-switchman](https://github.com/mrzturn/opencode-switchman) (the OpenCode original) · [zcode-switchman](https://github.com/mrzturn/zcode-switchman) (the ZCode port) · **dsh-switchman** (this repo, the DeepSeek Harness edition).
 
-![dsh-switchman — the context water level throws the switch and routes every task into the right lane](docs/assets/hero.svg)
+![dsh-switchman — the context watermark throws the switches and drops each task into the right lane](docs/assets/hero.svg)
 
-> Meter the context, and every task finds its own lane.
+> A water meter on the context; every task finds its own lane.
 
 ## Why you need it
 
-Work in DSH long enough and you run into two things:
+Two pains creep in once you've worked in DSH for a while. First, sessions get heavier the longer they run: history bloats the context into hundreds of thousands of tokens, the model starts forgetting, slowing down, costing more — and a manual /compact loses detail. Second, the main model does everything itself: chasing files, running tests, reconciling data — most of that work belongs on a cheaper model.
 
-1. **Sessions get heavier the longer they run.** History balloons the context to hundreds of thousands of tokens; the model starts forgetting, slowing down, getting expensive — until a manual /compact is your only option, and the moment it compresses, detail is lost.
-2. **Your primary model does everything itself.** Looking up a file, running a test, reconciling data — it chews through all of it alone, slow and costly, when most of that work really belongs on a cheaper model.
+dsh-switchman is a plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH). Once installed, the main model stops doing and starts dispatching: measure the watermark, pick a lane, hand out tasks, check acceptance. It's not a new model — it's a dispatch doctrine hooked onto DSH plus a settings page, and it does seven things:
 
-dsh-switchman is a plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH). Once installed, the primary model goes from "doing everything itself" to working as a dispatcher: measure the water level, pick the lane, hand out the task, check the work. It is not a new model — it is an orchestration doctrine hooked onto DSH plus a settings page. Concretely, it does seven things:
+**1. Context watermark: long sessions don't blow up.** Every turn counts session tokens in real time, and three escalating lines tighten the screws: 50k (soft, adjustable) nudges "time to delegate"; 90k (hard) shrinks the single-read budget and steers toward wrap-up; 130k (force) hands over automatically — forks the session for the record, compacts the context, wakes the fork to continue, task unbroken. Background subagents still running at handover aren't lost either: their ids, tasks, and report paths go into the handover document, so the resumed session knows where to collect reports and never dispatches twice. Every subagent carries its own hard cap and exits after writing its HANDOFF summary.
 
-**1. Context water level: long sessions never burst.** Every turn counts live session tokens against three water marks that ratchet up: 50k (soft, adjustable) nudges "time to delegate"; 90k (hard) tightens the per-read file budget and steers toward wrap-up; 130k (force) hands over automatically — forking a backup of the session, compacting the context, and waking the continuation, so the task never drops. Background subagents still running at that moment are not lost either: their ids, task descriptions, and report paths are written into the handover document, so the resumed session knows where to collect reports instead of dispatching duplicates. Every dispatched subagent carries its own hard cap; on reaching it, the subagent writes its HANDOFF summary and exits.
+**2. Six dispatch pools: the right model for every job.** Economy (batch small chores), mechanical (template rewrites), main (day-to-day coding), hard (hard reasoning and large refactors), vision (images), review (independent verification). On the settings page you tick candidates, order priorities, grade S/A/B/C, and pin a per-route thinking effort — the effort dropdown lists the levels that model actually supports, not a generic three. Every turn's prompt carries a `[SWITCHMAN:POOLS]` recommendation table, and the main model dispatches by it. Three enforcement modes: off / advice / force (force = out-of-pool models get rejected outright).
 
-**2. Six dispatch pools: the right model for every job.** An economy pool (batch chores), a mechanical pool (templated rewrites), a main pool (day-to-day coding), a hard pool (tough reasoning and large-scale refactors), a vision pool (reading images), and a review pool (independent verification). In the settings page you tick candidates, rank them (optional S/A/B/C tiers), and pin a reasoning effort to each individual route — the effort dropdown lists the levels that model actually supports, not a generic three. Every prompt sent to the primary model carries a `[SWITCHMAN:POOLS]` recommendation table, and it dispatches by that table. Execution mode has three states: off / advice / enforce (enforce = out-of-pool models are rejected outright).
+**3. Agent Teams mode: from solo to a team.** Off by default — after install it's lightweight subagent dispatch. Two independent toggles on the settings page:
 
-**3. Agent Teams mode: from working solo to running a team.** Off by default — right after install you get lightweight subagent dispatch. Two independent toggles live in the settings page:
+- **Agent teams** — once on, the team doctrine is injected (delegate by default + tiered verification + shared task-board discipline) and DSH's Agent Teams is enabled automatically: the main model can pull standing teammates (`spawn_teammate`), put work on a shared task board (`team_task_*`), and message teammates. When to form a team follows clear discipline: parallelizable independent subtasks, bulky self-contained work, high main-context watermark, need for role separation; one-off single-point investigations still go to a subagent. Turn the toggle off and the team clauses vanish without residue, and team tools are never yanked from sessions still running.
+- **Subagent model whitelist sync** — DSH keeps an authorization whitelist "allow agents to pick models for subagents": routes chosen in a pool but not authorized get rejected when dispatched by name (marked ⚠ in teams mode). Flip this toggle and the union of all six pools is written into that whitelist wholesale — switchman becomes the single source of truth, no double configuration. The whitelist takes effect as a per-new-session snapshot; the sync only affects sessions started afterwards.
 
-- **Agent teams mode** — turning it on injects the team doctrine (delegate-by-default + tiered verification + shared-task-board discipline) and automatically enables DSH's Agent Teams: the primary model can pull in durable teammates (`spawn_teammate`), assign work on the shared task board (`team_task_*`), and trade messages with teammates (`send_message`). When to build a team follows a clear discipline: parallelizable independent subtasks, bulky self-contained work, a primary context already running high, or a need for role separation; one-off single-point investigations still go through a subagent. DSH's shipped policy is "no team unless the user names one" — here it flips to "use one when it fits". Turning the toggle off again leaves zero residue of the team clauses, and it never strips the team tools from sessions that are already running.
-- **Subagent model whitelist sync** — DSH keeps an authorization whitelist of "models agents may pick for subagents": routes selected in a pool but never authorized get denied when the primary model names them explicitly (in teams mode, the pools table and the settings page flag those routes with ⚠). Flip this toggle and the union of all six pools is written into that whitelist wholesale — no configuring the same thing on both sides, switchman stays the single source of truth, and the fork-dispatch path is covered as well. The whitelist takes effect as a per-new-session snapshot, so the sync only applies to sessions opened afterwards.
+The session header gives at-a-glance feedback: the ⚡ "autonomous team" badge and ◇ with the session's actual model; while an auto-handover runs, a live indicator shows "handover in progress · backup session / compacting context / waking the successor".
 
-The session header keeps you posted at a glance: an ⚡ "autonomous team" badge and a ◇ chip showing the session's actual model; while an automatic handover is running, a live "handover in progress · backing up session / compacting context / waking continuation" banner appears.
+**4. Language preferences: ask once, remember forever.** One dropdown each for replies, code comments, and documents; scope is global or per-project (`.switchman/lang.json`). Skipping is fine — on first use you're asked once in your DSH interface language, and every session obeys the answer afterwards.
 
-**4. Language preferences: asked once, remembered for good.** One dropdown each for replies, code comments, and documentation, with a scope of global or per project (`.switchman/lang.json`). Leaving them unset is fine — the first time it matters, you are asked once in your DSH UI's language, the answer is remembered, and every session afterwards follows it automatically.
+**5. Interface language: the plugin itself speaks your language.** In the "Interface" section atop the settings page sits the "Interface language" dropdown (setting key `uiLocale`): Auto (default, follows the DeepSeek Harness app language), or any built-in interface language picked by hand — options always appear under the language's own endonym, never translated. It switches only the plugin's own interface (badge, home panel, settings page), never the DSH app language: selecting previews live with no restart, the choice is remembered after save and restored on the next launch, and any failure falls back to the app language; the dictionaries ship inline in the plugin bundle, nothing to download.
 
-**5. Interface language: the plugin speaks your language too.** A new top-most "Interface" section on the settings page holds an "Interface language" dropdown (setting key `uiLocale`): Auto (default — follows the DeepSeek Harness app language) or any of the languages the plugin's UI ships in, each shown by its endonym. It switches this plugin's own UI only — the header badge, the home panel, and the settings page — not the DSH app language; the preview is instant with no restart, Save persists the choice per profile, the next start restores it, every failure falls back to the app language, and all dictionaries are inlined in the bundle.
+**6. Tiered verification: every change gets checked.** Changes over 20 lines go to a tester; over 300 lines, or touching core / security / data-consistency logic, additionally to an independent reviewer. The review model is picked anchored on the model of "the agent that wrote the diff", avoiding it where possible; when the pool can't, the conclusion declares DOWNGRADED. Say "don't use the team" once and it drops back to solo instantly.
 
-**6. Tiered verification: every change gets checked.** Changes over 20 lines go to a tester; over 300 lines, or anything touching core / security / data-consistency logic, also gets an independent reviewer pass. The reviewer's model is chosen to avoid the model used by "the agent that wrote the diff" — as far as the pools allow; when they truly cannot, the conclusion declares DOWNGRADED. Say "don't use teams" once and it instantly drops back to solo.
+**7. `/vision`: text-only models can still handle images.** When the main model can't read images, DSH rejects image-bearing messages at the gate. Paste the image, type `/vision what's wrong with this image`, and the image goes to a vision-pool model; the verdict comes back into the current session. A heads-up "current model can't read images" appears above the input box; when a direct image send is rejected, the message is rewritten as `/vision` and resent automatically — no manual redo; with no vision pool configured the command refuses and points to the settings.
 
-**7. `/vision`: text-only models can still work with images.** When your primary model cannot read images, DSH refuses image-bearing messages right at the gate. Attach the image, type `/vision what's wrong with this image`, and the image is resolved to a file path and handed to a vision-pool model to read, with the findings returned to the current session. A hint appears above the composer early on — "the current model can't read images"; when a plain image send is refused, the draft is rewritten once as `/vision` and resubmitted on its own, no manual redo; if no vision pool is configured, the command refuses with setup guidance.
-
-Only one model? Still worth installing — water-level control and tiered verification do not care how many models you have, and long single-model sessions benefit all the same.
+Worth installing even with a single model — watermark control and tiered verification don't care how many models you have, and long single-model sessions benefit just the same.
 
 ## Bundled skills
 
-- **db-query** — read-only MySQL / Redis verification: run SQL to reconcile records, check cache keys / TTLs, and audit cross-store consistency; refuses all writes. One-time setup below.
-- **git-commit-message** — generates convention-compliant commit text. Text only; it never runs git for you.
-- **requirement-docs** — one spec for requirements analysis / PRD / design documents, with output archived to `docs/requirements-and-design/`.
+- **db-query** — read-only MySQL / Redis verification: run SQL to reconcile data, inspect cache keys / TTL, cross-database consistency checks; every write refused. Needs one-time initialization before first use (see below).
+- **git-commit-message** — generates disciplined commit messages; text only, never runs git for you.
+- **requirement-docs** — the house standard for requirement analysis / PRD / design docs; output is archived to `docs/requirements-and-design/`.
 
 ## Quick start
 
-1. **Install** — from any agent session, or the Web plugin manager:
+1. **Install** — have an agent run it in any session, or use the Web plugin management page:
 
    ```
    plugin_manager: install_bundle  target=dsh-switchman
    ```
 
-   or from a local checkout (linked; re-run `remove_bundle` + `install_bundle` after pulling changes):
+   Or install from a local checkout (link mode; after an update, `remove_bundle` + `install_bundle` again):
 
    ```
    plugin_manager: install_bundle  target=/path/to/dsh-switchman
    ```
 
-   or from a terminal via the `dsh` CLI — pick the profile that matches how you run DSH:
+   Or with the `dsh` CLI in a terminal — pick the profile matching how you run it:
 
    ```bash
    dsh plugin --profile web add dsh-switchman      # Web GUI
    dsh plugin --profile desktop add dsh-switchman   # desktop app
    ```
 
-2. **Restart DSH** — quit the app entirely and reopen (a page reload is not enough) so the client-module table picks up the bundle.
+2. **Restart DSH** — quit the app completely and reopen it (a page refresh doesn't count); only then does the client module table recognize the bundle.
 
-3. **Language preferences** — Settings → dsh-switchman, or "Switchman Control Center" in the home sidebar. The first screen sets the scope: global (this profile) or per project (each project's `.switchman/lang.json`); then three dropdowns set the reply / comment / doc languages, each with a live "current: …" line underneath. Skipping is fine — you will be asked once on first use and remembered (the question is asked in your DSH UI language).
+3. **Configure** — Settings → dsh-switchman, or "Switchman Dispatch Center" in the home sidebar. It's a single page of config and looks like this — walk it top to bottom and you're done:
 
-   ![Language preferences: scope and the three languages](docs/assets/conf-language-en.png)
+   ![The dsh-switchman settings page in full: interface language, language preferences, six dispatch pools, capability ranking and enforcement mode, team toggles, context watermark and commands](docs/assets/conf-interface-en.png)
 
-4. **Fill the dispatch pools** — each pool card lists candidate models grouped by provider; tick the ones you want. Tick "manual order" and the card becomes a numbered priority list you reorder with ↑ ↓ ×; next to each route you can also pin a reasoning effort (it defaults to "follow lane"; pinning it lists the levels that model actually supports). A summary line at the top tracks progress live, e.g. "6/6 pools set · 2 ranked · advice mode".
+   - **Interface** — the plugin's own UI language. The dropdown in the shot sits at English — a live preview of switching; the shipped default is Auto (follows the DSH app language). Picking a language flips the whole page on the spot and is remembered after save; switch back to Auto anytime.
+   - **Languages** — the languages of agent output. The scope in the shot is "Global (this profile)" (per-project works too, each reading `.switchman/lang.json`); the reply / code comments / documents dropdowns in the shot all sit at English, each displayed as "endonym (tag)" — e.g. "English (en)" — with a "current: …" status line beneath each. Leaving all three unset is fine too: asked once on first use, remembered from then on.
+   - **Dispatch pools** — six cards in two rows of three: economy, mechanical, main on top; hard, vision, review below. Tick candidate models grouped by provider; tick "manual order" and a card becomes a numbered priority list reorderable with ↑ ↓ ×; every route can pin a thinking effort (default "follow lane"). The summary line at the top updates live — in the shot: "4/6 pools configured · 2 ranked · mode advice".
+   - **Capability ranking + enforcement mode** — the union of selected models across the six pools, ranked by capability, strongest first (the shot anchors glm-5.3 at S and glm-5.3-flash at A), reorderable and removable; enforcement mode advice / force (force = out-of-pool models rejected outright).
+   - **Agent teams** — the two toggles for team mode and whitelist sync, both off by default; in the shot they're on, with a sync status line beneath the toggle.
+   - **Context watermark** — the three thresholds (50000 / 90000 / 130000 in the shot), the single-read budget (1500), hard-tier behavior (throttle-pass / block), the auto-handover toggle, and subagent independent caps all live here. Bottom command row: `/ctx-pause` pause intervention · `/ctx-resume` resume · `/ctx-handover` back up and hand over now (it steers the session to an idle boundary before compacting — the result can take a few minutes).
 
-   ![Dispatch pools: the economy / mechanical / main / hard pools](docs/assets/conf-pool-1-en.png)
+4. **Verify** — the ⚡ "autonomous team" badge appears in the session header (with ◇ beside it showing the session's current model); or simply ask the model "what's the heading of the last section of your system prompt" — the answer should mention the dsh-switchman doctrine.
 
-   The vision and review pools live below; further down sit **capability ranking** (the union of the models selected across the six pools — the index is the capability order, strongest first, with optional S/A/B/C tiers) and **execution mode** (advice / enforce).
-
-   ![Vision pool, review pool, capability ranking, and execution mode](docs/assets/conf-pool-2-en.png)
-
-5. **Agent teams** — both toggles are off by default; start with plain subagent dispatch. To let the model pull teams in on its own, turn on "agent teams mode"; to skip authorizing the same routes twice, turn on "subagent model whitelist sync" — a "synced N routes + time" status line under the toggle confirms what was written.
-
-   ![Agent teams: the two toggles and the whitelist-sync status](docs/assets/conf-team-en.png)
-
-6. **Context water level** — the three thresholds (defaults 50000 / 90000 / 130000), the per-read budget, hard-mode behavior (throttled pass / block), the auto-handover toggle, and the subagent-specific cap all live in this section. The bottom line carries the commands: `/ctx-pause` to pause intervening · `/ctx-resume` to resume · `/ctx-handover` to back up and hand over now (it steers the session to an idle boundary and waits out the compaction retry window, so the result can take a few minutes).
-
-   ![Context water level: thresholds, budgets, and commands](docs/assets/conf-ctx-en.png)
-
-7. **Verify** — an ⚡ "autonomous team" badge appears in the session header (with a ◇ beside it showing the current session model); or simply ask the model "what is the heading of the last section of your system prompt" — the answer should mention the dsh-switchman doctrine.
-
-**db-query one-time setup** (script dependencies install inside the skill directory — your project stays clean):
+**db-query one-time initialization** (script dependencies install inside the skill directory, nothing pollutes your project):
 
 ```bash
 bash <install-dir>/skills/db-query/scripts/setup.sh
@@ -97,16 +85,16 @@ bash <install-dir>/skills/db-query/scripts/setup.sh
 
 ## How it works
 
-- The Host half (`index.js` + `host/`) injects the dynamic system-prompt sections (language / lanes / water level / teams), the read-budget and enforce gates, and four slash commands (the ctx trio + `/vision`). Save a setting and it applies to the next prompt assembly — no restart needed.
-- The Client half (`client.js`) renders the settings page, the ⚡ badge and ◇ model chip in the session header, and the live handover-in-progress banner, through official settings-form services.
-- The "Switchman Control Center" entry in the home sidebar opens the same configuration page (interface language, language preferences, dispatch pools & ranking, water level) as a central panel with one click; the original settings entry stays.
-- `cordis.patch.yml` keeps the shipped preset plugin list verbatim and extends only the persona suffix; the Agent Teams tools themselves come from the shipped bundle and are enabled automatically when teams mode is turned on.
+- The host half (`index.js` + `host/`) injects the dynamic system-prompt sections (language / lanes / watermark / teams), the read-budget plus enforce double gate, and four slash commands (the ctx trio + `/vision`). A saved setting takes effect at the very next prompt assembly — no restart.
+- The client half (`client.js`) renders the settings page, the ⚡ badge and ◇ model marker in the session header, and the live handover indicator; config snapshots are read and written through the Host route family.
+- The "Switchman Dispatch Center" entry in the home sidebar opens that same settings page as a center panel in one click; the original settings entry stays.
+- `cordis.patch.yml` keeps the factory preset plugin list fully intact and only extends the persona suffix; the Agent Teams tools themselves come from the factory bundle and switch on automatically with teams mode.
 
-## Maintenance
+## Maintenance notes
 
-- After a DSH upgrade that changes shipped preset plugin lists, re-sync `cordis.patch.yml` from the new `presets/*.patch.yml` (keep the doctrine suffix), then reinstall.
-- Protocol lines (`[SWITCHMAN:LANG|POOLS|WATERMARK|TEAMS]`) are deliberately English and byte-stable — do not localize them.
-- `npm pack --dry-run` must stay at the audited 50 files / ~205 kB shape (`docs/` screenshots never ship).
+- After a DSH upgrade, if the factory preset plugin list changed, re-sync `cordis.patch.yml` from the new `presets/*.patch.yml` (keeping the doctrine suffix), then reinstall.
+- Protocol lines (`[SWITCHMAN:LANG|POOLS|WATERMARK|TEAMS]`) are deliberately English and byte-stable — don't localize them.
+- `npm pack --dry-run` should keep the audited 50-file / ~205 kB shape (`docs/` screenshots stay out of the package).
 
 ## License
 
