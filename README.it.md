@@ -104,7 +104,7 @@ bash <install-dir>/skills/db-query/scripts/setup.sh
 
 - Dopo un upgrade di DSH che cambia la lista di plugin dei preset di serie, risincronizza `cordis.patch.yml` dai nuovi `presets/*.patch.yml` (mantieni il doctrine suffix), poi reinstalla.
 - Le righe di protocollo (`[SWITCHMAN:LANG|POOLS|WATERMARK|TEAMS]`) restano deliberatamente in inglese e stabili al byte — non localizzarle.
-- `npm pack --dry-run` deve restare alla forma auditata di 43 file / ~138 kB (gli screenshot in `docs/` non viaggiano nel pacchetto).
+- `npm pack --dry-run` deve restare alla forma auditata di 50 file / ~205 kB (gli screenshot in `docs/` non viaggiano nel pacchetto).
 
 ## License
 

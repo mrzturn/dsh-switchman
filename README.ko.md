@@ -104,7 +104,7 @@ bash <install-dir>/skills/db-query/scripts/setup.sh
 
 - DSH 업그레이드 후 출하 시 기본 프리셋 플러그인 목록이 바뀌었다면, 새 `presets/*.patch.yml` 에서 `cordis.patch.yml` 을 다시 동기화하고(doctrine suffix 유지), 재설치합니다.
 - 프로토콜 줄(`[SWITCHMAN:LANG|POOLS|WATERMARK|TEAMS]`)은 의도적으로 영어·바이트 안정을 유지합니다 — 현지화하지 마십시오.
-- `npm pack --dry-run` 은 감사된 43개 파일 / ~138 kB 형태를 유지해야 합니다(`docs/` 스크린샷은 패키지에 포함되지 않습니다).
+- `npm pack --dry-run` 은 감사된 43개 파일 / ~205 kB 형태를 유지해야 합니다(`docs/` 스크린샷은 패키지에 포함되지 않습니다).
 
 ## License
 

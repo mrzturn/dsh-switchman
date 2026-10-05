@@ -104,7 +104,7 @@ bash <install-dir>/skills/db-query/scripts/setup.sh
 
 - Ändert ein DSH-Upgrade die Plugin-Listen der Werks-Presets, `cordis.patch.yml` aus den neuen `presets/*.patch.yml` neu synchronisieren (das doctrine suffix behalten) und anschließend neu installieren.
 - Die Protokollzeilen (`[SWITCHMAN:LANG|POOLS|WATERMARK|TEAMS]`) bleiben bewusst englisch und byte-stabil — nicht lokalisieren.
-- `npm pack --dry-run` muss in der auditierten Form von 43 Dateien / ~138 kB bleiben (die `docs/`-Screenshots wandern nicht ins Paket).
+- `npm pack --dry-run` muss in der auditierten Form von 50 Dateien / ~205 kB bleiben (die `docs/`-Screenshots wandern nicht ins Paket).
 
 ## Lizenz
 

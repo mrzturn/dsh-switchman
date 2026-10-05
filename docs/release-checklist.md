@@ -12,7 +12,7 @@
 
 - [x] 市场面：icon.svg（517B）、locale/{en,zh}.json 展示 meta、exports `./locale/*.json`、`dsh.manifestVersion: 1`、`engines.dsh: >=0.2.0-rc.0`
 - [x] 依赖：唯一 dependencies `@deepseek-ai/schemastery@3.18.4`（与宿主同版，零 peer 依赖 → 安装前置检查无拒绝面）
-- [x] files 精确枚举：`npm pack --dry-run` = **44 文件 / ~139 kB / 零 node_modules**（含 11 语言 README 与 host/ui-locale.js；技能本地依赖经 setup.sh 首用安装；docs/ 截图不进包，CI 有防泄漏断言）
+- [x] files 精确枚举：`npm pack --dry-run` = **50 文件 / ~205 kB（2026-10-05 复核） / 零 node_modules**（含 11 语言 README 与 host/ui-locale.js；技能本地依赖经 setup.sh 首用安装；docs/ 截图不进包，CI 有防泄漏断言）
 - [x] 脱敏扫描：全仓 grep（凭据模式 / 个人路径 / 内网地址 / Bearer token）仅命中公开 GitHub URL 与本文件所在 docs/ 目录（docs/ 不在 files 内，不随包发布）
 - [x] validate.mjs：4 项全绿（patch 与出厂逐字段一致 / 客户端发现面 / 市场面 / 技能完整）
 - [x] 双语 README（README.md 英文 + README.zh.md 中文）
@@ -21,7 +21,7 @@
 
 ## 发布当日流程
 
-1. 本地确认 `node scripts/validate.mjs` 全绿、`npm pack --dry-run` 保持 34 文件形态（CI 会再跑一遍）。
+1. 本地确认 `node scripts/validate.mjs` 全绿、`npm pack --dry-run` 保持 50 文件形态（CI 会再跑一遍）。
 2. 脱敏复扫（上方 grep 命令，预期仅公开 URL）。
 3. 版本号确认：`package.json` 的 version 与即将发布的 Release tag 一致（`v1.3.0` ↔ `1.3.0`，CI 强校验）。
 4. 在 GitHub 上基于 main 打 `v*` tag 发 Release → Actions 等待 `release-publish` 环境审批 → 批准后自动 `npm publish`。

@@ -104,7 +104,7 @@ bash <安装目录>/skills/db-query/scripts/setup.sh
 
 - DSH 升级后若出厂预设插件列表有变，从新的 `presets/*.patch.yml` 重新同步 `cordis.patch.yml`（保留 doctrine suffix），然后重装。
 - 协议行（`[SWITCHMAN:LANG|POOLS|WATERMARK|TEAMS]`）刻意保持英文且字节稳定——不要本地化。
-- `npm pack --dry-run` 应保持审计过的 43 文件 / ~138 kB 形态（`docs/` 截图不进包）。
+- `npm pack --dry-run` 应保持审计过的 50 文件 / ~205 kB 形态（`docs/` 截图不进包）。
 
 ## License
 
