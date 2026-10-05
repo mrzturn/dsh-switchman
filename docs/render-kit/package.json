@@ -1,0 +1,13 @@
+{
+	"name": "dsh-switchman-render-kit",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Offline renderer for the dsh-switchman settings-page screenshots (docs/assets).",
+	"license": "MIT",
+	"type": "commonjs",
+	"dependencies": {
+		"playwright-core": "^1.63.0",
+		"react": "^18.2.0",
+		"react-dom": "^18.2.0"
+	}
+}

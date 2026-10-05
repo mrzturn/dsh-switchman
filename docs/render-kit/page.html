@@ -1,0 +1,208 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>dsh-switchman settings render</title>
+<style>
+	:root {
+		/* Dark-theme alias tokens (fallback palette, visually consistent
+		   with the DSH app; GUI CSS itself is auth-gated). */
+		--dsw-alias-bg-base: #131417;
+		--dsw-alias-bg-layer-1: #1b1d21;
+		--dsw-alias-bg-layer-2: #232529;
+		--dsw-alias-bg-overlay: #26282d;
+		--dsw-alias-border-l1: #2e3136;
+		--dsw-alias-border-l2: #3a3e45;
+		--dsw-alias-brand-primary: #4c7dff;
+		--dsw-alias-label-primary: #e8eaed;
+		--dsw-alias-label-secondary: #a6acb4;
+		--dsw-alias-label-tertiary: #7d848d;
+		--dsw-alias-state-error-primary: #e5566d;
+		--dsw-alias-state-idle-primary: #8a919c;
+		--dsw-alias-state-success-primary: #57ab5a;
+		--dsw-alias-state-warn-primary: #daaa3f;
+		--dsw-alias-sidebar-fill: #191b1f;
+		--dsw-alias-interactive-bg-hover: #2a2d33;
+		--dsw-alias-state-business-primary: #6c8cff;
+		--dsw-radius-xs: 4px;
+		--dsw-radius-md: 8px;
+	}
+	html, body {
+		margin: 0;
+		padding: 0;
+		background: var(--dsw-alias-bg-base);
+		color: var(--dsw-alias-label-primary);
+		font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+			"Hiragino Sans GB", "Hiragino Sans", "Microsoft YaHei", "Noto Sans CJK SC",
+			"Noto Sans CJK TC", "Noto Sans CJK JP", "Noto Sans CJK KR", "Helvetica Neue",
+			Arial, sans-serif;
+		-webkit-font-smoothing: antialiased;
+	}
+	#root { background: transparent; }
+	select, input, button, textarea { font-family: inherit; }
+</style>
+<script src="node_modules/react/umd/react.production.min.js"></script>
+<script src="node_modules/react-dom/umd/react-dom.production.min.js"></script>
+<script>
+	// ------------------------------------------------------------------
+	// Environment mock, installed BEFORE the plugin bundle loads.
+	// ------------------------------------------------------------------
+	(function () {
+		const params = new URLSearchParams(location.search);
+		// The interface-locale the saved settings carry ('auto' follows the
+		// DSH app language). This value flows through the bundle's real
+		// startup-restore IIFE -> applyUiLocale -> EXTRA_UI_DICTS path.
+		const targetLocale = params.get('locale') || 'auto';
+		// Demo DSH app language used to resolve 'auto': zh, so the unsuffixed
+		// conf-interface.png capture matches the zh README.
+		const APP_LOCALE = 'zh';
+		window.__APP_LOCALE__ = APP_LOCALE;
+
+		const POOL_ROUTES = {
+			poolEconomy: [{ provider: 'zai-coding-cn', model: 'glm-5.3-flash' }],
+			poolMain: [
+				{ provider: 'zai-coding-cn', model: 'glm-5.3' },
+				{ provider: 'zai-coding-cn', model: 'glm-5.3-flash' },
+			],
+			poolHard: [{ provider: 'zai-coding-cn', model: 'glm-5.3' }],
+			poolReview: [{ provider: 'zai-coding-cn', model: 'glm-5.3' }],
+		};
+		const langValue = targetLocale === 'auto' ? 'zh-CN' : targetLocale;
+		const CONFIG = {
+			values: Object.assign(
+				{
+					uiLocale: targetLocale,
+					langScope: 'global',
+					langConversation: langValue,
+					langComments: langValue,
+					langDocs: langValue,
+					modelRank: [
+						{ provider: 'zai-coding-cn', model: 'glm-5.3', tier: 'S' },
+						{ provider: 'zai-coding-cn', model: 'glm-5.3-flash', tier: 'A' },
+					],
+					dispatchEnforce: 'advice',
+					wmSoftTokens: 50000,
+					wmHardTokens: 90000,
+					wmForceTokens: 130000,
+					wmReadBudgetTokens: 1500,
+					wmSubagentForceTokens: 0,
+					wmDenyMode: 'cap',
+					wmAutoHandover: true,
+					wmSubagentCap: true,
+					teamsMode: true,
+					syncWhitelist: true,
+				},
+				POOL_ROUTES,
+			),
+			whitelistSync: null,
+		};
+		// Model catalog: the wire shape indexCatalog consumes
+		// ({id, name?, models: [{provider?, id, name?, reasoning?}]}).
+		const MODELS = {
+			groups: [
+				{
+					id: 'zai-coding-cn',
+					name: 'zai-coding-cn',
+					models: [
+						{ id: 'glm-5.3', name: 'glm-5.3', reasoning: { efforts: ['medium', 'high'] } },
+						{ id: 'glm-5.3-flash', name: 'glm-5.3-flash', reasoning: { efforts: ['low', 'medium', 'high'] } },
+					],
+				},
+				{
+					id: 'anthropic',
+					name: 'Claude',
+					models: [
+						{ id: 'claude-sonnet-4-5', name: 'claude-sonnet-4-5', reasoning: { efforts: ['low', 'medium', 'high'] } },
+					],
+				},
+			],
+			failures: [],
+		};
+		// Session child-model authorization: every configured route is
+		// authorized, so no drift badges appear.
+		const AUTHORIZED = {
+			enabled: true,
+			routes: [
+				{ provider: 'zai-coding-cn', model: 'glm-5.3' },
+				{ provider: 'zai-coding-cn', model: 'glm-5.3-flash' },
+			],
+		};
+		window.fetch = async (url) => {
+			const s = String(url);
+			let body = {};
+			if (s.includes('config')) body = CONFIG;
+			else if (s.includes('models')) body = MODELS;
+			else if (s.includes('authorized')) body = AUTHORIZED;
+			return { ok: true, status: 200, json: async () => body };
+		};
+		// Classic-script ModuleLoader sink: capture the load() definition
+		// so the bootstrap below can drive factory(requireMock).apply(ctx).
+		window.__ModuleLoader__ = {
+			load(def) { window.__DSH_DEF__ = def; },
+		};
+	})();
+</script>
+<script src="client.js"></script>
+</head>
+<body>
+	<div id="root"></div>
+	<script>
+		// ------------------------------------------------------------------
+		// Bootstrap: mirror of the Host client-module contract
+		// (factory(require).apply(ctx) + the settings.section injector).
+		// Runs at the end of <body> so #root exists.
+		// ------------------------------------------------------------------
+		(function () {
+			const def = window.__DSH_DEF__;
+			const requireMock = (id) => {
+				if (id === 'react') return window.React;
+				throw new Error('require ' + id);
+			};
+			// Host locale contract, mirrored faithfully: register(NS, dicts)
+			// stores the plugin dictionaries; bind(NS) resolves keys against the
+			// active app locale with {param} interpolation (the same transform
+			// as the bundle's formatUiValue). 'auto' uses APP_LOCALE = zh.
+			const registered = Object.create(null);
+			const APP_LOCALE = window.__APP_LOCALE__;
+			const interpolate = (text, params) =>
+				typeof params === 'object' && params !== null
+					? text.replace(/\{(\w+)\}/g, (match, name) =>
+						name in params ? String(params[name]) : match)
+					: text;
+			const localeListeners = new Set();
+			// Stable snapshot object: the real host's getLocale() returns a
+			// cached shape (client.js relies on reference stability; a fresh
+			// object per call loops real React into error #185).
+			const localeSnapshot = Object.freeze({ active: APP_LOCALE });
+			const ctxMock = {
+				effect: (f) => f(),
+				locale: {
+					register: (ns, dicts) => { registered[ns] = dicts; },
+					bind: (ns) => (key, params) => {
+						const dicts = registered[ns] || {};
+						let text = dicts[APP_LOCALE] && dicts[APP_LOCALE][key];
+						if (typeof text !== 'string') text = dicts.en && dicts.en[key];
+						if (typeof text !== 'string') return key;
+						return interpolate(text, params);
+					},
+					getLocale: () => localeSnapshot,
+					subscribe: (fn) => {
+						localeListeners.add(fn);
+						return () => localeListeners.delete(fn);
+					},
+				},
+				slots: {
+					inject: (name, f) => {
+						window.__injectors__ = window.__injectors__ || {};
+						window.__injectors__[name] = f;
+					},
+					register: (d, r) => ({ d, r }),
+				},
+			};
+			def.factory(requireMock).apply(ctxMock);
+			const element = window.__injectors__['settings.section']().r();
+			ReactDOM.createRoot(document.getElementById('root')).render(element);
+		})();
+	</script>
+</body>
+</html>
