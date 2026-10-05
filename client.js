@@ -3253,6 +3253,8 @@ window.__ModuleLoader__.load({
 		React.useSyncExternalStore(subscribeUiLocale, () => uiLocaleVersion);
 		// Hooks above the availability early-returns keep a stable order.
 		const headingId = React.useId();
+		const uiHeadingId = React.useId();
+		const uiSelectId = React.useId();
 
 		/** Live settings snapshot from the Host route: { status, writable,
 		 *  values } — mirrors the configForms snapshot shape the page was
@@ -4055,8 +4057,6 @@ window.__ModuleLoader__.load({
 				);
 			};
 
-			const uiHeadingId = React.useId();
-			const uiSelectId = React.useId();
 			return h(
 				'div',
 				{ 'data-dsh-switchman': 'settings', style: STYLE.page },
