@@ -67,23 +67,23 @@ Nur ein Modell? Die Installation lohnt sich trotzdem — Wasserstandskontrolle u
 
 3. **Spracheinstellungen** — Settings → dsh-switchman, oder das „Switchman-Control-Center“ in der Startseiten-Seitenleiste. Der erste Bildschirm wählt zuerst den Geltungsbereich: global (dieses Profil) oder pro Projekt (die `.switchman/lang.json` des jeweiligen Projekts); dann legen drei Dropdowns die Sprachen für Antworten / Kommentare / Dokumente fest, jedes mit einer „aktuell: …“-Statuszeile darunter. Überspringen ist erlaubt — beim ersten Gebrauch wird einmal gefragt und die Antwort gemerkt (gefragt wird in der Sprache Ihrer DSH-Oberfläche).
 
-   ![Spracheinstellungen: Geltungsbereich und drei Sprachen](docs/assets/conf-language.png)
+   ![Spracheinstellungen: Geltungsbereich und drei Sprachen](docs/assets/conf-language-en.png)
 
 4. **Die Dispatch-Pools füllen** — jede Pool-Karte listet Kandidatenmodelle gruppiert nach Anbieter; haken Sie die gewünschten ab. „Manuelle Reihenfolge“ anhaken, und die Karte wird zu einer nummerierten Prioritätsliste, die sich mit ↑ ↓ × umsortieren lässt; neben jeder Route lässt sich zusätzlich ein Reasoning-Effort anpinnen (standardmäßig „der Spur folgen“; beim Anpinnen listet er die Stufen, die dieses Modell tatsächlich unterstützt). Eine Zusammenfassungszeile oben verfolgt den Fortschritt live, zum Beispiel „6/6 Pools konfiguriert · 2 gerankt · Modus advice“.
 
-   ![Dispatch-Pools: die vier Pools economy / mechanical / main / hard](docs/assets/conf-pool-1.png)
+   ![Dispatch-Pools: die vier Pools economy / mechanical / main / hard](docs/assets/conf-pool-1-en.png)
 
    Multimodal-Pool und Review-Pool stehen darunter; weiter unten folgen das **Fähigkeits-Ranking** (die Vereinigung der in den sechs Pools gewählten Modelle — der Rang ist die Fähigkeitsreihenfolge, das stärkste zuerst, optional mit S/A/B/C-Tiers) und der **Ausführungsmodus** (advice / enforce).
 
-   ![Multimodal-Pool, Review-Pool, Fähigkeits-Ranking und Ausführungsmodus](docs/assets/conf-pool-2.png)
+   ![Multimodal-Pool, Review-Pool, Fähigkeits-Ranking und Ausführungsmodus](docs/assets/conf-pool-2-en.png)
 
 5. **Agent-Teams** — beide Schalter sind standardmäßig aus; starten Sie mit reinem subagent-Dispatch. Soll das Modell selbst Teams anwerben, schalten Sie den „Agent-Teams-Modus“ ein; um dieselben Routen nicht doppelt freigeben zu müssen, schalten Sie die „Synchronisation der Subagent-Modell-Whitelist“ ein — eine Statuszeile „synchronisiert: N Routen + Zeitstempel“ unter dem Schalter bestätigt, was geschrieben wurde.
 
-   ![Agent-Teams: die beiden Schalter und der Whitelist-Synchronisierungsstatus](docs/assets/conf-team.png)
+   ![Agent-Teams: die beiden Schalter und der Whitelist-Synchronisierungsstatus](docs/assets/conf-team-en.png)
 
 6. **Kontext-Wasserstand** — die drei Schwellenwerte (Standard 50000 / 90000 / 130000), das Lesebudget pro Aufruf, das Hard-Mode-Verhalten (gedrosselter Durchlass / Blockade), der Schalter für automatische Übergabe und das eigene Subagent-Limit liegen alle in diesem Bereich. Die unterste Zeile trägt die Befehle: `/ctx-pause` pausiert die Eingriffe · `/ctx-resume` setzt fort · `/ctx-handover` sichert und übergibt sofort (es lenkt die Sitzung an eine Leerlaufgrenze und wartet das Komprimierungs-Wiederholungsfenster ab — das Ergebnis kann einige Minuten dauern).
 
-   ![Kontext-Wasserstand: Schwellenwerte, Budgets und Befehle](docs/assets/conf-ctx.png)
+   ![Kontext-Wasserstand: Schwellenwerte, Budgets und Befehle](docs/assets/conf-ctx-en.png)
 
 7. **Verifizieren** — in der Sitzungskopfzeile erscheint ein ⚡-Badge „autonomes Team“ (neben einem ◇, das das Modell der aktuellen Sitzung zeigt); oder fragen Sie das Modell einfach: „Wie lautet die Überschrift des letzten Abschnitts deines Systemprompts?“ — die Antwort sollte die dsh-switchman-Doktrin erwähnen.
 

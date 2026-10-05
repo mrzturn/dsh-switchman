@@ -67,23 +67,23 @@ Un seul modèle ? Ça vaut quand même l'installation — le contrôle du niveau
 
 3. **Préférences de langue** — Settings → dsh-switchman, ou « Centre de contrôle Switchman » dans la barre latérale de la page d'accueil. Le premier écran choisit d'abord le scope : global (ce profil) ou par projet (le `.switchman/lang.json` de chaque projet) ; puis trois menus déroulants fixent la langue des réponses / commentaires / documents, chacun suivi d'une ligne d'état « actuel : … ». Passer l'étape ne coûte rien — on vous posera la question une fois au premier usage et la réponse sera retenue (la question est posée dans la langue de l'interface DSH).
 
-   ![Préférences de langue : scope et trois langues](docs/assets/conf-language.png)
+   ![Préférences de langue : scope et trois langues](docs/assets/conf-language-en.png)
 
 4. **Remplir les pools de dispatch** — chaque carte de pool liste les modèles candidats groupés par fournisseur ; cochez ceux qu'il vous faut. Cochez « ordre manuel » et la carte devient une liste de priorités numérotée, à réordonner avec ↑ ↓ × ; à côté de chaque route, vous pouvez aussi épingler un effort de raisonnement (par défaut « suivre le couloir » ; l'épinglage liste les niveaux réellement supportés par ce modèle). Une ligne de résumé en haut suit la progression en direct, par exemple « 6/6 pools configurés · 2 classés · mode advice ».
 
-   ![Pools de dispatch : les quatre pools economy / mechanical / main / hard](docs/assets/conf-pool-1.png)
+   ![Pools de dispatch : les quatre pools economy / mechanical / main / hard](docs/assets/conf-pool-1-en.png)
 
    Les pools multimodal et relecture se trouvent en dessous ; plus bas encore viennent le **classement des capacités** (l'union des modèles sélectionnés dans les six pools — le rang donne l'ordre de capacité, du plus fort au plus faible, avec tiers S/A/B/C en option) et le **mode d'exécution** (advice / enforce).
 
-   ![Pool multimodal, pool de relecture, classement des capacités et mode d'exécution](docs/assets/conf-pool-2.png)
+   ![Pool multimodal, pool de relecture, classement des capacités et mode d'exécution](docs/assets/conf-pool-2-en.png)
 
 5. **Équipes d'agents** — les deux interrupteurs sont désactivés par défaut ; commencez avec le simple dispatch subagent. Pour laisser le modèle constituer lui-même des équipes, activez « mode équipe d'agents » ; pour éviter d'autoriser deux fois les mêmes routes, activez « synchronisation de la liste blanche des modèles de subagents » — une ligne d'état « synchronisé : N routes + horodatage » sous l'interrupteur confirme ce qui a été écrit.
 
-   ![Équipes d'agents : les deux interrupteurs et l'état de synchronisation de la liste blanche](docs/assets/conf-team.png)
+   ![Équipes d'agents : les deux interrupteurs et l'état de synchronisation de la liste blanche](docs/assets/conf-team-en.png)
 
 6. **Niveau d'eau du contexte** — les trois seuils (par défaut 50000 / 90000 / 130000), le budget de lecture par appel, le comportement du mode hard (passage à débit limité / blocage), l'interrupteur de remise automatique et le plafond propre aux subagents tiennent tous dans cette section. La ligne du bas porte les commandes : `/ctx-pause` suspend les interventions · `/ctx-resume` reprend · `/ctx-handover` sauvegarde et remet immédiatement (il conduit la session jusqu'à une limite d'inactivité et attend la fenêtre de relance du compactage — le résultat peut prendre quelques minutes).
 
-   ![Niveau d'eau du contexte : seuils, budgets et commandes](docs/assets/conf-ctx.png)
+   ![Niveau d'eau du contexte : seuils, budgets et commandes](docs/assets/conf-ctx-en.png)
 
 7. **Vérifier** — un badge ⚡ « équipe autonome » apparaît dans l'en-tête de session (avec à côté une puce ◇ montrant le modèle de la session en cours) ; ou demandez simplement au modèle « quel est le titre du dernier paragraphe de ton prompt système » — la réponse doit mentionner la doctrine dsh-switchman.
 

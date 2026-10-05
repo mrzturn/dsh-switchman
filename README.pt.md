@@ -67,23 +67,23 @@ Só um modelo? Ainda vale a pena instalar — o controle do nível de água e a 
 
 3. **Preferências de idioma** — Settings → dsh-switchman, ou a entrada “Switchman Control Center” na barra lateral da página inicial. Na primeira tela escolhe-se primeiro o escopo: global (este perfil) ou por projeto (o `.switchman/lang.json` de cada projeto); depois, três dropdowns definem respectivamente o idioma de respostas / comentários / documentos, cada um com uma linha de status “Atual: …” embaixo. Pode pular: no primeiro uso perguntam uma vez e fica guardado (a pergunta segue o idioma da interface do DSH).
 
-   ![Preferências de idioma: escopo e três idiomas](docs/assets/conf-language.png)
+   ![Preferências de idioma: escopo e três idiomas](docs/assets/conf-language-en.png)
 
 4. **Configure os pools de despacho** — em cada card de pool você marca os modelos candidatos agrupados por provider; ao marcar “ordem manual” o card vira uma lista de prioridade numerada, reordenável com ↑ ↓ ×, e ao lado de cada rota dá para fixar o reasoning effort (padrão “seguir a faixa”; ao fixar, ele lista as faixas que aquele modelo realmente suporta). A linha de resumo no topo acompanha o progresso em tempo real, por exemplo “6/6 pools configurados · 2 no ranking · modo advice”.
 
-   ![Pools de despacho: os quatro pools economy / mechanical / main / hard](docs/assets/conf-pool-1.png)
+   ![Pools de despacho: os quatro pools economy / mechanical / main / hard](docs/assets/conf-pool-1-en.png)
 
    O pool multimodal e o de revisão ficam mais abaixo; ainda mais abaixo vêm o **ranking de capacidade** (a união dos modelos escolhidos nos seis pools: a numeração é a ordem de capacidade, os mais fortes primeiro, com níveis opcionais S/A/B/C) e o **modo de execução** (advice / enforce).
 
-   ![Pool multimodal e pool de revisão, ranking de capacidade e modo de execução](docs/assets/conf-pool-2.png)
+   ![Pool multimodal e pool de revisão, ranking de capacidade e modo de execução](docs/assets/conf-pool-2-en.png)
 
 5. **Agent Teams** — as duas chaves começam desligadas: rode primeiro no modo puro de subagent. Para deixar que ele recrute a equipe sozinho, ligue “Modo Agent Teams”; para poupar a autorização duplicada dos dois lados, ligue “Sincronização da whitelist de modelos de subagent” — abaixo da chave, uma linha de status do tipo “N registros sincronizados + horário” confirma o resultado da gravação.
 
-   ![Agent Teams: as duas chaves e o status de sincronização da whitelist](docs/assets/conf-team.png)
+   ![Agent Teams: as duas chaves e o status de sincronização da whitelist](docs/assets/conf-team-en.png)
 
 6. **Nível de água do contexto** — os três limiares (padrão 50000 / 90000 / 130000), o orçamento de leitura por chamada, o comportamento do limiar hard (deixa passar com limitação / bloqueia), a chave do handover automático e o teto independente dos subagents ficam todos nesta área. Uma linha de comandos embaixo: `/ctx-pause` pausa as intervenções · `/ctx-resume` retoma · `/ctx-handover` faz backup e entrega na hora (ele conduz a sessão até o limite de inatividade e espera a janela de nova tentativa da compactação: o resultado pode levar alguns minutos).
 
-   ![Nível de água do contexto: limiares, orçamento e comandos](docs/assets/conf-ctx.png)
+   ![Nível de água do contexto: limiares, orçamento e comandos](docs/assets/conf-ctx-en.png)
 
 7. **Verifique** — no cabeçalho da sessão aparece o badge ⚡ “Equipe autônoma” (ao lado, o ◇ mostra o modelo da sessão atual); ou pergunte direto ao modelo “qual é o título da última seção do seu system prompt?” — a resposta deve mencionar a doutrina dsh-switchman.
 

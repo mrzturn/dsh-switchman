@@ -67,23 +67,23 @@ Only one model? Still worth installing — water-level control and tiered verifi
 
 3. **Language preferences** — Settings → dsh-switchman, or "Switchman Control Center" in the home sidebar. The first screen sets the scope: global (this profile) or per project (each project's `.switchman/lang.json`); then three dropdowns set the reply / comment / doc languages, each with a live "current: …" line underneath. Skipping is fine — you will be asked once on first use and remembered (the question is asked in your DSH UI language).
 
-   ![Language preferences: scope and the three languages](docs/assets/conf-language.png)
+   ![Language preferences: scope and the three languages](docs/assets/conf-language-en.png)
 
 4. **Fill the dispatch pools** — each pool card lists candidate models grouped by provider; tick the ones you want. Tick "manual order" and the card becomes a numbered priority list you reorder with ↑ ↓ ×; next to each route you can also pin a reasoning effort (it defaults to "follow lane"; pinning it lists the levels that model actually supports). A summary line at the top tracks progress live, e.g. "6/6 pools set · 2 ranked · advice mode".
 
-   ![Dispatch pools: the economy / mechanical / main / hard pools](docs/assets/conf-pool-1.png)
+   ![Dispatch pools: the economy / mechanical / main / hard pools](docs/assets/conf-pool-1-en.png)
 
    The vision and review pools live below; further down sit **capability ranking** (the union of the models selected across the six pools — the index is the capability order, strongest first, with optional S/A/B/C tiers) and **execution mode** (advice / enforce).
 
-   ![Vision pool, review pool, capability ranking, and execution mode](docs/assets/conf-pool-2.png)
+   ![Vision pool, review pool, capability ranking, and execution mode](docs/assets/conf-pool-2-en.png)
 
 5. **Agent teams** — both toggles are off by default; start with plain subagent dispatch. To let the model pull teams in on its own, turn on "agent teams mode"; to skip authorizing the same routes twice, turn on "subagent model whitelist sync" — a "synced N routes + time" status line under the toggle confirms what was written.
 
-   ![Agent teams: the two toggles and the whitelist-sync status](docs/assets/conf-team.png)
+   ![Agent teams: the two toggles and the whitelist-sync status](docs/assets/conf-team-en.png)
 
 6. **Context water level** — the three thresholds (defaults 50000 / 90000 / 130000), the per-read budget, hard-mode behavior (throttled pass / block), the auto-handover toggle, and the subagent-specific cap all live in this section. The bottom line carries the commands: `/ctx-pause` to pause intervening · `/ctx-resume` to resume · `/ctx-handover` to back up and hand over now (it steers the session to an idle boundary and waits out the compaction retry window, so the result can take a few minutes).
 
-   ![Context water level: thresholds, budgets, and commands](docs/assets/conf-ctx.png)
+   ![Context water level: thresholds, budgets, and commands](docs/assets/conf-ctx-en.png)
 
 7. **Verify** — an ⚡ "autonomous team" badge appears in the session header (with a ◇ beside it showing the current session model); or simply ask the model "what is the heading of the last section of your system prompt" — the answer should mention the dsh-switchman doctrine.
 

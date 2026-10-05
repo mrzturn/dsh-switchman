@@ -67,23 +67,23 @@ La cabecera de la sesión da un feedback visual claro: la insignia ⚡ «equipo 
 
 3. **Preferencias de idioma** — Ajustes → dsh-switchman, o «Central de despacho Switchman» en la barra lateral de la página de inicio. En la primera pantalla se elige primero el ámbito: global (este profile) o por proyecto (el `.switchman/lang.json` de cada proyecto); después, tres desplegables fijan el idioma de respuestas / comentarios / documentos, cada uno con su línea de estado «actual: …». Puedes saltarlo: en el primer uso se pregunta una vez y se recuerda (se pregunta en el idioma de la interfaz de DSH).
 
-   ![Preferencias de idioma: ámbito y tres idiomas](docs/assets/conf-language.png)
+   ![Preferencias de idioma: ámbito y tres idiomas](docs/assets/conf-language-en.png)
 
 4. **Configurar los pools de despacho** — en cada tarjeta de pool marcas los modelos candidatos agrupados por proveedor; marca «orden manual» y la tarjeta se convierte en una lista de prioridades numerada que se reordena con ↑ ↓ ×, y junto a cada ruta puedes fijar el effort de razonamiento (por defecto «seguir el carril»; al fijarlo, el desplegable lista los niveles que ese modelo soporta de verdad). La línea de resumen superior refleja el progreso en vivo, por ejemplo: «pools configurados: 6/6 · posiciones en el ranking: 2 · modo advice».
 
-   ![Pools de despacho: cuatro pools — ligero / mecánico / principal / de alta dificultad](docs/assets/conf-pool-1.png)
+   ![Pools de despacho: cuatro pools — ligero / mecánico / principal / de alta dificultad](docs/assets/conf-pool-1-en.png)
 
    El pool multimodal y el de revisión están más abajo; después vienen el **orden por capacidad** (la unión de los modelos elegidos en los seis pools, donde el número es el puesto por capacidad, el más fuerte primero, con anclaje opcional a las categorías S/A/B/C) y el **modo de ejecución** (advice / enforce).
 
-   ![Pool multimodal, pool de revisión, orden por capacidad y modo de ejecución](docs/assets/conf-pool-2.png)
+   ![Pool multimodal, pool de revisión, orden por capacidad y modo de ejecución](docs/assets/conf-pool-2-en.png)
 
 5. **Equipo de agentes** — ambos interruptores vienen apagados: arranca primero en modo subagent puro. Si quieres que reclute al equipo por su cuenta, enciende «modo de equipo de agentes»; si quieres ahorrarte la autorización duplicada en dos sitios, enciende «sincronizar la lista blanca de modelos de subagentes»: bajo el interruptor hay una línea de estado «N entradas sincronizadas + fecha» que confirma el resultado de la escritura.
 
-   ![Equipo de agentes: dos interruptores y estado de sincronización de la lista blanca](docs/assets/conf-team.png)
+   ![Equipo de agentes: dos interruptores y estado de sincronización de la lista blanca](docs/assets/conf-team-en.png)
 
 6. **Nivel de agua del contexto** — tres umbrales (por defecto 50000 / 90000 / 130000), presupuesto de lectura por llamada, comportamiento del umbral duro (dejar pasar limitando / bloquear), interruptor de entrega automática y tope independiente para subagentes: todo en esta zona. Abajo, una línea de comandos: `/ctx-pause` pausa la intervención · `/ctx-resume` la reanuda · `/ctx-handover` respalda y entrega ahora mismo (conduce la sesión a la frontera de inactividad y espera la ventana de reintento de compactación; el resultado puede tardar unos minutos).
 
-   ![Nivel de agua del contexto: umbrales, presupuesto y comandos](docs/assets/conf-ctx.png)
+   ![Nivel de agua del contexto: umbrales, presupuesto y comandos](docs/assets/conf-ctx-en.png)
 
 7. **Verificar** — en la cabecera de la sesión aparece la insignia ⚡ «equipo autónomo» (al lado, ◇ muestra el modelo de la sesión actual); o pregúntale directamente al modelo «¿cómo se titula la última sección de tu system prompt?» — debería mencionar el reglamento de dsh-switchman.
 
