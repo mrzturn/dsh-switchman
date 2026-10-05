@@ -1,14 +1,27 @@
-/** Enumeration of this session's still-running background subagents.
+/** Enumeration of this session's dispatched background subagents.
  *
  * Why this exists: a context handover (compaction) preserves dispatched
  * background subagents — they keep running. The parent's job registries
  * never list continuable children, and while the Agent-Teams bundle is
  * active send_message resolves teammate names only, so subagent-child
- * ids cannot be addressed mid-run (the global send_message({ agent_id })
- * could; the bundle replaces it). An agent that mistakes "not
+ * ids cannot be addressed mid-run. An agent that mistakes "not
  * addressable" for "dead" then double-dispatches. Recording the live
  * children — plus how to read their state — into the handover document
  * closes that gap.
+ *
+ * Redesign after the 2026-10-05 double-dispatch incident: dispatches
+ * issued in the turn that triggered the handover MATERIALIZE only when
+ * the session machinery resumes — the catalog entry and the child's
+ * session record are stamped minutes after the dispatching tool call,
+ * which was after the handover's own snapshot in the old flow. Neither
+ * the sanctioned registry nor the disk catalog could have listed them
+ * at snapshot time; the fix is timing (context-watch.js re-enumerates
+ * after compaction settles, immediately before waking the session) plus
+ * semantics: enumeration now answers "what dispatched work exists",
+ * never filters on a single "running" flag. A dispatched child whose
+ * record exists but has neither an open step nor a definite end
+ * boundary is PENDING work (queued / provisioning / interrupted) —
+ * exactly the state the incident's children were missed in.
  *
  * Disk format (verified against a packaged host's live records under
  * <DSH_HOME>/storages/session_projcache/sessions/):
@@ -17,14 +30,25 @@
  *   prefix) -> { record: { rows: { subagentCatalog: { val: { head:
  *   { values: [{ childId, childCreatedAt, mode, label }, ...] } } } } } }
  *   — the append-only catalog of every subagent dispatched from the
- *   session (labels are the dispatch `description`).
- * - Child record `<childId>.json` (bare UUID) — running iff
- *   rows.sessionStats.val.openStep !== null; a settled child has
- *   openStep === null and rows.turnBoundary.val.lastStepBoundary
- *   === { kind: "end" } while a running one shows { kind: "start" }.
+ *   session (labels are the dispatch `description`); entries appear
+ *   when the child MATERIALIZES, not when the tool call is made.
+ * - Child record `<childId>.json` (bare UUID) — the same rows map:
+ *   running iff record.rows.sessionStats.val.openStep is neither null
+ *   nor missing;
+ *   settled (delivered/aborted, nothing pending) iff
+ *   record.rows.turnBoundary.val.lastStepBoundary.kind === "end";
+ *   anything else with an existing record is pending.
  *
  * Every failure mode is fail-open to [] — enumeration is advisory
  * context for the handover document, never a blocker. */
+
+/** Child states, in rough order of "how much work is outstanding".
+ * - "running": an open step exists right now.
+ * - "pending": dispatched (record exists) but no definite end — covers
+ *   queued/provisioning children and ones interrupted mid-flight.
+ * - "settled": last step boundary is a definite end; the child
+ *   delivered (or aborted) and holds no pending work.
+ * - "gone": no record — never materialized or pruned; not live work. */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { dshHome } from "./lib/dsh-home.js";
@@ -64,84 +88,73 @@ function recordPaths(directory, id) {
 	return [...names].map((name) => join(directory, name));
 }
 
-/** This session's still-running background subagents as
- * [{ id, label, mode }], empty when none are detected (or on any error).
- * Reads only; never throws. Disk fallback for enumerateRunningSubagents:
- * the projcache snapshot lags live state slightly (and a crashed child
- * can leave a stale open step), but it survives every service hiccup. */
-export function runningSubagentsOf(sessionId) {
+/** First parseable rows map for a session id, or null. */
+function rowsOf(directory, id) {
+	return recordPaths(directory, id).map((path) => readRows(path)).find((rows) => rows !== null) ?? null;
+}
+
+/** Disk state of one child from its rows map (see the state table in the
+ * header). A null record means "gone". */
+function childDiskState(childRows) {
+	if (childRows === null) return "gone";
+	if (childRows.sessionStats?.val?.openStep != null) return "running";
+	if (childRows.turnBoundary?.val?.lastStepBoundary?.kind === "end") return "settled";
+	return "pending";
+}
+
+/** Every cataloged child of a session with its disk state:
+ * [{ id, label, mode, childCreatedAt, state }]. The catalog is the
+ * authoritative "was ever dispatched" list; states come from each
+ * child's own record. Empty on any error — never throws. */
+export function catalogChildrenOf(sessionId) {
 	if (typeof sessionId !== "string" || sessionId === "") return [];
 	const directory = sessionRecordsDir();
-	const parentRows = recordPaths(directory, sessionId)
-		.map((path) => readRows(path))
-		.find((rows) => rows !== null);
-	const catalog = parentRows?.subagentCatalog?.val;
-	const entries = catalog?.head?.values;
+	const parentRows = rowsOf(directory, sessionId);
+	const entries = parentRows?.subagentCatalog?.val?.head?.values;
 	if (!Array.isArray(entries)) return [];
-	const running = [];
+	const children = [];
 	for (const entry of entries) {
 		if (entry === null || typeof entry !== "object") continue;
 		const childId = entry.childId;
 		if (typeof childId !== "string" || childId === "") continue;
-		const childRows = recordPaths(directory, childId)
-			.map((path) => readRows(path))
-			.find((rows) => rows !== null);
-		if (childRows === null) continue; // never created, or pruned: not live work
-		if (childRows.sessionStats?.val?.openStep == null) continue; // settled
-		running.push({
+		const state = childDiskState(rowsOf(directory, childId));
+		children.push({
 			id: childId,
 			label: typeof entry.label === "string" ? entry.label : "",
 			mode: typeof entry.mode === "string" ? entry.mode : "",
+			childCreatedAt: typeof entry.childCreatedAt === "number" ? entry.childCreatedAt : null,
+			state,
 		});
 	}
-	return running;
+	return children;
 }
 
-/** Sanctioned enumeration (preferred over the disk scan): the live
- * subagent catalog service plus the in-memory agent registry — no flush
- * lag, no stale-after-crash heuristic. `listChildren` accepts the session
- * id; both id forms (with/without the `session-` prefix) are probed
- * because the wire form is not contractual. Falls back to the disk scan
- * whenever the services are absent, disagree with the shapes above, or
- * throw. Never throws. */
-export async function enumerateRunningSubagents(ctx, sessionId) {
+/** Live (unresolved) dispatched children of a session as
+ * [{ id, label, mode, childCreatedAt, state }|{…, state: "running"}] —
+ * running OR pending, disk truth first. The sanctioned agents registry,
+ * when reachable, only ever UPGRADES a pending child to "running" (its
+ * live view has no flush lag); it can never demote disk truth, because
+ * a status vocabulary mismatch is precisely what missed the incident's
+ * queued children. Never throws. */
+export async function enumerateLiveSubagents(ctx, sessionId) {
 	if (typeof sessionId !== "string" || sessionId === "") return [];
+	let live;
 	try {
-		const subagents = typeof ctx?.get === "function" ? ctx.get("subagents") : null;
+		live = catalogChildrenOf(sessionId).filter((child) => child.state === "running" || child.state === "pending");
+	} catch {
+		return [];
+	}
+	if (live.length === 0) return [];
+	try {
 		const agents = typeof ctx?.get === "function" ? ctx.get("agents") : null;
-		if (
-			subagents !== null &&
-			typeof subagents.listChildren === "function" &&
-			agents !== null &&
-			typeof agents.get === "function"
-		) {
-			const candidates = new Set([sessionId]);
-			const bare = sessionId.replace(/^session-/u, "");
-			if (bare !== sessionId) candidates.add(bare);
-			for (const id of candidates) {
-				let children;
-				try {
-					children = await subagents.listChildren(id);
-				} catch {
-					continue; // this id form is unusable — probe the next one
-				}
-				if (!Array.isArray(children)) continue;
-				const running = [];
-				for (const child of children) {
-					if (child === null || typeof child !== "object") continue;
-					if (typeof child.id !== "string" || child.id === "") continue;
-					if (agents.get(child.id)?.status !== "running") continue;
-					running.push({
-						id: child.id,
-						label: typeof child.label === "string" ? child.label : "",
-						mode: typeof child.mode === "string" ? child.mode : "",
-					});
-				}
-				return running; // first id form that answers wins, even when empty
+		if (agents !== null && typeof agents.get === "function") {
+			for (const child of live) {
+				if (child.state !== "pending") continue;
+				if (agents.get(child.id)?.status === "running") child.state = "running";
 			}
 		}
 	} catch {
-		/* fall through to the disk scan */
+		/* registry overlay is best-effort */
 	}
-	return runningSubagentsOf(sessionId);
+	return live;
 }

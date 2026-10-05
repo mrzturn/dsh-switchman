@@ -21,12 +21,17 @@
  *   Every handover trigger — the force-tier automation (fire-and-forget,
  *   session-level in-flight flag plus a 10-minute cooldown) and manual
  *   /ctx-handover — shares one four-step flow: fork a dormant backup
- *   session (subagents' fork provider, economy pool model), write the
- *   handover document skeleton, compact via the borrowed per-agent
- *   /compact (retried on a growing backoff until the agent goes idle,
- *   because the automation fires mid-turn), then wake this session
- *   (agent.followup + sessions.flush, the schedule service's delivery
- *   channel) to fill in the document and continue the unfinished task.
+ *   session (subagents' fork provider, economy pool model); then, on
+ *   every compaction attempt, re-enumerate the live dispatched
+ *   subagents and refresh the handover document as the very last
+ *   action before compacting via the borrowed per-agent /compact
+ *   (retried on a growing backoff until the agent goes idle, because
+ *   the automation fires mid-turn); after compaction settles, diff the
+ *   enumeration once more and append anything that materialized during
+ *   the window; finally wake this session (agent.followup +
+ *   sessions.flush, the schedule service's delivery channel) to fill in
+ *   the document and continue the unfinished task, with two post-wake
+ *   rechecks announcing late-materializing dispatches.
  *   The live handover phase feeds the force-tier banner so progress is
  *   visible instead of silent. /ctx-pause and /ctx-resume toggle
  *   process-lifetime pause state (a restart resumes enforcement — the
@@ -38,10 +43,10 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { clearHandover, handoverOf, recordHandover } from "./handover-state.js";
-import { enumerateRunningSubagents, sessionRecordPath, sessionRecordsDir } from "./subagents.js";
+import { enumerateLiveSubagents, sessionRecordPath, sessionRecordsDir } from "./subagents.js";
 
 /** Tools whose result text is accounted against the per-turn read budget. */
 const ACCOUNT_TOOLS = new Set(["read", "glob", "grep", "bash"]);
@@ -388,54 +393,67 @@ function applyContextWatch(ctx, config) {
 		}
 	};
 
-	/** Manual handover step 2 — write the handover document skeleton into
-	 *  the session's working directory. The mechanical facts land now (before
-	 *  compaction); the agent's continuation turn fills in the task-state
-	 *  summary using the compaction summary it can still see. Null when the
-	 *  session exposes no usable cwd or the write fails. Any still-running
-	 *  background subagents are recorded too: compaction preserves the
-	 *  children themselves, but the compacted parent can lose track of
-	 *  them — and under the Agent-Teams bundle send_message only resolves
-	 *  teammate names, so subagent-child ids are not addressable at all.
-	 *  Without this section the compacted agent cannot know its dispatched
-	 *  work is alive (and double-dispatches).
-	 *  */
-	const writeHandoverSkeleton = (agent, sessionId, backupId, used, running) => {
+	/** One handover-document path per handover run (stamp frozen at run
+	 *  start so refreshes overwrite the same file). Null when the session
+	 *  exposes no usable cwd. */
+	const handoverDocPath = (agent, sessionId) => {
 		const cwd = agent?.session?.header?.cwd;
 		if (typeof cwd !== "string" || cwd === "") return null;
 		const stamp = new Date().toISOString().replace(/[:.]/gu, "-");
-		const directory = join(cwd, ".dsh-switchman", "handover");
 		const short = sessionId.replace(/^session-/u, "").slice(0, 8) || sessionId;
-		const path = join(directory, `${stamp}-${short}.md`);
-		const runningSection =
-			Array.isArray(running) && running.length > 0
+		return join(cwd, ".dsh-switchman", "handover", `${stamp}-${short}.md`);
+	};
+
+	/** Write (or refresh) the handover document as the LAST action before
+	 *  a compaction attempt — enumerate, write, compact, nothing mutating
+	 *  in between. The old flow wrote the skeleton once, up front, and
+	 *  then sat through the idle-retry loop while the triggering turn
+	 *  kept executing: dispatches issued in that window MATERIALIZED into
+	 *  the catalog only around the post-compaction resume, invisible to
+	 *  both the old snapshot and the compacted agent, which then
+	 *  re-dispatched live work (incident 2026-10-05). Refreshing on every
+	 *  attempt keeps the document truthful at the moment compaction
+	 *  actually lands while still capturing state strictly BEFORE
+	 *  compaction destroys it. `live` entries are { id, label, mode,
+	 *  state } from enumerateLiveSubagents. Returns the path on success,
+	 *  null on failure (fail-open: never blocks compaction). */
+	const writeHandoverDoc = (path, sessionId, backupId, used, live) => {
+		if (path === null) return null;
+		const liveSection =
+			Array.isArray(live) && live.length > 0
 				? [
-						`## Running background subagents (captured before compaction — still alive)`,
+						`## Live background subagents (captured immediately before the compaction attempt — still alive)`,
 						``,
-						...running.map(
+						...live.map(
 							(child) =>
-								`- \`${child.id}\`${child.label ? ` — ${child.label}` : ""}${child.mode ? ` (${child.mode})` : ""} — STILL RUNNING. Collect its report when it settles (in-session completion notice, or read its session record at ${sessionRecordPath(child.id)}) before re-dispatching anything similar — do not duplicate live work.`,
+								`- \`${child.id}\`${child.label ? ` — ${child.label}` : ""}${child.mode ? ` (${child.mode})` : ""} — ${child.state === "running" ? "RUNNING" : "PENDING (dispatched, no open step yet)"}. Collect its report when it settles (in-session completion notice, or read its session record at ${sessionRecordPath(child.id)}) before re-dispatching anything similar — do not duplicate live work.`,
 						),
-						`How to address them from the compacted session:`,
+						`How to address and re-check them:`,
 						``,
 						`- These are subagent children, not teammates. While the Agent-Teams bundle is active, send_message({ target }) resolves teammate names only — it will always answer "active teammate ... not found" for these ids. That error says nothing about the child's health: do not conclude it is dead, and do not re-dispatch while it is alive.`,
-						`- Alive check on the projcache record (path in each entry above): running iff rows.sessionStats.val.openStep !== null (rows.turnBoundary.val.lastStepBoundary.kind === "start"); settled iff openStep === null and kind === "end". A null firstTokenTime inside openStep does not mean stalled.`,
+						`- Re-check liveness against the child's record JSON (exact paths — note the leading record.): running iff record.rows.sessionStats.val.openStep !== null; settled (nothing pending) iff record.rows.turnBoundary.val.lastStepBoundary.kind === "end"; anything else with an existing record is pending. One-liner: python3 -c 'import json;d=json.load(open("<DSH_HOME>/storages/session_projcache/sessions/<childId>.json"))["record"]["rows"];print("running" if (d.get("sessionStats") or {}).get("val",{}).get("openStep") else ("settled" if (((d.get("turnBoundary") or {}).get("val") or {}).get("lastStepBoundary") or {}).get("kind")=="end" else "pending"))'`,
+						`- The catalog record.rows.subagentCatalog.val.head.values of THIS session lists every child ever dispatched from it (ids, labels, childCreatedAt timestamps). Entries younger than the handover time are dispatches the pre-compaction captures could not see — treat them as your own live work, never as candidates for re-dispatch.`,
 						`- Report tail: <DSH_HOME>/sessions/<workspace-slug>/<childId>/session.v4.jsonl.zstd (zstd-compressed JSONL; the workspace slug is the dash-encoded session cwd). The last assistant/message records hold interim and final reports.`,
 						``,
 					]
-				: [];
+				: [
+						`## Live background subagents`,
+						``,
+						`- None live at the last capture. If the compaction summary mentions dispatched subagents anyway, they materialized after it: re-check the session catalog (record.rows.subagentCatalog) before re-dispatching anything.`,
+						``,
+					];
 		try {
-			mkdirSync(directory, { recursive: true });
+			mkdirSync(dirname(path), { recursive: true });
 			writeFileSync(
 				path,
 				[
 					`# SWITCHMAN handover — ${sessionId}`,
 					``,
-					`- handed over at: ${new Date().toISOString()}`,
+					`- handed over at: ${new Date().toISOString()} (document refreshed before every compaction attempt)`,
 					`- context used before compaction: ~${used ?? "unknown"} tokens`,
 					`- backup fork session: ${backupId ?? "(fork failed — the full history remains in this session's append-only log)"}`,
 					``,
-					...runningSection,
+					...liveSection,
 					`## Task state (filled in by the agent right after the handover)`,
 					``,
 					`- goal / objective in flight:`,
@@ -454,37 +472,106 @@ function applyContextWatch(ctx, config) {
 		}
 	};
 
-	/** Manual handover step 4 — wake the freshly compacted session: one
+	/** One-shot delayed re-checks after the continuation is armed. A
+	 *  dispatch from the pre-handover turn can materialize in the very
+	 *  instants around the post-compaction resume — after the final
+	 *  enumeration but before the woken agent looks. Two cheap probes
+	 *  (20 s / 75 s) compare the catalog against everything already
+	 *  announced; anything new is appended to the handover document AND
+	 *  pushed to the session as a followup so the agent learns its
+	 *  deferred dispatch exists before it can re-dispatch. Best-effort:
+	 *  process-lifetime timers, fail-open, never throws. */
+	const scheduleMaterializationRecheck = (agent, sessionId, backupId, docFile, known) => {
+		const knownIds = new Set([backupId ?? "", ...(known ?? []).map((child) => child.id)]);
+		const check = async (tag) => {
+			try {
+				const fresh = (await enumerateLiveSubagents(ctx, sessionId)).filter((child) => !knownIds.has(child.id));
+				if (fresh.length === 0) return;
+				for (const child of fresh) knownIds.add(child.id);
+				const lines = fresh.map(
+					(child) =>
+						`${child.id}${child.label ? ` (${child.label})` : ""} [${child.state}] → record ${sessionRecordPath(child.id)}`,
+				);
+				if (docFile !== null) {
+					try {
+						appendFileSync(
+							docFile,
+							[
+								``,
+								`## Post-wake refresh (${new Date().toISOString()})`,
+								``,
+								`- ${fresh.length} dispatched subagent(s) materialized AFTER the wake-time enumeration:`,
+								...lines.map((line) => `- ${line}`),
+								`- These are pre-handover dispatches of this same session, now alive. Collect their results; do NOT re-dispatch.`,
+								``,
+							].join("\n"),
+							"utf8",
+						);
+					} catch {
+						/* document append is best-effort */
+					}
+				}
+				agent.followup({
+					id: randomUUID(),
+					role: "user",
+					content: [
+						{
+							type: "text",
+							text: `[SWITCHMAN:HANDOVER-REFRESH] ${fresh.length} dispatched subagent(s) materialized after the handover snapshot — dispatched before the wake or by the just-woken agent itself — either way live work of this session the handover document could not have listed: ${lines.join("; ")}. They are ALIVE. Collect their results (each record path is listed; a "running" child will send a completion notice, a "pending" one has not started its first turn yet); do NOT re-dispatch this work.`,
+						},
+					],
+					source: { kind: "user" },
+				});
+				await ctx.sessions?.flush?.(agent.session);
+			} catch (error) {
+				warn(`handover materialization recheck (${tag}) failed: ${error?.message ?? error}`);
+			}
+		};
+		setTimeout(() => void check("20s"), 20_000);
+		setTimeout(() => void check("75s"), 75_000);
+	};
+
+	/** Manual handover final step — wake the freshly compacted session: one
 	 *  followup user message (the same delivery channel the schedule service
-	 *  uses: agent.followup + sessions.flush) instructing the agent to fill
+	 *  uses: agent.followup + sessions.flush) instructs the agent to fill
 	 *  in the handover document from the compaction summary now in context
-	 *  and continue the unfinished task. */
-	const armContinuation = async (agent, backupId, docPath, running) => {
+	 *  and continue the unfinished task. `live` is the post-compaction
+	 *  enumeration; `appeared` are its members that were NOT in the last
+	 *  pre-compaction capture — dispatches from the triggering turn that
+	 *  only materialized during the compaction window, called out so the
+	 *  agent can never mistake them for un-dispatched work. */
+	const armContinuation = async (agent, backupId, docFile, live, appeared) => {
 		if (typeof agent?.followup !== "function") {
 			warn("handover continuation skipped: agent exposes no followup()");
 			return;
 		}
-		const runningCount = Array.isArray(running) ? running.length : 0;
-		const runningSentence =
-			runningCount === 0
-				? `No background subagents were detected running at handover time.`
-				: docPath !== null
-					? `${runningCount} background subagent(s) dispatched earlier are STILL RUNNING and are listed in the handover document — collect their results (in-session completion notices, or their session records) instead of re-dispatching duplicate work. The document also explains how to check each child is alive (projcache openStep) and where its transcript tail lives; a send_message "active teammate not found" error is NOT evidence of death.`
-					: `${runningCount} background subagent(s) dispatched earlier are STILL RUNNING (the handover document could not be written; inline list): ${running
+		const liveCount = Array.isArray(live) ? live.length : 0;
+		const appearedCount = Array.isArray(appeared) ? appeared.length : 0;
+		const liveSentence =
+			liveCount === 0
+				? `No dispatched background subagents were live when the compaction landed.`
+				: docFile !== null
+					? `${liveCount} dispatched background subagent(s) are LIVE and listed in the handover document — collect their results (in-session completion notices, or their session records) instead of re-dispatching duplicate work. The document explains the exact liveness re-check (record.rows paths plus a paste-ready one-liner) and each transcript tail; a send_message "active teammate not found" error is NOT evidence of death.`
+					: `${liveCount} dispatched background subagent(s) are LIVE (the handover document could not be written; inline list): ${live
 							.map(
 								(child) =>
-									`${child.id}${child.label ? ` (${child.label})` : ""} → record ${sessionRecordPath(child.id)}`,
+									`${child.id}${child.label ? ` (${child.label})` : ""} [${child.state}] → record ${sessionRecordPath(child.id)}`,
 							)
 							.join("; ")} — collect their results instead of re-dispatching duplicate work (records live under ${sessionRecordsDir()}/<childId>.json).`;
+		const appearedSentence =
+			appearedCount > 0
+				? `${appearedCount} of them were dispatched before the handover but only MATERIALIZED during the compaction window (catalog entries stamped late) — they are this session's own deferred dispatches, alive; collect them, never re-dispatch their tasks.`
+				: `If the compaction summary mentions dispatched subagents that are NOT listed above, they materialized after this enumeration — a post-wake recheck will announce them within seconds; do not re-dispatch anything before it fires.`;
 		const instruction = [
 			"[SWITCHMAN:HANDOVER] A context handover just completed for this session.",
 			backupId !== null
 				? `A dormant fork backup holding the full pre-handover state is session ${backupId}.`
 				: `No fork backup was created; the append-only session log still holds the full history.`,
-			docPath !== null
-				? `The handover document skeleton is at ${docPath}.`
+			docFile !== null
+				? `The handover document is at ${docFile}.`
 				: `Create the handover document under .dsh-switchman/handover/ in the working directory.`,
-			runningSentence,
+			liveSentence,
+			appearedSentence,
 			"Using the compaction summary now in your context, fill in the handover document (goal, completed, in progress, next steps, files), then continue the unfinished task — do not wait for further instructions.",
 		].join(" ");
 		try {
@@ -525,14 +612,17 @@ function applyContextWatch(ctx, config) {
 			recordHandover(sessionId, { phase: "backup", source, at: Date.now() });
 			const backup = await forkBackup(agent, sessionId, signal);
 			const backupId = backup.childId;
-			// Snapshot the live background children BEFORE compaction — a
-			// dispatch racing the handover would otherwise be missed, and the
-			// same snapshot feeds both the document section and the
-			// continuation instruction. The sanctioned services answer first
-			// (live registry, no flush lag); the projcache disk scan below is
-			// the fail-open fallback.
-			const runningSubagents = await enumerateRunningSubagents(ctx, sessionId);
-			const docPath = writeHandoverSkeleton(agent, sessionId, backupId, measureNow(ctx, agent), runningSubagents);
+			// One document path per handover run (the stamp freezes here so
+			// refreshes overwrite the same file). The document itself is
+			// written as the LAST action before every compaction attempt —
+			// see attempt() below. Writing it here and then sitting through
+			// the idle-retry loop is exactly how the 2026-10-05 incident
+			// lost deferred dispatches: the triggering turn kept executing
+			// after the snapshot, and its subagent dispatches materialized
+			// into the catalog only around the post-compaction resume.
+			const docPath = handoverDocPath(agent, sessionId);
+			let docFile = null; // last successful document write
+			let lastLive = []; // last pre-compaction enumeration
 			const delays = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
 			const outcome = await new Promise((resolve) => {
 				let attempts = 0;
@@ -555,7 +645,7 @@ function applyContextWatch(ctx, config) {
 					}
 					resolve({ ok, reason });
 				};
-				const attempt = () => {
+				const attempt = async () => {
 					if (finished || attempting) return;
 					attempting = true;
 					attempts += 1;
@@ -564,6 +654,19 @@ function applyContextWatch(ctx, config) {
 						timer = null;
 					}
 					recordHandover(sessionId, { phase: "compacting", source, attempt: attempts, at: Date.now() });
+					// The LAST pre-compaction action: re-enumerate and (re)write
+					// the handover document, then immediately compact — nothing
+					// mutating in between. On retries this re-captures anything
+					// the triggering turn did while the loop waited for the
+					// agent to go idle; the document is therefore truthful at
+					// the exact moment compaction lands, yet still strictly
+					// pre-compaction state.
+					try {
+						lastLive = await enumerateLiveSubagents(ctx, sessionId);
+						docFile = writeHandoverDoc(docPath, sessionId, backupId, measureNow(ctx, agent), lastLive) ?? docFile;
+					} catch {
+						/* enumeration and the document must never block compaction */
+					}
 					let promise;
 					try {
 						promise = sessionCompact(agent, commandId ?? `switchman-${source}-${sessionId}`, signal);
@@ -626,11 +729,41 @@ function applyContextWatch(ctx, config) {
 					text: `/ctx-handover: compaction failed after backup ${backupId ?? "n/a"} — ${outcome.reason}`,
 				};
 			recordHandover(sessionId, { phase: "continuation", source, at: Date.now() });
-			await armContinuation(agent, backupId, docPath, runningSubagents);
+			// Final enumeration right after compaction settled: anything that
+			// materialized during the compaction window (the deferred-dispatch
+			// race the document refresh cannot fully close) is announced in
+			// the wake instruction and appended to the document.
+			const live = await enumerateLiveSubagents(ctx, sessionId);
+			const knownIds = new Set([...lastLive.map((child) => child.id), backupId ?? ""]);
+			const appeared = live.filter((child) => !knownIds.has(child.id));
+			if (docFile !== null && appeared.length > 0) {
+				try {
+					appendFileSync(
+						docFile,
+						[
+							``,
+							`## Materialized during the compaction window (${new Date().toISOString()})`,
+							``,
+							`- ${appeared.length} dispatched subagent(s) appeared after the last pre-compaction capture:`,
+							...appeared.map(
+								(child) =>
+									`- \`${child.id}\`${child.label ? ` — ${child.label}` : ""} — ${child.state === "running" ? "RUNNING" : "PENDING"} → record ${sessionRecordPath(child.id)}`,
+							),
+							`- Dispatched before the handover, materialized late — this session's own work, alive. Collect their results; do NOT re-dispatch.`,
+							``,
+						].join("\n"),
+						"utf8",
+					);
+				} catch {
+					/* append is best-effort; the wake instruction lists them too */
+				}
+			}
+			await armContinuation(agent, backupId, docFile, live, appeared);
+			scheduleMaterializationRecheck(agent, sessionId, backupId, docFile, live);
 			const backupText = backupId ?? `n/a (${backup.reason ?? "log retains full history"})`;
 			return {
 				kind: "success",
-				text: `[SWITCHMAN:WATERMARK] handover complete — backup ${backupText}, document ${docPath ?? "agent-created"}, compaction done, continuation armed.`,
+				text: `[SWITCHMAN:WATERMARK] handover complete — backup ${backupText}, document ${docFile ?? "agent-created"}, compaction done, continuation armed.`,
 			};
 		} catch (error) {
 			return { kind: "error", text: `/ctx-handover failed: ${error?.message ?? error}` };
