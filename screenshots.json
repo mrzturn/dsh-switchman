@@ -1,15 +1,14 @@
 [
 	"docs/assets/hero.svg",
-	"docs/assets/conf-language.png",
 	"docs/assets/conf-interface.png",
-	"docs/assets/conf-pool-1.png",
-	"docs/assets/conf-pool-2.png",
-	"docs/assets/conf-team.png",
-	"docs/assets/conf-ctx.png",
-	"docs/assets/conf-language-en.png",
+	"docs/assets/conf-interface-de.png",
 	"docs/assets/conf-interface-en.png",
-	"docs/assets/conf-pool-1-en.png",
-	"docs/assets/conf-pool-2-en.png",
-	"docs/assets/conf-team-en.png",
-	"docs/assets/conf-ctx-en.png"
+	"docs/assets/conf-interface-es.png",
+	"docs/assets/conf-interface-fr.png",
+	"docs/assets/conf-interface-it.png",
+	"docs/assets/conf-interface-ja.png",
+	"docs/assets/conf-interface-ko.png",
+	"docs/assets/conf-interface-pt.png",
+	"docs/assets/conf-interface-ru.png",
+	"docs/assets/conf-interface-zh-TW.png"
 ]
