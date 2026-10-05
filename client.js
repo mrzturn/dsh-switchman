@@ -53,6 +53,8 @@ window.__ModuleLoader__.load({
 			{ value: 'ko', label: '한국어' },
 			{ value: 'es', label: 'Español' },
 			{ value: 'fr', label: 'Français' },
+			{ value: 'it', label: 'Italiano' },
+			{ value: 'pt', label: 'Português' },
 			{ value: 'de', label: 'Deutsch' },
 			{ value: 'ru', label: 'Русский' },
 		];
