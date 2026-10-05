@@ -2098,12 +2098,12 @@ window.__ModuleLoader__.load({
 		}
 
 		function SwitchmanBadge({
-		locale,
-		t,
-		sessionId,
-		useProjection,
-		useSessions,
-	}) {
+			locale,
+			t,
+			sessionId,
+			useProjection,
+			useSessions,
+		}) {
 
 			// Subscription only: stable snapshot via getLocale() re-renders on switch.
 			React.useSyncExternalStore(
@@ -3242,7 +3242,7 @@ window.__ModuleLoader__.load({
 		 * shipped settings pages' save/conflict model. Pool and ranking
 		 * candidates come from the live model catalog, refreshed whenever the
 		 * Host's adapter set changes. */
-	function SwitchmanSettingsPage({ t, locale, setUiLocale }) {
+		function SwitchmanSettingsPage({ t, locale, setUiLocale }) {
 		// Re-render on UI-language switches (drives t() and the suggestion).
 		React.useSyncExternalStore(
 			(fn) => locale.subscribe(fn),
