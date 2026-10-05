@@ -25,6 +25,15 @@
  *   Enforcement is a per-new-session snapshot, so a sync only affects
  *   top-level sessions composed after it.
  *
+ * - The teams-gated `child_message` bridge tool: enabling the agent-team
+ *   bundle REPLACES the global send_message with a team variant that
+ *   resolves TEAMMATE NAMES only, after which subagent child session UUIDs
+ *   are not addressable at all. The bridge restores child addressing through
+ *   ctx.subagents.sendMessage (sender = the exact live calling agent,
+ *   exec.agent), registered while the live `teamsMode` setting reads ON and
+ *   disposed again the moment it reads OFF (same live-reference gating as
+ *   the doctrine section).
+ *
  * Trigger points: plugin apply (applyTeams schedules once), every successful
  * POST /api/dsh-switchman/config (routes.js calls scheduleTeamsOrchestration),
  * and settings/document-updated for this plugin's own namespace (volatile
@@ -398,10 +407,116 @@ function pumpTeamsOrchestration(ctx, config) {
 	scheduleTeamsOrchestration(ctx, config);
 }
 
+// ---- child_message bridge tool ----------------------------------------------
+
+/** Map one ctx.subagents.sendMessage rejection to a readable reason. The
+ *  continuation runtime throws typed SubagentErrors whose stable `code`
+ *  names the failure mode: UNAUTHORIZED (the sender is not the exact live
+ *  agent, or the target is not the sender's direct continuable child /
+ *  direct parent), NOT_RESUMABLE (no continuable session resolves to the
+ *  id), CONTINUATION_UNAVAILABLE (this composition exposes no continuation
+ *  runtime), DRAINING (admission is closing), and ACTIVATION_CLOSING (the
+ *  resident child is mid-disposal). */
+function describeChildMessageError(error) {
+	const message = error?.message ?? String(error);
+	switch (typeof error?.code === "string" ? error.code : "") {
+		case "UNAUTHORIZED":
+			return `wrong sender or lineage: ${message} (childId must be one of your own direct continuable children — teammate names and other agents' children are not addressable here)`;
+		case "NOT_RESUMABLE":
+			return `unknown or non-continuable child: ${message}`;
+		case "CONTINUATION_UNAVAILABLE":
+			return `service unavailable: ${message}`;
+		case "DRAINING":
+			return `continuable subagents are draining: ${message}`;
+		case "ACTIVATION_CLOSING":
+			return `the child is closing: ${message}`;
+		default:
+			return error?.name === "AbortError" ? `cancelled before delivery: ${message}` : message;
+	}
+}
+
+/** WHY this tool exists: enabling the agent-team-profile bundle REPLACES the
+ *  global send_message with a team variant that resolves TEAMMATE NAMES
+ *  only, after which subagent child session UUIDs are not addressable at
+ *  all — background children dispatched before the switch (or recorded by a
+ *  context handover) would become uncollectable silos. This bridge restores
+ *  child addressing through the subagents service's public sendMessage,
+ *  passing the exact live calling agent (exec.agent) as the sender — the
+ *  same authority contract the factory send_message tool uses; the service
+ *  itself validates the sender identity and the direct-child lineage.
+ *  Registration uses the register-level shape (bare ctx.tools.register runs
+ *  no defineTool DSL compilation, so parameters is a full object-root JSON
+ *  Schema), mirroring context-watch.js's ctx_handover tool.
+ *  @returns the registration disposer. */
+function registerChildMessageTool(ctx) {
+	if (typeof ctx.tools?.register !== "function") throw new Error("the tools registry is unavailable");
+	const dispose = ctx.tools.register({
+		name: "child_message",
+		description:
+			"Send a message to one of your subagent child sessions by its session UUID. Needed while Agent Teams mode is active: the team send_message resolves teammate names only, so subagent child ids must go through this bridge. Delivers to a direct continuable child — a running child takes the message at its nearest step boundary, an idle child starts a turn, and an absent continuable child is cold-resumed from persistence. Returns delivery confirmation, not the child's answer.",
+		parameters: {
+			type: "object",
+			properties: {
+				childId: {
+					type: "string",
+					description: "The child session UUID to address (the id returned when the subagent was started).",
+				},
+				content: {
+					type: "string",
+					description: "The message to deliver to the child.",
+				},
+			},
+			required: ["childId", "content"],
+		},
+		output: {
+			schema: { type: "string" },
+			render: (_args, value) => [{ type: "text", text: value }],
+		},
+		async execute(args, exec) {
+			const sender = exec?.agent;
+			if (sender === undefined || sender === null)
+				return "child_message failed: no calling agent (exec.agent was undefined) — the subagents service requires the exact live sender.";
+			const childId = typeof args?.childId === "string" ? args.childId.trim() : "";
+			const content = typeof args?.content === "string" ? args.content : "";
+			if (childId === "" || content === "")
+				return "child_message failed: childId and content are required non-empty strings.";
+			const service = ctx.subagents;
+			if (service === undefined || service === null || typeof service.sendMessage !== "function")
+				return "child_message failed: the subagents service is unavailable in this composition.";
+			try {
+				const messageId = await service.sendMessage(
+					sender,
+					childId,
+					[{ type: "text", text: content }],
+					// The service requires options.signal (it calls
+					// throwIfAborted unconditionally); the tool turn's own
+					// signal cancels only pre-acceptance work.
+					{ signal: exec?.signal ?? new AbortController().signal },
+				);
+				return `child_message: message ${messageId} accepted for child ${childId} — a running child takes it at the nearest step boundary, an idle or absent continuable child starts (or cold-resumes into) a turn. This confirms delivery only, not the child's answer.`;
+			} catch (error) {
+				return `child_message failed: ${describeChildMessageError(error)}`;
+			}
+		},
+		presentCall: (args) => ({
+			card: "generic",
+			title: "Switchman child message",
+			kind: "other",
+			rawInput: args,
+		}),
+	});
+	// If the registry registered the tool but handed back a non-function
+	// disposer, latch a no-op instead of throwing: throwing would leave a
+	// live tool unlatched, and a later retry would register it twice.
+	return typeof dispose === "function" ? dispose : () => {};
+}
+
 /** Mount the teams layer: the dynamic `[SWITCHMAN:TEAMS]` section (empty
- *  while OFF — the live reference makes toggling instant) plus the
- *  orchestration triggers (apply-time scheduling and settings-document
- *  updates for this plugin's own namespace). */
+ *  while OFF — the live reference makes toggling instant), the child_message
+ *  bridge tool (same live teamsMode gating: registered while ON, disposed
+ *  the moment it reads OFF), plus the orchestration triggers (apply-time
+ *  scheduling and settings-document updates for this plugin's own
+ *  namespace). */
 function applyTeams(ctx, config) {
 	ctx.systemPrompt.section({
 		name: "switchman:teams",
@@ -416,15 +531,53 @@ function applyTeams(ctx, config) {
 			}
 		},
 	});
+	// child_message lifecycle: reconcile the registration against the live
+	// teamsMode read (idempotent — a no-op whenever the state already
+	// matches). The closure holds the disposer so every plugin mount starts
+	// clean; the registry entry itself is scope-tracked to this fiber, so a
+	// remount never leaves a stale tool behind. A registration failure only
+	// warns and leaves the state unlatched, and a failed removal keeps the
+	// latch — the next toggle retries either way.
+	let childMessageDispose = null;
+	const syncChildMessageTool = () => {
+		const wanted = readBool(config?.teamsMode) === true;
+		if (wanted === (childMessageDispose !== null)) return;
+		if (!wanted) {
+			// Clear the latch only after a successful dispose: a throwing
+			// disposer keeps the latch set, so the next OFF sync retries the
+			// removal instead of no-oping while the tool stays live.
+			const dispose = childMessageDispose;
+			try {
+				dispose();
+				childMessageDispose = null;
+				ctx.logger?.info?.("dsh-switchman: child_message tool removed (teams mode off)");
+			} catch (error) {
+				ctx.logger?.warn?.(`dsh-switchman: child_message removal failed: ${error?.message ?? error}`);
+			}
+			return;
+		}
+		try {
+			childMessageDispose = registerChildMessageTool(ctx);
+			ctx.logger?.info?.("dsh-switchman: child_message tool registered (teams mode on)");
+		} catch (error) {
+			childMessageDispose = null;
+			ctx.logger?.warn?.(`dsh-switchman: child_message registration failed: ${error?.message ?? error}`);
+		}
+	};
 	// Volatile commits never remount the plugin, so teamsMode/syncWhitelist
 	// (or pool) edits through DSH's OWN settings UI — which bypass our POST
-	// config route — must re-trigger the orchestration too. The settings
-	// service emits this app-wide with no emitting thisArg, so a listener on
-	// this plugin's context receives every namespace's event; filter on ns.
+	// config route — must re-trigger the orchestration (and re-sync the
+	// child_message tool) too. The settings service emits this app-wide with
+	// no emitting thisArg, so a listener on this plugin's context receives
+	// every namespace's event; filter on ns.
 	ctx.on("settings/document-updated", (ns) => {
-		if (ns === SWITCHMAN_SETTINGS_NS) scheduleTeamsOrchestration(ctx, config);
+		if (ns === SWITCHMAN_SETTINGS_NS) {
+			scheduleTeamsOrchestration(ctx, config);
+			syncChildMessageTool();
+		}
 	});
 	scheduleTeamsOrchestration(ctx, config);
+	syncChildMessageTool();
 }
 
 export { applyTeams, pumpTeamsOrchestration, SWITCHMAN_SETTINGS_NS, scheduleTeamsOrchestration, teamsBundleState, teamsSyncSnapshot };
