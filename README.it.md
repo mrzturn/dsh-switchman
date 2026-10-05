@@ -6,22 +6,35 @@
 
 ![dsh-switchman — il livello dell'acqua del contesto comanda lo switchman, che devia la rotta](docs/assets/hero.svg)
 
-> Contesto al contatore. I task si assegnano da soli.
+> Contesto al contatore: ogni task trova da sé la corsia giusta.
 
-Un plugin per [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH). Una volta installato, il tuo modello primario smette di fare tutto da solo e diventa un dispatcher: misura il livello dell'acqua, sceglie la corsia, assegna il task, controlla il lavoro. Cinque cose:
+## Perché serve
 
-**1. Controllo del livello dell'acqua del contesto.** A ogni turno misura i token live della sessione. Soft (50k di default) consiglia di delegare, hard (90k) stringe il budget di lettura per turno e spinge alla chiusura, force (130k) esegue il backup della sessione e la consegna alla compattazione — automaticamente. Tieni una sessione aperta tutto il giorno; il tuo contesto non affoga mai nella sua stessa cronologia. Ogni subagent dispatchato porta con sé il proprio hard cap ed esce con un riepilogo HANDOFF quando lo raggiunge. Al passaggio di consegne, i subagent in background ancora in esecuzione vengono registrati in un'istantanea — id, descrizione, percorso di raccolta del report — nel documento di consegne e nell'istruzione di continuazione, così la sessione compattata raccoglie i loro report invece di disporre duplicati.
+Se lavori con DSH, col passare del tempo ti imbatti in due cose:
 
-**2. Dispatch a sei corsie.** economy / mechanical / main / hard / vision / review — sei corsie cognitive. Scegli i modelli candidati per corsia nella pagina delle impostazioni, ordinali dal più forte (ancoraggio opzionale a fasce S/A/B/C) e fissa un reasoning effort per route — il menu a tendina elenca i livelli che ogni modello *supporta davvero*, non tre livelli generici. Una tabella `[SWITCHMAN:POOLS]` viaggia con ogni prompt, così il modello sa a chi rivolgersi; la modalità `enforce` rifiuta seccamente i modelli fuori pool. Le route che le impostazioni DSH della sessione non hanno autorizzato per la selezione esplicita di subagent vengono marcate con ⚠ sia nella tabella dei pool sia nella pagina delle impostazioni, indirizzandoti alle impostazioni DSH (Subagents → model selection) per autorizzarle — oppure gli agenti ripiegano sul dispatch implicito. L'indipendenza della review si ancora al modello dell'**autore** del codice (l'agente che ha prodotto il diff), non a quello della sessione principale.
+1. **La sessione pesa sempre di più.** La cronologia gonfia il contesto fino a centinaia di migliaia di token: il modello inizia a dimenticare, rallenta e costa di più, e alla fine non resta che un /compact manuale — che comprime e perde dettagli nel farlo.
+2. **Il modello principale fa tutto da solo.** Leggere un file, lanciare un test, confrontare dati: è sempre lui a masticarli — lento e costoso, quando gran parte di quel lavoro spetterebbe a un modello economico.
 
-**3. Preferenze linguistiche.** Un menu a tendina per le risposte, uno per i commenti del codice e uno per i documenti redatti. Non impostato? Ti viene chiesto una volta, resta ricordato per sempre e ogni sessione successiva lo rispetta.
+dsh-switchman è un plugin per [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH). Una volta installato, il modello principale smette di «fare tutto da solo» e diventa un dispatcher: misura il livello dell'acqua, sceglie la corsia, assegna i task, verifica il risultato. Non è un nuovo modello: è un regolamento di orchestrazione agganciato a DSH più un'interfaccia di configurazione. In concreto fa sei cose:
 
-**4. Dottrina delegate-by-default.** Sostituisce la politica di team conservativa di serie di DSH ("crea membri del team solo su richiesta"): le minuzie restano fai-da-te (<200 righe lette, <50 modificate), il lavoro vero viene delegato di default; ogni modifica viene verificata — oltre 20 righe va a un tester, oltre 300 righe o logica centrale va a un reviewer il cui modello differisce da quello dell'autore del codice (dichiarato DOWNGRADED quando il pool non può offrirne uno). Di' "non usare i team" e si fa da parte all'istante.
+**1. Livello dell'acqua del contesto: le sessioni lunghe non esplodono.** A ogni turno conta i token della sessione in tempo reale, e tre soglie inaspriscono a gradini: 50k (soft, regolabile) ricorda che «è ora di delegare»; 90k (hard) stringe il budget di lettura per singola chiamata e spinge verso la chiusura; 130k (force) avvia l'handover automatico — fork della sessione come copia di backup, contesto compattato, continuazione risvegliata: il task non si interrompe. Nemmeno i subagent in background ancora in corsa al momento del passaggio si perdono: id, descrizione del task e percorso del report finiscono nel documento di handover, così la sessione ripresa sa dove raccogliere i report invece di ri-assegnare lo stesso lavoro. Ogni subagent inviato porta con sé un tetto massimo indipendente e, raggiunto il limite, esce dopo aver scritto il riepilogo HANDOFF.
 
-**5. Sblocco immagini (`/vision`).** Un modello di sessione solo testo non può leggere le immagini — DSH rifiuta l'invio al gate lato host. Switchman registra un comando globale `/vision` che lascia passare le immagini del composer oltre quel gate, risolve ciascuna in un percorso file host e le riemette come testo, così il modello delega la lettura a un modello del pool vision o a uno strumento MCP per immagini: allega l'immagine, poi digita `/vision <domanda>`. Finché il modello è solo testo, un chip di suggerimento appare sopra il composer (usa `/vision`, o configura prima il pool vision), e un invio immagine normale rifiutato viene riscritto una volta in `/vision <testo originale>` e reinviato da solo — le immagini arrivano al pool vision senza ridigitare. Con il pool vision vuoto, il comando rifiuta con indicazioni di configurazione.
+**2. Sei pool di dispatch: a ogni lavoro il suo modello.** Pool leggero (economy, piccoli lavori in serie), pool meccanico (mechanical, riscritture modellate), pool principale (main, coding di tutti i giorni), pool ad alta difficoltà (hard, ragionamento complesso e refactoring su larga scala), pool multimodale (vision, lettura delle immagini), pool di revisione (review, verifica indipendente). Nella pagina delle impostazioni spunti i candidati, ordini le priorità (con fasce opzionali S/A/B/C) e fichi un reasoning effort per ogni route — il menu a tendina elenca i livelli che quel modello supporta davvero, non tre livelli generici. A ogni turno il prompt del modello principale viaggia con una tabella di raccomandazioni `[SWITCHMAN:POOLS]`: si assegna il lavoro seguendo la tabella. La modalità di esecuzione ha tre stati: off / advice / enforce (enforce = i modelli fuori pool vengono rifiutati sul posto).
 
+**3. Modalità Agent Teams: dal lavoro solitario alla squadra.** Disattivata di default: appena installato si lavora con un dispatch leggero via subagent. Nella pagina delle impostazioni, due interruttori indipendenti:
 
-Un solo modello? Vale comunque la pena — il controllo del livello dell'acqua e la dottrina non guardano a quanti modelli hai.
+- **Modalità Agent Teams** — una volta attivata, inietta la dottrina di squadra (delega per default + verifica a livelli + disciplina del task board condiviso) e abilita automaticamente gli Agent Teams di DSH: il modello principale può arruolare compagni permanenti (`spawn_teammate`), assegnare lavori al task board condiviso (`team_task_*`) e scambiarsi messaggi con loro (`send_message`). Quando formare la squadra segue una disciplina precisa: sotto-task indipendenti parallelizzabili, lavori voluminosi e autosufficienti, livello dell'acqua del contesto principale già alto, necessità di separare i ruoli; le indagini una-tantum restano al subagent. La politica di fabbrica di DSH è «niente squadra se l'utente non la nomina»: qui si inverte in «usala quando serve». Ri-spegnendo l'interruttore, le clausole di squadra spariscono senza residui, e gli strumenti di squadra nelle sessioni in corso non vengono ritirati.
+- **Sincronizzazione della whitelist dei modelli per i subagent** — DSH ha una whitelist di autorizzazione «Consenti agli agenti di scegliere i modelli per i subagent»: le route scelte nei pool ma non autorizzate vengono rifiutate se il modello principale le nomina esplicitamente (in modalità squadra, la tabella di raccomandazioni e la pagina delle impostazioni le marcano con ⚠). Con questo interruttore attivo, l'unione dei sei pool viene scritta in un colpo solo in quella whitelist — niente configurazione doppia: switchman è l'unica fonte di verità, e vi rientra anche il percorso di dispatch via fork. La whitelist scatta come snapshot alla «nuova sessione»: la sincronizzazione vale solo per le sessioni aperte dopo.
+
+L'intestazione della sessione dà un riscontro immediato: badge ⚡ «Squadra autonoma», ◇ modello effettivo della sessione in corso; durante un handover automatico compare un avviso in tempo reale del tipo «Handover in corso · backup della sessione / compattazione del contesto / risveglio della continuazione».
+
+**4. Preferenze linguistiche: chiede una volta, ricorda per sempre.** Un menu a tendina per ciascuna delle tre lingue — risposte, commenti nel codice, documenti — con ambito a scelta globale o per progetto (`.switchman/lang.json`). Puoi anche non impostarlo: al primo utilizzo ti viene chiesto una volta, nella lingua dell'interfaccia DSH, e da lì in poi ogni sessione lo rispetta da sé.
+
+**5. Verifica a livelli: finita la modifica, si controlla.** Le modifiche oltre 20 righe vanno a un tester per la verifica; oltre 300 righe, o quando si toccano logica centrale / sicurezza / coerenza dei dati, subentra anche un reviewer con revisione indipendente. Il modello del reviewer si sceglie ancorandolo a quello dell'«agente che ha scritto il diff», evitandolo per quanto possibile; se nel pool proprio non si riesce, la conclusione dichiara DOWNGRADED. Basta dire «non usare le squadre» e torna subito a lavorare da solo.
+
+**6. `/vision`: anche i modelli solo testo trattano le immagini.** Quando il modello principale non sa leggere le immagini, DSH rifiuta al varco i messaggi che le contengono. Alleghi l'immagine e digiti `/vision dov'è l'errore in questa immagine`: l'immagine viene risolta in un percorso di file e affidata alla lettura di un modello del pool multimodale, e la conclusione torna nella sessione corrente. Sopra la casella di input compare in anticipo l'avviso «il modello corrente non supporta la lettura delle immagini»; se un invio diretto dell'immagine viene rifiutato, il messaggio viene riscritto una volta in `/vision` e reinviato da solo, senza dover rifare tutto a mano; senza pool multimodale configurato, il comando rifiuta e indica come configurarlo.
+
+Un solo modello? Vale comunque la pena installarlo — il controllo del livello dell'acqua e la verifica a livelli non guardano a quanti modelli hai, e ne giovancono allo stesso modo le sessioni lunghe con un modello unico.
 
 ## Skill incluse
 
@@ -52,21 +65,29 @@ Un solo modello? Vale comunque la pena — il controllo del livello dell'acqua e
 
 2. **Riavvia DSH** — chiudi completamente l'app e riaprila (ricaricare la pagina non basta), così la tabella dei moduli client rileva il bundle.
 
-3. **Apri la pagina delle impostazioni** — Settings → dsh-switchman. La prima schermata è le preferenze linguistiche: un menu a tendina per l'ambito — a livello di profilo o per progetto (`.switchman/lang.json` di ogni progetto) — più un menu a tendina per risposte / commenti / documenti, ciascuno con una riga live `current: …`. Salta pure — ti verrà chiesto una volta e verrà ricordato (la domanda è nella lingua dell'interfaccia DSH).
+3. **Preferenze linguistiche** — Settings → dsh-switchman, oppure la voce «Switchman Control Center» nella barra laterale della home. Nella prima schermata si sceglie prima l'ambito: globale (questo profilo) o per progetto (il `.switchman/lang.json` di ciascun progetto); poi tre menu a tendina fissano rispettivamente la lingua di risposte / commenti / documenti, ciascuno con una riga di stato «Attuale: …» sottostante. Puoi anche saltare: al primo uso ti verrà chiesto una volta e ricordato (la domanda segue la lingua dell'interfaccia DSH).
 
-   ![Pagina impostazioni e preferenze linguistiche](docs/assets/conf-demo1.png)
+   ![Preferenze linguistiche: ambito e tre lingue](docs/assets/conf-language.png)
 
-4. **Compila i sei pool** — ogni scheda pool elenca i candidati raggruppati per provider; spunta quelli che vuoi. Spunta **manual order** e la scheda diventa una lista di priorità numerata con i controlli ↑ ↓ ×. Il menu effort accanto a ogni route selezionata è su *follow lane* di default; fissandolo mostra i livelli che quel modello supporta davvero (Low / High / Max…). Una riga di riepilogo traccia i progressi in tempo reale: “6/6 pool impostati · 3 in classifica · modalità advice”. Le route selezionate che le tue impostazioni DSH non hanno autorizzato per la selezione esplicita di subagent portano un badge ⚠ con un suggerimento — autorizzale anche nelle impostazioni DSH (Subagents → model selection), altrimenti gli agenti che le nominano esplicitamente verranno rifiutati e ripiegheranno sul dispatch implicito.
+4. **Configura i pool di dispatch** — in ogni scheda di pool spunti i modelli candidati raggruppati per provider; spuntando «ordine manuale» la scheda diventa una lista di priorità numerata, da riordinare con ↑ ↓ ×, e accanto a ogni route puoi fichare il reasoning effort (predefinito «segui la corsia»; una volta fichato elenca le fasce che quel modello supporta davvero). La riga di riepilogo in alto riflette i progressi in tempo reale, per esempio «6/6 pool configurati · 2 in classifica · modalità advice».
 
-   ![Pool di dispatch](docs/assets/conf-demo2.png)
+   ![Pool di dispatch: i quattro pool economy / mechanical / main / hard](docs/assets/conf-pool-1.png)
 
-5. **Classifica e watermark** — l'ordine della tabella di classifica è l'ordine di capacità (prima i più forti), con fasce opzionali S/A/B/C; la modalità di esecuzione è `off` / advice / enforce (enforce = i modelli fuori pool vengono rifiutati). Sotto, la sezione watermark irrigidisce il comportamento in base al consumo di token: tre soglie, un budget di lettura per chiamata, il comportamento della modalità hard (cap / deny), un interruttore per l'handover automatico e un cap separato per i subagent. La riga in fondo porta i comandi: `/ctx-pause` per smettere di intervenire · `/ctx-resume` per riprendere · `/ctx-handover` per fare subito backup e passaggio di consegne (porta la sessione al confine di inattività e attende la finestra di retry della compattazione, quindi il risultato può richiedere alcuni minuti).
+   Il pool multimodale e quello di revisione stanno più sotto; ancora più in basso arrivano la **classifica di capacità** (l'unione dei modelli scelti nei sei pool: la numerazione è l'ordine di capacità, i più forti davanti, con fasce opzionali S/A/B/C) e la **modalità di esecuzione** (advice / enforce).
 
-   ![Classifica e watermark del contesto](docs/assets/conf-demo3.png)
+   ![Pool multimodale e pool di revisione, classifica di capacità e modalità di esecuzione](docs/assets/conf-pool-2.png)
 
-6. **Verifica** — il badge ⚡ appare accanto al chip del preset nell'intestazione di ogni sessione; chiedi al modello “cosa dice l'ultima sezione del tuo system prompt?” — dovrebbe menzionare la dottrina dsh-switchman.
+5. **Agent Teams** — entrambi gli interruttori partono spenti: prima falla girare in puro modello subagent. Per lasciare che arruoli la squadra da sola, attiva «Modalità Agent Teams»; per risparmiare la doppia autorizzazione, attiva «Sincronizzazione della whitelist dei modelli per i subagent» — sotto l'interruttore una riga di stato del tipo «N voci sincronizzate + ora» conferma l'esito della scrittura.
 
-**Configurazione una tantum di db-query** (le dipendenze degli script vivono nella directory della skill):
+   ![Agent Teams: i due interruttori e lo stato di sincronizzazione della whitelist](docs/assets/conf-team.png)
+
+6. **Livello dell'acqua del contesto** — le tre soglie (predefinite 50000 / 90000 / 130000), il budget di lettura per singola chiamata, il comportamento della soglia hard (passa con limitazione / blocca), l'interruttore dell'handover automatico e il tetto indipendente dei subagent stanno tutti in quest'area. Una riga di comandi in fondo: `/ctx-pause` sospende gli interventi · `/ctx-resume` li riprende · `/ctx-handover` fa subito backup e passaggio di consegne (guida la sessione fino al confine di inattività e attende la finestra di retry della compattazione: il risultato può richiedere alcuni minuti).
+
+   ![Livello dell'acqua del contesto: soglie, budget e comandi](docs/assets/conf-ctx.png)
+
+7. **Verifica** — nell'intestazione della sessione compare il badge ⚡ «Squadra autonoma» (accanto, il ◇ mostra il modello della sessione in corso); oppure chiedi direttamente al modello «qual è il titolo dell'ultima sezione del tuo system prompt?» — la risposta dovrebbe menzionare la dottrina dsh-switchman.
+
+**Configurazione una tantum di db-query** (le dipendenze degli script vivono nella directory della skill, senza sporcare il progetto):
 
 ```bash
 bash <install-dir>/skills/db-query/scripts/setup.sh
@@ -74,16 +95,16 @@ bash <install-dir>/skills/db-query/scripts/setup.sh
 
 ## Come funziona
 
-- La parte Host (`index.js` + `host/`) inietta tre sezioni dinamiche del system prompt, i gate di budget di lettura ed enforce, la cattura automatica delle risposte e quattro comandi slash — oltre al trio ctx, `/vision`, che risolve le immagini incollate in percorsi file host per la lettura da parte del pool vision. Tutte le impostazioni sono campi volatili — le modifiche salvate valgono dall'assemblaggio del prompt successivo, senza riavvio.
-- La parte Client (`client.js`) renderizza il badge ⚡ accanto al chip del preset e la pagina delle impostazioni, attraverso i servizi ufficiali settings-form.
-- La barra laterale della home page guadagna una voce **Switchman** dedicata accanto alla riga Skills Center; un clic apre questa stessa pagina delle impostazioni (lingue, pool e classifica, watermark) come pannello centrale. La sezione delle impostazioni e il badge ⚡ restano al loro posto.
-- `cordis.patch.yml` ripete verbatim la lista di plugin di ogni preset di serie ed estende solo il suffisso di persona; gli strumenti Agent Teams in sé continuano a venire dal `@deepseek-ai/dsh-experimental-agent-team-profile` di serie.
+- La parte Host (`index.js` + `host/`) inietta le sezioni dinamiche del system prompt (lingue / corsie / livello dell'acqua / squadra), il doppio cancello budget di lettura + enforce e i quattro comandi slash (il trio ctx più `/vision`). Ogni impostazione salvata vale già dall'assemblaggio del prompt successivo, senza riavvio.
+- La parte Client (`client.js`) renderizza la pagina delle impostazioni, il badge ⚡ e l'identificativo ◇ del modello nell'intestazione della sessione e l'avviso dinamico durante l'handover, appoggiandosi ai servizi ufficiali settings-form.
+- La voce «Switchman Control Center» nella barra laterale della home apre con un clic la stessa pagina di configurazione (preferenze linguistiche, pool di dispatch e classifica, livello dell'acqua) come pannello centrale; la voce nelle impostazioni resta al suo posto.
+- `cordis.patch.yml` conserva integralmente la lista di plugin dei preset di fabbrica e interviene solo sul persona suffix; gli strumenti Agent Teams in sé vengono dal bundle di fabbrica e vengono abilitati automaticamente all'attivazione della modalità squadra.
 
 ## Manutenzione
 
-- Dopo un upgrade di DSH che cambia le liste di plugin dei preset di serie, risincronizza `cordis.patch.yml` dai nuovi `presets/*.patch.yml` (conserva il suffisso della dottrina), poi reinstalla.
-- Le righe di protocollo rivolte al modello (`[SWITCHMAN:LANG|POOLS|WATERMARK]`) sono deliberatamente in inglese e stabili al byte — non localizzarle.
-- `npm pack --dry-run` deve restare alla forma auditata di 34 file / ~111 kB (gli screenshot in `docs/` non viaggiano mai nel pacchetto).
+- Dopo un upgrade di DSH che cambia la lista di plugin dei preset di serie, risincronizza `cordis.patch.yml` dai nuovi `presets/*.patch.yml` (mantieni il doctrine suffix), poi reinstalla.
+- Le righe di protocollo (`[SWITCHMAN:LANG|POOLS|WATERMARK|TEAMS]`) restano deliberatamente in inglese e stabili al byte — non localizzarle.
+- `npm pack --dry-run` deve restare alla forma auditata di 43 file / ~138 kB (gli screenshot in `docs/` non viaggiano nel pacchetto).
 
 ## License
 
