@@ -46,6 +46,14 @@ export const EffortEntrySchema = z.object({
 
 /** All dsh-switchman settings. Field names are the settings mutation paths. */
 export const Config = z.object({
+	// --- Phase 0: UI locale ------------------------------------------------
+	/** Display language for this plugin's own UI (badge, panel, settings
+	 *  page): "auto" follows the DSH app language; any other value forces
+	 *  the plugin UI into that locale (extra locales resolve
+	 *  client-side from the inline EXTRA_UI_DICTS table, falling back
+	 *  to English). */
+	uiLocale: z.union(["auto", "en", "zh", "zh-TW", "ja", "ko", "de", "es", "fr", "it", "pt", "ru"]).default("auto").volatile(),
+
 	// --- Phase 1: project language preference -----------------------------
 	/** Where the three language slots live: "global" = these profile-level
 	 *  fields below; "project" = each project's .switchman/lang.json (per

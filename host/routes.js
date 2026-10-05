@@ -81,14 +81,14 @@ const NUMBER_FIELDS = [
 const BOOLEAN_FIELDS = [
 	"wmAutoHandover",
 	"wmSubagentCap",
-	// 以下六个 mirrors host/config.js 的 pool*Manual 开关
+	// The following six mirror the pool*Manual switches in host/config.js
 	"poolEconomyManual",
 	"poolMechanicalManual",
 	"poolMainManual",
 	"poolHardManual",
 	"poolVisionManual",
 	"poolReviewManual",
-	// teams 开关（mirrors host/config.js 的 teams* 组）
+	// Teams switches (mirrors the teams* group in host/config.js)
 	"teamsMode",
 	"syncWhitelist",
 ];
@@ -102,6 +102,7 @@ const EFFORTS_FIELDS = [
 	"poolReviewEfforts",
 ];
 const ENUM_FIELDS = {
+	uiLocale: ["auto", "en", "zh", "zh-TW", "ja", "ko", "de", "es", "fr", "it", "pt", "ru"],
 	langScope: ["global", "project"],
 	dispatchEnforce: ["off", "advice", "enforce"],
 	wmDenyMode: ["cap", "deny"],
@@ -246,6 +247,7 @@ export function snapshotOf(config) {
 		values[field] = Array.isArray(rawOf(config?.[field]))
 			? rawOf(config[field]).map(cleanEffortEntry).filter(Boolean)
 			: [];
+	values.uiLocale = ENUM_FIELDS.uiLocale.includes(rawOf(config?.uiLocale)) ? rawOf(config.uiLocale) : "auto";
 	values.langScope = ENUM_FIELDS.langScope.includes(rawOf(config?.langScope)) ? rawOf(config.langScope) : "global";
 	values.dispatchEnforce = ENUM_FIELDS.dispatchEnforce.includes(rawOf(config?.dispatchEnforce))
 		? rawOf(config.dispatchEnforce)
@@ -294,6 +296,8 @@ function coerceValues(input) {
 		if (efforts.some((entry) => entry === null)) return null;
 		values[field] = efforts;
 	}
+	if (!ENUM_FIELDS.uiLocale.includes(input.uiLocale)) return null;
+	values.uiLocale = input.uiLocale;
 	if (!ENUM_FIELDS.langScope.includes(input.langScope)) return null;
 	values.langScope = input.langScope;
 	if (!ENUM_FIELDS.dispatchEnforce.includes(input.dispatchEnforce)) return null;
