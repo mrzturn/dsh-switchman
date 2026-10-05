@@ -393,9 +393,12 @@ function applyContextWatch(ctx, config) {
 	 *  compaction); the agent's continuation turn fills in the task-state
 	 *  summary using the compaction summary it can still see. Null when the
 	 *  session exposes no usable cwd or the write fails. Any still-running
-	 *  background subagents are recorded too: compaction orphans them from
-	 *  every plugin-visible registry, so without this section the compacted
-	 *  agent cannot know its dispatched work is alive (and double-dispatches).
+	 *  background subagents are recorded too: compaction preserves the
+	 *  children themselves, but the compacted parent can lose track of
+	 *  them — and under the Agent-Teams bundle send_message only resolves
+	 *  teammate names, so subagent-child ids are not addressable at all.
+	 *  Without this section the compacted agent cannot know its dispatched
+	 *  work is alive (and double-dispatches).
 	 *  */
 	const writeHandoverSkeleton = (agent, sessionId, backupId, used, running) => {
 		const cwd = agent?.session?.header?.cwd;
@@ -413,6 +416,11 @@ function applyContextWatch(ctx, config) {
 							(child) =>
 								`- \`${child.id}\`${child.label ? ` — ${child.label}` : ""}${child.mode ? ` (${child.mode})` : ""} — STILL RUNNING. Collect its report when it settles (in-session completion notice, or read its session record at ${sessionRecordPath(child.id)}) before re-dispatching anything similar — do not duplicate live work.`,
 						),
+						`How to address them from the compacted session:`,
+						``,
+						`- These are subagent children, not teammates. While the Agent-Teams bundle is active, send_message({ target }) resolves teammate names only — it will always answer "active teammate ... not found" for these ids. That error says nothing about the child's health: do not conclude it is dead, and do not re-dispatch while it is alive.`,
+						`- Alive check on the projcache record (path in each entry above): running iff rows.sessionStats.val.openStep !== null (rows.turnBoundary.val.lastStepBoundary.kind === "start"); settled iff openStep === null and kind === "end". A null firstTokenTime inside openStep does not mean stalled.`,
+						`- Report tail: <DSH_HOME>/sessions/<workspace-slug>/<childId>/session.v4.jsonl.zstd (zstd-compressed JSONL; the workspace slug is the dash-encoded session cwd). The last assistant/message records hold interim and final reports.`,
 						``,
 					]
 				: [];
@@ -461,7 +469,7 @@ function applyContextWatch(ctx, config) {
 			runningCount === 0
 				? `No background subagents were detected running at handover time.`
 				: docPath !== null
-					? `${runningCount} background subagent(s) dispatched earlier are STILL RUNNING and are listed in the handover document — collect their results (in-session completion notices, or their session records) instead of re-dispatching duplicate work.`
+					? `${runningCount} background subagent(s) dispatched earlier are STILL RUNNING and are listed in the handover document — collect their results (in-session completion notices, or their session records) instead of re-dispatching duplicate work. The document also explains how to check each child is alive (projcache openStep) and where its transcript tail lives; a send_message "active teammate not found" error is NOT evidence of death.`
 					: `${runningCount} background subagent(s) dispatched earlier are STILL RUNNING (the handover document could not be written; inline list): ${running
 							.map(
 								(child) =>

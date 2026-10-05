@@ -1,11 +1,14 @@
 /** Enumeration of this session's still-running background subagents.
  *
  * Why this exists: a context handover (compaction) preserves dispatched
- * background subagents — they keep running — but the compacted parent
- * loses every handle (job registries do not list them, send_message
- * cannot address them mid-run). The post-handover agent then wrongly
- * concludes the work is lost and double-dispatches. Recording the live
- * children into the handover document closes that gap.
+ * background subagents — they keep running. The parent's job registries
+ * never list continuable children, and while the Agent-Teams bundle is
+ * active send_message resolves teammate names only, so subagent-child
+ * ids cannot be addressed mid-run (the global send_message({ agent_id })
+ * could; the bundle replaces it). An agent that mistakes "not
+ * addressable" for "dead" then double-dispatches. Recording the live
+ * children — plus how to read their state — into the handover document
+ * closes that gap.
  *
  * Disk format (verified against a packaged host's live records under
  * <DSH_HOME>/storages/session_projcache/sessions/):
