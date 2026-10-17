@@ -9,14 +9,17 @@
  * result content. DSH's own UI shows a child's model nowhere, so this line is
  * the only place the parent learns which model actually runs each child.
  *
- * Shapes verified against dsh 0.2.1-alpha.1 sources:
- * - Tool result values: `{kind:"continuable", subagentId}` (background
- *   continuable — subagentId IS the durable child session id,
- *   subagents.startContinuable's childId), `{kind:"foreground", runId,
- *   output}` (SubagentRun.id equals the published child session id for local
- *   providers; remote providers mint parent-namespaced ids, which simply fail
- *   the cold read and pass through unannotated), and `{kind:"background",
- *   jobId}` (a jobs id, not a session id — skipped).
+ * Shapes verified against dsh 0.2.1-rc.1 sources:
+ * - Tool result values: `{kind:"activation", subagentId}` (dsh 0.2.1's
+ *   unified activation lifecycles — every subagent / subagent_fork call
+ *   returns immediately with the durable child session id) plus the two
+ *   dsh ≤0.2.0 shapes kept as fallbacks so the layer keeps working on older
+ *   installs: `{kind:"continuable", subagentId}` (background continuable —
+ *   subagentId IS the durable child session id) and `{kind:"foreground",
+ *   runId, output}` (SubagentRun.id equals the published child session id
+ *   for local providers; remote providers mint parent-namespaced ids, which
+ *   simply fail the cold read and pass through unannotated). One-shot
+ *   background-job shapes carry no session id and are skipped.
  * - `PostToolDecision` accept: `content` replaces the model-visible content
  *   and cannot coexist with a `value` replacement (the runtime throws on
  *   both), so only value-less accepts gain the line. `next()` is always
@@ -26,10 +29,12 @@
  */
 
 /** Child session id out of one subagent tool result value; null for shapes
- *  without a session id (one-shot background jobs) or malformed values. */
+ *  without a session id (one-shot background jobs) or malformed values.
+ *  "activation" is the dsh ≥0.2.1 unified shape; "continuable" and
+ *  "foreground" are the dsh ≤0.2.0 shapes kept for older installs. */
 function childSessionIdOf(value) {
 	if (value === null || typeof value !== "object") return null;
-	if (value.kind === "continuable" && typeof value.subagentId === "string" && value.subagentId !== "")
+	if ((value.kind === "activation" || value.kind === "continuable") && typeof value.subagentId === "string" && value.subagentId !== "")
 		return value.subagentId;
 	if (value.kind === "foreground" && typeof value.runId === "string" && value.runId !== "")
 		return value.runId;

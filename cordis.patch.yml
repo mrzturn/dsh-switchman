@@ -28,10 +28,15 @@
 #
 # Provenance & maintenance: the four `plugins` lists below are copied verbatim
 # from @deepseek-ai/dsh-web-app presets/{standard,ptc,minimal,cordis}.patch.yml
-# (dsh 0.1.7-rc.2). A Loader override replaces the target row's `config`
-# wholesale, so every field is restated here. After a DSH upgrade that changes
-# the shipped presets, re-sync these lists from the new preset files, then
-# reinstall this bundle.
+# (dsh 0.2.1-rc.1: time-context + tool-schedule + the disabled tool-plugin-market
+# row joined every list, the subagent rows lost `backgroundMode` under the
+# unified activation lifecycles, the ralph/codex/claude-code rows left the
+# presets, minimal gained image-only fs tools and a compaction group, and the
+# plan-mode text was reworded). A Loader override replaces the target row's
+# `config` wholesale, so every field is restated here. After a DSH upgrade that
+# changes the shipped presets, re-sync these lists from the new preset files,
+# then reinstall this bundle; scripts/validate.mjs compares this patch against
+# the installed app's presets field by field.
 #
 # NEVER set `modelSelectionSettings: true` on the tool-subagent-fork row (any
 # preset). Only the spawn row may carry it: while the subagent model-selection
@@ -40,9 +45,19 @@
 # scope, and a second instance makes session composition throw
 # `tool "list_subagent_models" is already registered in this scope` — breaking
 # creation of ALL new sessions and the recomposition of old ones. The shipped
-# presets (verified against installed dsh-web-app 0.2.0-rc.2 and the fork's
-# 0.2.1-alpha.1) enable it on the spawn row only; fork-side explicit routing
-# is not a factory capability.
+# presets (verified against installed dsh-web-app 0.2.0-rc.2, the fork's
+# 0.2.1-alpha.1, and 0.2.1-rc.1) enable it on the spawn row only; fork-side
+# explicit routing is not a factory capability.
+#
+# dsh 0.2.1 REMOVED the `cwd` prompt variable ("centralize working directories
+# and directory context"): registered prompt variables are `provider` and
+# `model` only, and the working directory now reaches the model as REQUIRED
+# runtime context in every preset — it survives even minimal's
+# includeRuntimeContext: false, so no preset needs a directory line here. The
+# suffix therefore carries NO `Your working directory is {{cwd}}.` line any
+# more: an unknown variable in an interpolated section throws at EVERY prompt
+# render and kills every conversation while this bundle is enabled. Do not
+# reintroduce {{cwd}} (or any variable beyond provider/model).
 #
 # Known consequences of overriding:
 # - plugin_manager `set_plugin` on these preset rows reports `overridden`.
@@ -65,8 +80,6 @@
         config:
           prefix: You are a coding agent powered by the {{model}} model.
           suffix: &switchman-team-suffix |
-            Your working directory is {{cwd}}.
-
             # dsh-switchman 自主智能体团队调度规程（本段为当前 profile 的最高行为准则）
 
             总纲：在准确理解需求、严谨思考、最优质量、最低返工率的前提下最小化总 token 消耗。返工是最贵的 token——过程与铺陈可以省，验证与关键推理绝不省。
@@ -99,6 +112,8 @@
         name: '@deepseek-ai/dsh-agent-instructions'
         config:
           maxBytes: 65536
+      - id: time-context
+        name: '@deepseek-ai/dsh-time-context'
       - id: tool-bash
         name: '@deepseek-ai/dsh-tool-bash'
         disabled: !!js process.platform === 'win32'
@@ -113,6 +128,8 @@
           sampleOverCapGlobResults: false
       - id: tool-jobs
         name: '@deepseek-ai/dsh-tool-jobs'
+      - id: tool-schedule
+        name: '@deepseek-ai/dsh-tool-schedule'
       - id: skill-filesystem
         name: '@deepseek-ai/dsh-skill-filesystem'
       - id: tool-skill
@@ -131,7 +148,7 @@
             name: '@deepseek-ai/dsh-plan-mode'
             config:
               section: |
-                You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
+                You are in plan mode. Stay in plan mode until the user approves your plan through exit_plan_mode or switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
 
                 Explore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan in the actual repository. Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan. Prefer existing functions and patterns over new machinery.
 
@@ -175,41 +192,17 @@
               provider: spawn
               toolName: subagent
               modelSelectionSettings: true
-              backgroundMode: continuable
           - id: tool-subagent-fork
             name: '@deepseek-ai/dsh-tool-subagent'
             config:
               provider: fork
               toolName: subagent_fork
-              backgroundMode: continuable
-          - id: tool-subagent-codex
-            name: '@deepseek-ai/dsh-tool-subagent'
-            disabled: true
-            config:
-              provider: codex
-              toolName: subagent_codex
-              backgroundMode: one-shot
-              maxDepth: provider-managed
-          - id: tool-subagent-claude-code
-            name: '@deepseek-ai/dsh-tool-subagent'
-            disabled: true
-            config:
-              provider: claude-code
-              toolName: subagent_claude_code
-              backgroundMode: one-shot
-              maxDepth: provider-managed
           - id: workflow-ptc
             name: '@deepseek-ai/dsh-workflow-ptc'
             config:
               provider: spawn
           - id: tool-workflow
             name: '@deepseek-ai/dsh-tool-workflow'
-          - id: tool-ralph
-            name: '@deepseek-ai/dsh-tool-ralph'
-            disabled: true
-            config:
-              subagentProvider: spawn
-              maxRounds: 64
       - id: tool-ask-user
         name: '@deepseek-ai/dsh-tool-ask-user'
       - id: tool-todo
@@ -225,6 +218,9 @@
         name: '@deepseek-ai/dsh-tool-present'
       - id: tool-plugin-manager
         name: '@deepseek-ai/dsh-plugin-manager/tools'
+        disabled: true
+      - id: tool-plugin-market
+        name: '@deepseek-ai/dsh-plugin-market/tools'
         disabled: true
 
 # -----------------------------------------------------------------------------
@@ -246,6 +242,8 @@
         name: '@deepseek-ai/dsh-agent-instructions'
         config:
           maxBytes: 65536
+      - id: time-context
+        name: '@deepseek-ai/dsh-time-context'
       - id: tool-bash
         name: '@deepseek-ai/dsh-tool-bash'
         disabled: !!js process.platform === 'win32'
@@ -260,6 +258,8 @@
           sampleOverCapGlobResults: false
       - id: tool-jobs
         name: '@deepseek-ai/dsh-tool-jobs'
+      - id: tool-schedule
+        name: '@deepseek-ai/dsh-tool-schedule'
       - id: skill-filesystem
         name: '@deepseek-ai/dsh-skill-filesystem'
       - id: tool-skill
@@ -278,7 +278,7 @@
             name: '@deepseek-ai/dsh-plan-mode'
             config:
               section: |
-                You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
+                You are in plan mode. Stay in plan mode until the user approves your plan through exit_plan_mode or switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
 
                 Explore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan in the actual repository. Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan. Prefer existing functions and patterns over new machinery.
 
@@ -322,29 +322,11 @@
               provider: spawn
               toolName: subagent
               modelSelectionSettings: true
-              backgroundMode: continuable
           - id: tool-subagent-fork
             name: '@deepseek-ai/dsh-tool-subagent'
             config:
               provider: fork
               toolName: subagent_fork
-              backgroundMode: continuable
-          - id: tool-subagent-codex
-            name: '@deepseek-ai/dsh-tool-subagent'
-            disabled: true
-            config:
-              provider: codex
-              toolName: subagent_codex
-              backgroundMode: one-shot
-              maxDepth: provider-managed
-          - id: tool-subagent-claude-code
-            name: '@deepseek-ai/dsh-tool-subagent'
-            disabled: true
-            config:
-              provider: claude-code
-              toolName: subagent_claude_code
-              backgroundMode: one-shot
-              maxDepth: provider-managed
           - id: workflow-ptc
             name: '@deepseek-ai/dsh-workflow-ptc'
             disabled: true
@@ -353,12 +335,6 @@
           - id: tool-workflow
             name: '@deepseek-ai/dsh-tool-workflow'
             disabled: true
-          - id: tool-ralph
-            name: '@deepseek-ai/dsh-tool-ralph'
-            disabled: true
-            config:
-              subagentProvider: spawn
-              maxRounds: 64
       - id: tool-ask-user
         name: '@deepseek-ai/dsh-tool-ask-user'
       - id: tool-todo
@@ -379,13 +355,21 @@
       - id: tool-plugin-manager
         name: '@deepseek-ai/dsh-plugin-manager/tools'
         disabled: true
+      - id: tool-plugin-market
+        name: '@deepseek-ai/dsh-plugin-market/tools'
+        disabled: true
 
 # -----------------------------------------------------------------------------
-# minimal — shipped list verbatim (persistent shell); the shipped persona has
-# no suffix, so this override adds the doctrine suffix. The shared suffix also
-# carries the "{{cwd}}" line: minimal's persistent shell tools need the working
-# directory, and the variable is registered host-wide regardless of the
-# persona's includeRuntimeContext: false.
+# minimal — shipped list verbatim (image-only fs tools, compaction, persistent
+# shell). The shipped persona keeps `complete: true` + `includeRuntimeContext:
+# false`, and the shared doctrine suffix stays attached for the four-row shape
+# contract of scripts/validate.mjs — but a complete persona prefix IS the whole
+# system prompt (the registry ignores the suffix and every other section at
+# render), so the doctrine does not reach minimal sessions; only the prefix
+# renders. The working directory does reach them: since dsh 0.2.1 it arrives
+# as REQUIRED runtime context, which includeRuntimeContext: false cannot
+# suppress, so minimal's persistent shell still sees the cwd with no
+# `{{cwd}}` variable and no directory line in the suffix.
 # -----------------------------------------------------------------------------
 - id: preset-minimal
   name: '@deepseek-ai/dsh-agent-preset'
@@ -400,6 +384,23 @@
           complete: true
           includeRuntimeContext: false
           suffix: *switchman-team-suffix
+      - id: tool-fs
+        name: '@deepseek-ai/dsh-tool-fs'
+        config:
+          read: false
+          readImage: true
+          write: false
+          edit: false
+      - id: compaction
+        name: cordis:group
+        group: true
+        isolate:
+          compaction: true
+        config:
+          - id: compaction-basic
+            name: '@deepseek-ai/dsh-compaction-basic'
+          - id: command-compact
+            name: '@deepseek-ai/dsh-command-compact'
       - id: persistent-shell
         name: cordis:group
         group: true
@@ -448,8 +449,8 @@
 
 # -----------------------------------------------------------------------------
 # cordis — shipped list verbatim (cordis tooling, bundled skills directory,
-# plugin-manager tools for profile-context sessions); persona suffix replaced
-# by the shared doctrine suffix.
+# plugin-manager/market tools for profile-context sessions); persona suffix
+# replaced by the shared doctrine suffix.
 # -----------------------------------------------------------------------------
 - id: preset-cordis
   name: '@deepseek-ai/dsh-agent-preset'
@@ -460,12 +461,15 @@
       - id: persona
         name: '@deepseek-ai/dsh-persona'
         config:
-          prefix: You are a coding agent powered by the {{model}} model.
+          prefix: >-
+            You are a coding agent powered by the {{model}} model.
           suffix: *switchman-team-suffix
       - id: agent-instructions
         name: '@deepseek-ai/dsh-agent-instructions'
         config:
           maxBytes: 65536
+      - id: time-context
+        name: '@deepseek-ai/dsh-time-context'
       - id: tool-bash
         name: '@deepseek-ai/dsh-tool-bash'
         disabled: !!js process.platform === 'win32'
@@ -480,6 +484,8 @@
           sampleOverCapGlobResults: false
       - id: tool-jobs
         name: '@deepseek-ai/dsh-tool-jobs'
+      - id: tool-schedule
+        name: '@deepseek-ai/dsh-tool-schedule'
       - id: command-goal
         name: '@deepseek-ai/dsh-command-goal'
       - id: tool-goal
@@ -494,7 +500,7 @@
             name: '@deepseek-ai/dsh-plan-mode'
             config:
               section: |
-                You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
+                You are in plan mode. Stay in plan mode until the user approves your plan through exit_plan_mode or switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
 
                 Explore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan in the actual repository. Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan. Prefer existing functions and patterns over new machinery.
 
@@ -538,41 +544,17 @@
               provider: spawn
               toolName: subagent
               modelSelectionSettings: true
-              backgroundMode: continuable
           - id: tool-subagent-fork
             name: '@deepseek-ai/dsh-tool-subagent'
             config:
               provider: fork
               toolName: subagent_fork
-              backgroundMode: continuable
-          - id: tool-subagent-codex
-            name: '@deepseek-ai/dsh-tool-subagent'
-            disabled: true
-            config:
-              provider: codex
-              toolName: subagent_codex
-              backgroundMode: one-shot
-              maxDepth: provider-managed
-          - id: tool-subagent-claude-code
-            name: '@deepseek-ai/dsh-tool-subagent'
-            disabled: true
-            config:
-              provider: claude-code
-              toolName: subagent_claude_code
-              backgroundMode: one-shot
-              maxDepth: provider-managed
           - id: workflow-ptc
             name: '@deepseek-ai/dsh-workflow-ptc'
             config:
               provider: spawn
           - id: tool-workflow
             name: '@deepseek-ai/dsh-tool-workflow'
-          - id: tool-ralph
-            name: '@deepseek-ai/dsh-tool-ralph'
-            disabled: true
-            config:
-              subagentProvider: spawn
-              maxRounds: 64
       - id: tool-ask-user
         name: '@deepseek-ai/dsh-tool-ask-user'
       - id: tool-todo
@@ -597,6 +579,9 @@
         name: '@deepseek-ai/dsh-tool-present'
       - id: tool-plugin-manager
         name: '@deepseek-ai/dsh-plugin-manager/tools'
+        disabled: !!js "!ctx.get('profileContext')"
+      - id: tool-plugin-market
+        name: '@deepseek-ai/dsh-plugin-market/tools'
         disabled: !!js "!ctx.get('profileContext')"
 
 # -----------------------------------------------------------------------------
