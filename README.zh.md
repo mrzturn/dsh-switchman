@@ -95,6 +95,7 @@ bash <安装目录>/skills/db-query/scripts/setup.sh
 - DSH 升级后若出厂预设插件列表有变，从新的 `presets/*.patch.yml` 重新同步 `cordis.patch.yml`（保留 doctrine suffix），然后重装。
 - 协议行（`[SWITCHMAN:LANG|POOLS|WATERMARK|TEAMS]`）刻意保持英文且字节稳定——不要本地化。
 - `npm pack --dry-run` 应保持审计过的 50 文件 / ~205 kB 形态（`docs/` 截图不进包）。
+- **零运行时依赖——硬性不变量。** 宿主侧包（`@deepseek-ai/schemastery`、cordis 等）只允许声明为 `peerDependencies`，由运行中的 DSH 用它自己的副本满足。普通 `dependencies` 会被物理安装进 profile 工作区（`<profile>/node_modules/…`），从而对同处 profile 的其他插件遮蔽宿主副本——1.7.0 把 schemastery 声明为普通依赖时，正是这个机制让 dshmarket 插件市场崩溃（一个进程里出现两份 schemastery，市场产生的 schema 与宿主不再同类）。`scripts/validate.mjs` 会在 `dependencies` 再次出现时直接失败；因此安装、升级、卸载 dsh-switchman 都不会再影响 dshmarket 或任何其他社区包在运行时解析到的模块。
 
 ## License
 

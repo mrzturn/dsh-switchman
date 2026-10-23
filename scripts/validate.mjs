@@ -17,6 +17,11 @@
  * 5. Every skills/<name>/ directory carries a parseable SKILL.md whose
  *    frontmatter name matches the directory, and db-query keeps its
  *    scripts/ and references/ intact.
+ * 6. Bundle isolation: package.json declares NO ordinary runtime
+ *    dependencies — @deepseek-ai/schemastery stays a peerDependency, so an
+ *    install can never hoist a second copy into the profile root and shadow
+ *    the host's (the mechanism that crashed dshmarket while 1.7.0 shipped
+ *    schemastery as a dependency).
  *
  * Layout note: DSH Desktop ≤0.1.7 shipped a plain `app/node_modules` tree;
  * the renamed DeepSeek Harness app packs the same tree into `app.asar`
@@ -209,10 +214,26 @@ for (const target of ["index.js", "client.js"]) {
 assert.equal(pkg.private, undefined, "package.json must not stay private for npm publishing");
 assert.equal(pkg.dsh?.manifestVersion, 1, "dsh.manifestVersion must be 1");
 assert.equal(typeof pkg.engines?.dsh, "string", "engines.dsh must be declared as a SemVer range");
+// --- bundle isolation invariant (the dshmarket conflict, 2026-10) ----------
+// dsh-switchman must ship ZERO ordinary runtime dependencies. Host-plane
+// packages (@deepseek-ai/schemastery, cordis, dsh-*) are provided by the
+// running DSH and must be declared as peerDependencies only: the runtime
+// resolver answers a peer import from the host's own copy, while an ordinary
+// dependency is physically installed into the profile workspace
+// (<profile>/node_modules/@deepseek-ai/schemastery) where it SHADOWS the
+// host copy for every other profile-resident package — dshmarket included.
+// That dual-instance split is what crashed the plugin market while 1.7.0
+// carried schemastery as a dependency. A future `dependencies` entry (or a
+// bundled transitive one) reintroduces the conflict class.
+assert.deepEqual(
+	pkg.dependencies ?? {},
+	{},
+	"dsh-switchman must declare NO runtime dependencies — host-plane packages go to peerDependencies (profile-root hoisting shadows the host's copy and crashes dshmarket)",
+);
 assert.equal(
-	pkg.dependencies?.["@deepseek-ai/schemastery"],
-	"3.18.4",
-	"the host Config schema pins @deepseek-ai/schemastery to the shipped version",
+	pkg.peerDependencies?.["@deepseek-ai/schemastery"],
+	"^3.18.1",
+	"@deepseek-ai/schemastery must stay a peerDependency with the ecosystem range ^3.18.1 (same range dshmarket declares)",
 );
 assert.equal(
 	exportsMap["./locale/*.json"],
@@ -312,6 +333,7 @@ console.log(
 		: "OK: 4 overrides parse, match shipped presets, share one doctrine suffix",
 );
 console.log("OK: package.json keeps the client-half discovery surface (exports + dsh.client)");
-console.log("OK: npm/market surface (icon, locale meta, files, schemastery pin, manifestVersion)");
+console.log("OK: npm/market surface (icon, locale meta, files, peer-only schemastery, manifestVersion)");
+console.log("OK: bundle isolation (zero runtime dependencies — host packages are peers, no profile-root shadowing)");
 console.log(`OK: ${skillDirs.length} bundled skill(s) parse with intact assets: ${skillDirs.join(", ")}`);
 if (!SKIP_HOST_CHECK) console.log(`doctrine suffix length: ${suffixes[0].length} chars`);

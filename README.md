@@ -95,6 +95,7 @@ bash <install-dir>/skills/db-query/scripts/setup.sh
 - After a DSH upgrade, if the factory preset plugin list changed, re-sync `cordis.patch.yml` from the new `presets/*.patch.yml` (keeping the doctrine suffix), then reinstall.
 - Protocol lines (`[SWITCHMAN:LANG|POOLS|WATERMARK|TEAMS]`) are deliberately English and byte-stable — don't localize them.
 - `npm pack --dry-run` should keep the audited 50-file / ~205 kB shape (`docs/` screenshots stay out of the package).
+- **Zero runtime dependencies — a hard invariant.** Host-plane packages (`@deepseek-ai/schemastery`, cordis, …) are declared as `peerDependencies` only, and the running DSH satisfies them from its own copy. An ordinary `dependencies` entry is physically installed into the profile workspace (`<profile>/node_modules/…`), where it shadows the host's copy for every other profile-resident plugin — this is exactly what crashed the dshmarket plugin market while 1.7.0 carried schemastery as a dependency (two schemastery instances in one process; the market's schemas no longer matched the host's). `scripts/validate.mjs` fails if a `dependencies` entry ever reappears, so installing, updating, or removing dsh-switchman can never touch what dshmarket or any other community bundle resolves at runtime.
 
 ## License
 
