@@ -32,6 +32,33 @@ window.__ModuleLoader__.load({
 		const React = require('react');
 		const h = React.createElement;
 
+		// ------------------------------------------------------------------
+		// Pin the "Auto" group to the top of the app's model pickers.
+		//
+		// The composer/command pickers (ui-model-selection ModelSelect and
+		// PopupSelectView) order provider groups with a compiled-in
+		// comparator (`provider-order.ts`) that pins only the deepseek ids
+		// and leaves every other group in catalog registration order — which
+		// lands our pseudo provider (registered last, by a plugin) at the
+		// bottom. There is no extension point, and the asar cannot be
+		// patched (ElectronAsarIntegrity), but the comparator reaches us
+		// through Array.prototype.toSorted: wrap it and pre-pin our group
+		// whenever THAT comparator (identified by its source) is used.
+		// Every other toSorted call passes through untouched.
+		// ------------------------------------------------------------------
+		(function pinAutoGroupTop() {
+			const original = Array.prototype.toSorted;
+			if (typeof original !== 'function') return;
+			Array.prototype.toSorted = function (comparator, ...rest) {
+				if (typeof comparator === 'function' && String(comparator).includes('deepseek-official')) {
+					return original.call(this, (left, right) =>
+						((left?.id === 'dsh-switchman-auto' ? -1 : 0) - (right?.id === 'dsh-switchman-auto' ? -1 : 0))
+							|| comparator(left, right), ...rest);
+				}
+				return original.call(this, comparator, ...rest);
+			};
+		})();
+
 		/** Locale namespace shared by every dsh-switchman client surface. */
 		const NS = 'dsh-switchman';
 
@@ -188,6 +215,48 @@ window.__ModuleLoader__.load({
 			},
 		};
 
+		/** Intent-routing classifier kinds (design: intent-routing.md §2;
+		 *  dictionary keys intentClassifierKind + Chat/Systemone). Two
+		 *  explicit channels: chat = llm catalog route, systemone =
+		 *  hand-configured decision endpoint + model. */
+		const INTENT_KINDS = ['chat', 'systemone'];
+
+		/** Numeric intent fields: settings field, schema minimum, and the
+		 * Host-side default (also the fallback for malformed stored values). */
+		const INTENT_NUMBER_FIELDS = [
+			{ field: 'intentCacheTtlSeconds', min: 0, max: Infinity, def: 300 },
+			{ field: 'intentSwitchConfidence', min: 0, max: 100, def: 80 },
+			{ field: 'intentTimeoutMs', min: 200, max: Infinity, def: 3000 },
+			{ field: 'intentHistoryMessages', min: 1, max: 20, def: 6 },
+			{ field: 'intentHistoryMaxChars', min: 200, max: 20000, def: 2400 },
+			{ field: 'intentContextWindow', min: 1024, max: Infinity, def: 200000 },
+		];
+
+		/** Dictionary keys per numeric intent row. */
+		const INTENT_ROW_KEYS = {
+			intentCacheTtlSeconds: {
+				label: 'intentCacheTtlLabel',
+				help: 'intentCacheTtlHelp',
+			},
+			intentSwitchConfidence: {
+				label: 'intentSwitchConfidenceLabel',
+				help: 'intentSwitchConfidenceHelp',
+			},
+			intentTimeoutMs: { label: 'intentTimeoutLabel', help: 'intentTimeoutHelp' },
+			intentHistoryMessages: {
+				label: 'intentHistoryMessagesLabel',
+				help: 'intentHistoryMessagesHelp',
+			},
+			intentHistoryMaxChars: {
+				label: 'intentHistoryMaxCharsLabel',
+				help: 'intentHistoryMaxCharsHelp',
+			},
+			intentContextWindow: {
+				label: 'intentContextWindowLabel',
+				help: 'intentContextWindowHelp',
+			},
+		};
+
 		/** Every settings field this page edits, in mutate order. */
 		const ALL_FIELDS = [
 			'uiLocale',
@@ -203,6 +272,16 @@ window.__ModuleLoader__.load({
 			'wmSubagentCap',
 			'teamsMode',
 			'syncWhitelist',
+			// Intent recognition (design: intent-routing.md §2).
+			'intentEnabled',
+			'intentClassifierRoute',
+			'intentClassifierEffort',
+			'intentClassifierKind',
+			'intentClassifierEndpoint',
+			'intentClassifierSystemoneModel',
+			'intentCandidates',
+			...INTENT_NUMBER_FIELDS.map(({ field }) => field),
+			'intentFallbackRoute',
 		];
 
 		/** Stable identity of one provider/model route. */
@@ -238,6 +317,23 @@ window.__ModuleLoader__.load({
 			return typeof entry.effort === 'string' && entry.effort !== ''
 				? { ...route, effort: entry.effort }
 				: null;
+		}
+
+		/** One well-formed intent candidate ({provider, model[, effort][,
+		 * note]}) — the design's IntentCandidateSchema — or null; blank
+		 * effort/note fields are dropped rather than kept. */
+		function sanitizeIntentCandidate(entry) {
+			const route = sanitizeRoute(entry);
+			if (route === null) return null;
+			return {
+				...route,
+				...(typeof entry.effort === 'string' && entry.effort !== ''
+					? { effort: entry.effort }
+					: {}),
+				...(typeof entry.note === 'string' && entry.note !== ''
+					? { note: entry.note }
+					: {}),
+			};
 		}
 
 		/** Is `value` one of the predefined candidates? */
@@ -327,6 +423,30 @@ window.__ModuleLoader__.load({
 				wmSubagentCap: bool('wmSubagentCap', true),
 				teamsMode: bool('teamsMode', false),
 				syncWhitelist: bool('syncWhitelist', false),
+				// Intent recognition (design: intent-routing.md §2): route
+				// objects degrade to the frozen empty-route default; the
+				// candidate array follows the pool-array sanitizers.
+				intentEnabled: bool('intentEnabled', false),
+				intentClassifierRoute:
+					sanitizeRoute(value?.intentClassifierRoute) ??
+					({ provider: '', model: '' }),
+				intentClassifierEffort: string('intentClassifierEffort'),
+				intentClassifierKind: INTENT_KINDS.includes(
+					value?.intentClassifierKind,
+				)
+					? value.intentClassifierKind
+					: 'chat',
+				intentClassifierEndpoint: string('intentClassifierEndpoint'),
+				intentClassifierSystemoneModel: string('intentClassifierSystemoneModel'),
+				intentCandidates: Array.isArray(value?.intentCandidates)
+					? value.intentCandidates.map(sanitizeIntentCandidate).filter(Boolean)
+					: [],
+				...Object.fromEntries(
+					INTENT_NUMBER_FIELDS.map((spec) => [spec.field, number(spec)]),
+				),
+				intentFallbackRoute:
+					sanitizeRoute(value?.intentFallbackRoute) ??
+					({ provider: '', model: '' }),
 			};
 		}
 
@@ -377,6 +497,25 @@ window.__ModuleLoader__.load({
 				wmSubagentCap: values.wmSubagentCap,
 				teamsMode: values.teamsMode,
 				syncWhitelist: values.syncWhitelist,
+				// Intent recognition: routes compare as route keys, the
+				// candidate array as an ordered sequence (list order is the
+				// classifier's #1..#n numbering), everything else verbatim.
+				intentEnabled: values.intentEnabled,
+				intentClassifierRoute: routeKey(values.intentClassifierRoute),
+				intentClassifierEffort: values.intentClassifierEffort,
+				intentClassifierKind: values.intentClassifierKind,
+				intentClassifierEndpoint: values.intentClassifierEndpoint,
+				intentClassifierSystemoneModel: values.intentClassifierSystemoneModel,
+				intentCandidates: values.intentCandidates
+					.map(
+						(entry) =>
+							`${routeKey(entry)}\0${entry.effort ?? ''}\0${entry.note ?? ''}`,
+					)
+					.join('|'),
+				...Object.fromEntries(
+					INTENT_NUMBER_FIELDS.map(({ field }) => [field, values[field]]),
+				),
+				intentFallbackRoute: routeKey(values.intentFallbackRoute),
 			});
 		}
 
@@ -388,10 +527,15 @@ window.__ModuleLoader__.load({
 		/** Index one catalog answer: route key → display metadata. Models are
 		 * keyed by `id` (the sessionController wire shape: {id, name}) with
 		 * the group id as provider; the flattened `model` shape is accepted
-		 * too. Groups keep their wire order. */
+		 * too. The switchman pseudo "Auto" group pins to the top (stable
+		 * sort keeps every other group in wire order). */
 		function indexCatalog(groups) {
 			const index = new Map();
-			for (const group of Array.isArray(groups) ? groups : []) {
+			const ordered = (Array.isArray(groups) ? groups : []).slice().sort(
+				(a, b) => (a?.id === 'dsh-switchman-auto' || a?.provider === 'dsh-switchman-auto' ? 0 : 1)
+					- (b?.id === 'dsh-switchman-auto' || b?.provider === 'dsh-switchman-auto' ? 0 : 1),
+			);
+			for (const group of ordered) {
 				const providerName = group.name ?? group.id ?? '';
 				for (const model of Array.isArray(group.models) ? group.models : []) {
 					const provider = model.provider ?? group.id;
@@ -652,6 +796,63 @@ window.__ModuleLoader__.load({
 				uiLocaleLabel: '界面语言',
 				uiLocaleHelp: '「自动」跟随 DeepSeek Harness 应用语言；选择具体语言后，本插件界面将固定为该语言。',
 				uiLocaleAuto: '自动（跟随 DSH）',
+				intentSectionTitle: '意图识别',
+				intentSectionDescription:
+					'选择「自动」模型时，按对话内容用分类器小模型自动路由候选模型；含厂商缓存续用窗口与切换置信度门槛。',
+				intentEnabledLabel: '启用意图识别',
+				intentEnabledHelp:
+					'主开关；关闭时选中「自动」直接走兜底链，不发起分类调用。',
+				intentClassifierRouteLabel: '分类器模型',
+				intentClassifierRouteHelp: '执行分类的小模型路由（provider + model）。',
+				intentClassifierEffortLabel: '分类器思考强度',
+				intentClassifierEffortHelp:
+					'可选固定 reasoning effort，优先于适配器默认。',
+				intentClassifierKindLabel: '分类器类型',
+				intentClassifierKindHelp:
+					'chat = 直接选 LLM 目录里的对话模型；systemone = 手填端点+模型的决策类型。',
+				intentClassifierKindChat: '对话模型 (LLM 目录)',
+				intentClassifierKindSystemone: '决策类型 (手配端点+模型)',
+				intentClassifierEndpointLabel: '决策端点',
+				intentClassifierEndpointHelp: '分类器类型为「决策端点」时直接调用的 /v1/systemone 完整 URL（不经 llm 提供方）',
+				intentSystemoneModelLabel: '决策端点模型',
+				intentSystemoneModelHelp: '发送到决策端点的 model 参数（如 tev1:4b-mxfp8），自由填写，无需存在于模型供应商列表',
+				intentEndpointUnset: '未设置',
+				intentCandidatesLabel: '候选模型',
+				intentCandidatesHelp:
+					'可被自动路由到的模型清单；note 是给分类器看的一句话能力描述。',
+				intentCandidatesEmpty: '暂无候选：至少配置 1 个候选，「自动」才能路由。',
+				intentCandidatesAdd: '添加候选',
+				intentCandidateRemove: '删除候选',
+				intentCandidateNotePlaceholder: '一句话能力描述（给分类器看）',
+				intentCacheTtlLabel: '缓存续用窗口（秒）',
+				intentCacheTtlHelp:
+					'该窗口内置信度不足时沿用当前模型，避免打断厂商 prompt cache。',
+				intentSwitchConfidenceLabel: '切换置信度（0–100）',
+				intentSwitchConfidenceHelp:
+					'分类置信度达到该值才允许离开当前模型。',
+				intentTimeoutLabel: '分类超时（毫秒）',
+				intentTimeoutHelp:
+					'分类调用预算；超时或失败时按兜底链放行（fail-open）。',
+				intentHistoryMessagesLabel: '历史消息条数（1–20）',
+				intentHistoryMessagesHelp: '喂给分类器的最近消息条数。',
+				intentHistoryMaxCharsLabel: '摘录字符预算',
+				intentContextWindowLabel: '上下文窗口',
+				intentContextWindowHelp: 'Auto 伪模型声明的上下文窗口（token），用于用量显示与自动压缩水位。',
+				intentHistoryMaxCharsHelp: '对话摘录的总字符上限（200–20000）。',
+				intentFallbackRouteLabel: '兜底模型',
+				intentFallbackRouteHelp:
+					'分类失败时依次：上一轮实际路由 → 兜底模型 → 候选第一位；留空用候选第一位。',
+				intentRouteUnset: '未设置',
+				intentEffortFollow: '跟随模型默认',
+				intentDockAuto: '自动',
+				intentDockUnrouted: '未路由',
+				intentDockUnconfigured: '意图识别未配置完整',
+				intentDockCache: '缓存窗口剩余 {seconds} 秒',
+				intentDockTipCandidates: '候选：{count}',
+				intentDockTipOn: '开',
+				intentDockTipOff: '关',
+				intentModelLabelTrigger: '自动',
+				intentModelLabelFull: '自动（意图识别）',
 			},
 			en: {
 				badge: 'Team autonomy',
@@ -810,6 +1011,69 @@ window.__ModuleLoader__.load({
 				uiLocaleLabel: 'Interface language',
 				uiLocaleHelp: "Auto follows the DeepSeek Harness app language; picking a language forces this plugin's UI into it.",
 				uiLocaleAuto: 'Auto (follow DSH)',
+				intentSectionTitle: 'Intent routing',
+				intentSectionDescription:
+					"When the 'Auto' pseudo-model is picked, a small classifier model routes each turn to the best candidate by conversation content; with vendor cache-reuse window and a switch-confidence gate.",
+				intentEnabledLabel: 'Enable intent routing',
+				intentEnabledHelp:
+					"Master switch; off = the 'Auto' selection goes straight down the fallback chain without any classifier call.",
+				intentClassifierRouteLabel: 'Classifier model',
+				intentClassifierRouteHelp:
+					'Route (provider + model) of the small model that classifies each turn.',
+				intentClassifierEffortLabel: 'Classifier reasoning effort',
+				intentClassifierEffortHelp:
+					'Optional pinned reasoning effort; overrides the adapter default.',
+				intentClassifierKindLabel: 'Classifier kind',
+				intentClassifierKindHelp:
+					'chat = a chat model from the LLM catalog; systemone = decision type with a hand-configured endpoint + model.',
+				intentClassifierKindChat: 'Chat model (LLM catalog)',
+				intentClassifierKindSystemone: 'Decision (custom endpoint+model)',
+				intentClassifierEndpointLabel: 'Decision endpoint',
+				intentClassifierEndpointHelp: 'Full /v1/systemone URL called directly when the classifier kind is the decision endpoint (no llm provider)',
+				intentSystemoneModelLabel: 'Decision endpoint model',
+				intentSystemoneModelHelp: 'Model name sent to the decision endpoint (e.g. tev1:4b-mxfp8); free text, no provider entry needed',
+				intentEndpointUnset: 'Not set',
+				intentCandidatesLabel: 'Candidates',
+				intentCandidatesHelp:
+					'Models the router may pick; note is a one-line capability description the classifier reads.',
+				intentCandidatesEmpty:
+					'No candidates yet: configure at least 1 candidate for routing to work.',
+				intentCandidatesAdd: 'Add candidate',
+				intentCandidateRemove: 'Remove candidate',
+				intentCandidateNotePlaceholder:
+					'one-line capability note (read by the classifier)',
+				intentCacheTtlLabel: 'Cache reuse window (seconds)',
+				intentCacheTtlHelp:
+					'Inside this window a low-confidence result keeps the current model, preserving the vendor prompt cache.',
+				intentSwitchConfidenceLabel: 'Switch confidence (0–100)',
+				intentSwitchConfidenceHelp:
+					'The classifier confidence must reach this value to leave the current model.',
+				intentTimeoutLabel: 'Classification timeout (ms)',
+				intentTimeoutHelp:
+					'Budget for the classifier call; timeout or failure falls back (fail-open).',
+				intentHistoryMessagesLabel: 'History messages (1–20)',
+				intentHistoryMessagesHelp:
+					'How many recent messages are fed to the classifier.',
+				intentHistoryMaxCharsLabel: 'Excerpt character budget',
+				intentContextWindowLabel: 'Context window',
+				intentContextWindowHelp: 'Context window (tokens) declared by the Auto pseudo-model; drives the usage popover and auto-compaction pressure.',
+				intentHistoryMaxCharsHelp:
+					'Total character cap of the conversation excerpt (200–20000).',
+				intentFallbackRouteLabel: 'Fallback model',
+				intentFallbackRouteHelp:
+					'On classification failure: last routed model → fallback → first candidate; empty = first candidate.',
+				intentRouteUnset: 'Not set',
+				intentEffortFollow: 'model default',
+				intentDockAuto: 'Auto',
+				intentDockUnrouted: 'unrouted',
+				intentDockUnconfigured:
+					'Intent routing is not fully configured',
+				intentDockCache: 'Cache window: {seconds}s left',
+				intentDockTipCandidates: 'candidates: {count}',
+				intentDockTipOn: 'on',
+				intentDockTipOff: 'off',
+				intentModelLabelTrigger: 'Auto',
+				intentModelLabelFull: 'Auto (intent routing)',
 			},
 		};
 
@@ -959,6 +1223,63 @@ window.__ModuleLoader__.load({
 				uiLocaleLabel: '介面語言',
 				uiLocaleHelp: '「自動」跟隨 DeepSeek Harness 應用程式語言；指定語言後，本外掛的 UI 固定使用該語言。',
 				uiLocaleAuto: '自動（跟隨 DSH）',
+				intentSectionTitle: '意圖識別',
+				intentSectionDescription:
+					'選擇「自動」模型時，按對話內容用分類器小模型自動路由候選模型；含供應商快取續用視窗與切換信心門檻。',
+				intentEnabledLabel: '啟用意圖識別',
+				intentEnabledHelp:
+					'主開關；關閉時選中「自動」直接走備援鏈，不發起分類呼叫。',
+				intentClassifierRouteLabel: '分類器模型',
+				intentClassifierRouteHelp: '執行分類的小模型路由（provider + model）。',
+				intentClassifierEffortLabel: '分類器思考強度',
+				intentClassifierEffortHelp:
+					'可選固定 reasoning effort，優先於配接器預設。',
+				intentClassifierKindLabel: '分類器類型',
+				intentClassifierKindHelp:
+					'chat = 直接選 LLM 目錄裡的對話模型；systemone = 手填端點+模型的決策類型。',
+				intentClassifierKindChat: '對話模型 (LLM 目錄)',
+				intentClassifierKindSystemone: '決策類型 (自配端點+模型)',
+				intentClassifierEndpointLabel: '決策端點',
+				intentClassifierEndpointHelp: '分類器類型為「決策端點」時直接呼叫的 /v1/systemone 完整 URL（不經 llm 提供方）',
+				intentSystemoneModelLabel: '決策端點模型',
+				intentSystemoneModelHelp: '傳送到決策端點的 model 參數（如 tev1:4b-mxfp8），自由填寫，無需存在於模型供應商清單',
+				intentEndpointUnset: '未設定',
+				intentCandidatesLabel: '候選模型',
+				intentCandidatesHelp:
+					'可被自動路由到的模型清單；note 是給分類器看的一句話能力描述。',
+				intentCandidatesEmpty: '暫無候選：至少設定 1 個候選，「自動」才能路由。',
+				intentCandidatesAdd: '新增候選',
+				intentCandidateRemove: '刪除候選',
+				intentCandidateNotePlaceholder: '一句話能力描述（給分類器看）',
+				intentCacheTtlLabel: '快取續用視窗（秒）',
+				intentCacheTtlHelp:
+					'視窗內信心不足時沿用目前模型，避免打斷供應商 prompt cache。',
+				intentSwitchConfidenceLabel: '切換信心（0–100）',
+				intentSwitchConfidenceHelp:
+					'分類信心達到該值才允許離開目前模型。',
+				intentTimeoutLabel: '分類逾時（毫秒）',
+				intentTimeoutHelp:
+					'分類呼叫預算；逾時或失敗時按備援鏈放行（fail-open）。',
+				intentHistoryMessagesLabel: '歷史訊息條數（1–20）',
+				intentHistoryMessagesHelp: '餵給分類器的最近訊息條數。',
+				intentHistoryMaxCharsLabel: '摘錄字元預算',
+				intentContextWindowLabel: '上下文視窗',
+				intentContextWindowHelp: 'Auto 偽模型宣告的上下文視窗（token），用於用量顯示與自動壓縮水位。',
+				intentHistoryMaxCharsHelp: '對話摘錄的總字元上限（200–20000）。',
+				intentFallbackRouteLabel: '備援模型',
+				intentFallbackRouteHelp:
+					'分類失敗時依次：上一輪實際路由 → 備援模型 → 候選第一位；留空用候選第一位。',
+				intentRouteUnset: '未設定',
+				intentEffortFollow: '跟隨模型預設',
+				intentDockAuto: '自動',
+				intentDockUnrouted: '未路由',
+				intentDockUnconfigured: '意圖識別未設定完整',
+				intentDockCache: '快取視窗剩餘 {seconds} 秒',
+				intentDockTipCandidates: '候選：{count}',
+				intentDockTipOn: '開',
+				intentDockTipOff: '關',
+				intentModelLabelTrigger: '自動',
+				intentModelLabelFull: '自動（意圖識別）',
 			},
 			ja: {
 				badge: '自律チーム',
@@ -1096,6 +1417,67 @@ window.__ModuleLoader__.load({
 				uiLocaleLabel: 'インターフェース言語',
 				uiLocaleHelp: '「自動」は DeepSeek Harness アプリの言語に従います。言語を選ぶと、このプラグインの UI がその言語に固定されます。',
 				uiLocaleAuto: '自動（DSH に従う）',
+				intentSectionTitle: 'インテントルーティング',
+				intentSectionDescription:
+					'「自動」モデル選択時、会話内容から小型の分類モデルが各ターンを最適な候補へルーティングします。ベンダーキャッシュ再利用窓と切替信頼度ゲート付き。',
+				intentEnabledLabel: 'インテントルーティングを有効化',
+				intentEnabledHelp:
+					'マスタースイッチ。オフのとき「自動」は分類呼び出しを行わずフォールバックチェーンへ直行します。',
+				intentClassifierRouteLabel: '分類モデル',
+				intentClassifierRouteHelp:
+					'分類を行う小型モデルのルート（provider + model）。',
+				intentClassifierEffortLabel: '分類の思考強度',
+				intentClassifierEffortHelp:
+					'任意の reasoning effort 固定。アダプターのデフォルトより優先します。',
+				intentClassifierKindLabel: '分類器の種類',
+				intentClassifierKindHelp:
+					'chat = LLM カタログの対話モデルを直接選択。systemone = エンドポイント+モデルを手動設定する決定タイプ。',
+				intentClassifierKindChat: '対話モデル (LLM カタログ)',
+				intentClassifierKindSystemone: '決定タイプ (手動エンドポイント+モデル)',
+				intentClassifierEndpointLabel: '判定エンドポイント',
+				intentClassifierEndpointHelp: '分類器の種類が判定エンドポイントのとき直接呼び出す /v1/systemone の完全 URL（LLM プロバイダ不要）',
+				intentSystemoneModelLabel: '決定エンドポイントのモデル',
+				intentSystemoneModelHelp: '決定エンドポイントへ送る model パラメータ（例: tev1:4b-mxfp8）。自由入力で、プロバイダー一覧への登録は不要',
+				intentEndpointUnset: '未設定',
+				intentCandidatesLabel: '候補モデル',
+				intentCandidatesHelp:
+					'自動ルーティングされ得るモデル一覧。note は分類器が読む一行の能力説明です。',
+				intentCandidatesEmpty:
+					'候補なし：ルーティングには 1 件以上の候補が必要です。',
+				intentCandidatesAdd: '候補を追加',
+				intentCandidateRemove: '候補を削除',
+				intentCandidateNotePlaceholder: '一行の能力説明（分類器向け）',
+				intentCacheTtlLabel: 'キャッシュ再利用窓（秒）',
+				intentCacheTtlHelp:
+					'窓内で信頼度が不足する場合は現在モデルを維持し、ベンダーの prompt cache を保ちます。',
+				intentSwitchConfidenceLabel: '切替信頼度（0–100）',
+				intentSwitchConfidenceHelp:
+					'この値に達した信頼度でのみ現在モデルから切り替えます。',
+				intentTimeoutLabel: '分類タイムアウト（ミリ秒）',
+				intentTimeoutHelp:
+					'分類呼び出しの予算。タイムアウトや失敗はフォールバックで継続（fail-open）。',
+				intentHistoryMessagesLabel: '履歴メッセージ数（1–20）',
+				intentHistoryMessagesHelp: '分類器に渡す最近のメッセージ数。',
+				intentHistoryMaxCharsLabel: '抜粋文字数予算',
+				intentContextWindowLabel: 'コンテキストウィンドウ',
+				intentContextWindowHelp: 'Auto 疑似モデルが宣言するコンテキストウィンドウ（トークン）。使用量表示と自動圧縮のしきい値に使用。',
+				intentHistoryMaxCharsHelp:
+					'会話抜粋の合計文字上限（200–20000）。',
+				intentFallbackRouteLabel: 'フォールバックモデル',
+				intentFallbackRouteHelp:
+					'分類失敗時：前回ルート → フォールバック → 候補の先頭。空欄は候補の先頭。',
+				intentRouteUnset: '未設定',
+				intentEffortFollow: 'モデルのデフォルト',
+				intentDockAuto: '自動',
+				intentDockUnrouted: '未ルーティング',
+				intentDockUnconfigured:
+					'インテントルーティングの設定が不完全です',
+				intentDockCache: 'キャッシュ窓 残り {seconds} 秒',
+				intentDockTipCandidates: '候補：{count}',
+				intentDockTipOn: 'オン',
+				intentDockTipOff: 'オフ',
+				intentModelLabelTrigger: '自動',
+				intentModelLabelFull: '自動（インテントルーティング）',
 			},
 			ko: {
 				badge: '자율 팀',
@@ -1233,6 +1615,67 @@ window.__ModuleLoader__.load({
 				uiLocaleLabel: '인터페이스 언어',
 				uiLocaleHelp: '자동은 DeepSeek Harness 앱 언어를 따르고, 언어를 직접 고르면 이 플러그인의 UI가 그 언어로 고정됩니다.',
 				uiLocaleAuto: '자동(DSH 따르기)',
+				intentSectionTitle: '의도 라우팅',
+				intentSectionDescription:
+					'「자동」모델 선택 시 대화 내용을 기반으로 소형 분류 모델이 각 턴을 최적 후보로 라우팅합니다. 벤더 캐시 재사용 창과 전환 신뢰도 게이트 포함.',
+				intentEnabledLabel: '의도 라우팅 사용',
+				intentEnabledHelp:
+					'마스터 스위치. 끄면 「자동」은 분류 호출 없이 폴백 체인으로 바로 진행합니다.',
+				intentClassifierRouteLabel: '분류 모델',
+				intentClassifierRouteHelp:
+					'분류를 수행하는 소형 모델 경로(provider + model)입니다.',
+				intentClassifierEffortLabel: '분류 추론 강도',
+				intentClassifierEffortHelp:
+					'선택적 reasoning effort 고정. 어댑터 기본값보다 우선합니다.',
+				intentClassifierKindLabel: '분류기 종류',
+				intentClassifierKindHelp:
+					'chat = LLM 카탈로그의 대화 모델 직접 선택. systemone = 엔드포인트+모델을 수동 설정하는 결정 유형.',
+				intentClassifierKindChat: '대화 모델 (LLM 카탈로그)',
+				intentClassifierKindSystemone: '결정 유형 (수동 엔드포인트+모델)',
+				intentClassifierEndpointLabel: '판정 엔드포인트',
+				intentClassifierEndpointHelp: '분류기 종류가 판정 엔드포인트일 때 직접 호출하는 /v1/systemone 전체 URL(LLM 공급자 불필요)',
+				intentSystemoneModelLabel: '결정 엔드포인트 모델',
+				intentSystemoneModelHelp: '결정 엔드포인트로 보내는 model 매개변수(예: tev1:4b-mxfp8). 자유 입력이며 공급자 목록에 없어도 됨',
+				intentEndpointUnset: '미설정',
+				intentCandidatesLabel: '후보 모델',
+				intentCandidatesHelp:
+					'자동 라우팅될 수 있는 모델 목록. note는 분류기가 읽는 한 줄 능력 설명입니다.',
+				intentCandidatesEmpty:
+					'후보 없음: 라우팅하려면 후보를 1개 이상 설정하세요.',
+				intentCandidatesAdd: '후보 추가',
+				intentCandidateRemove: '후보 삭제',
+				intentCandidateNotePlaceholder: '한 줄 능력 설명(분류기용)',
+				intentCacheTtlLabel: '캐시 재사용 창(초)',
+				intentCacheTtlHelp:
+					'창 안에서 신뢰도가 부족하면 현재 모델을 유지해 벤더 prompt cache를 보존합니다.',
+				intentSwitchConfidenceLabel: '전환 신뢰도(0–100)',
+				intentSwitchConfidenceHelp:
+					'이 값에 도달한 신뢰도에서만 현재 모델을 떠날 수 있습니다.',
+				intentTimeoutLabel: '분류 타임아웃(밀리초)',
+				intentTimeoutHelp:
+					'분류 호출 예산. 시간 초과나 실패 시 폴백으로 계속합니다(fail-open).',
+				intentHistoryMessagesLabel: '히스토리 메시지 수(1–20)',
+				intentHistoryMessagesHelp: '분류기에 전달할 최근 메시지 수.',
+				intentHistoryMaxCharsLabel: '발췌 문자 예산',
+				intentContextWindowLabel: '컨텍스트 윈도우',
+				intentContextWindowHelp: 'Auto 의사 모델이 선언하는 컨텍스트 윈도우(토큰). 사용량 표시와 자동 압축 기준에 사용.',
+				intentHistoryMaxCharsHelp:
+					'대화 발췌의 총 문자 상한(200–20000).',
+				intentFallbackRouteLabel: '폴백 모델',
+				intentFallbackRouteHelp:
+					'분류 실패 시: 이전 라우트 → 폴백 → 첫 후보. 빈 값은 첫 후보.',
+				intentRouteUnset: '미설정',
+				intentEffortFollow: '모델 기본값',
+				intentDockAuto: '자동',
+				intentDockUnrouted: '미라우팅',
+				intentDockUnconfigured:
+					'의도 라우팅 설정이 완전하지 않습니다',
+				intentDockCache: '캐시 창 남은 {seconds}초',
+				intentDockTipCandidates: '후보: {count}',
+				intentDockTipOn: '켬',
+				intentDockTipOff: '끔',
+				intentModelLabelTrigger: '자동',
+				intentModelLabelFull: '자동(의도 라우팅)',
 			},
 			de: {
 				badge: 'Autonomes Team',
@@ -1370,6 +1813,69 @@ window.__ModuleLoader__.load({
 				uiLocaleLabel: 'Sprache der Oberfläche',
 				uiLocaleHelp: 'Auto folgt der App-Sprache von DeepSeek Harness; wählt man eine Sprache, wird die Oberfläche dieses Plugins darauf festgelegt.',
 				uiLocaleAuto: 'Auto (DSH folgen)',
+				intentSectionTitle: 'Intent-Routing',
+				intentSectionDescription:
+					'Bei Wahl des Pseudo-Modells „Auto“ routet ein kleines Klassifikatormodell jeden Zug anhand des Gesprächsverlaufs zum besten Kandidaten; mit Cache-Wiederverwendungsfenster und Konfidenzschwelle.',
+				intentEnabledLabel: 'Intent-Routing aktivieren',
+				intentEnabledHelp:
+					'Hauptschalter; aus = die „Auto“-Auswahl geht ohne Klassifikatoraufruf direkt in die Fallback-Kette.',
+				intentClassifierRouteLabel: 'Klassifikator-Modell',
+				intentClassifierRouteHelp:
+					'Route (Provider + Modell) des kleinen Klassifikationsmodells.',
+				intentClassifierEffortLabel: 'Reasoning-Aufwand des Klassifikators',
+				intentClassifierEffortHelp:
+					'Optionaler fester Reasoning-Effort; hat Vorrang vor dem Adapter-Standard.',
+				intentClassifierKindLabel: 'Klassifikator-Typ',
+				intentClassifierKindHelp:
+					'chat = Chat-Modell direkt aus dem LLM-Katalog; systemone = Entscheidung mit eigenem Endpunkt + Modell.',
+				intentClassifierKindChat: 'Chat-Modell (LLM-Katalog)',
+				intentClassifierKindSystemone: 'Entscheidung (eigener Endpunkt+Modell)',
+				intentClassifierEndpointLabel: 'Entscheidungs-Endpunkt',
+				intentClassifierEndpointHelp: 'Vollständige /v1/systemone-URL, die direkt aufgerufen wird, wenn der Klassifikator-Typ der Entscheidungs-Endpunkt ist (ohne LLM-Provider)',
+				intentSystemoneModelLabel: 'Modell des Entscheidungsendpunkts',
+				intentSystemoneModelHelp: 'Modelname, der an den Entscheidungsendpunkt gesendet wird (z. B. tev1:4b-mxfp8); freier Text, kein Anbieter-Eintrag nötig',
+				intentEndpointUnset: 'Nicht festgelegt',
+				intentCandidatesLabel: 'Kandidaten',
+				intentCandidatesHelp:
+					'Modelle, zu denen geroutet werden darf; note ist eine Einzeilen-Fähigkeitsbeschreibung für den Klassifikator.',
+				intentCandidatesEmpty:
+					'Keine Kandidaten: Für das Routing ist mindestens 1 Kandidat nötig.',
+				intentCandidatesAdd: 'Kandidat hinzufügen',
+				intentCandidateRemove: 'Kandidat entfernen',
+				intentCandidateNotePlaceholder:
+					'Einzeilen-Fähigkeitsbeschreibung (für den Klassifikator)',
+				intentCacheTtlLabel: 'Cache-Fenster (Sekunden)',
+				intentCacheTtlHelp:
+					'Innerhalb des Fensters hält geringe Konfidenz das aktuelle Modell und schont den Anbieter-Prompt-Cache.',
+				intentSwitchConfidenceLabel: 'Wechsel-Konfidenz (0–100)',
+				intentSwitchConfidenceHelp:
+					'Erst ab dieser Klassifikationskonfidenz darf das aktuelle Modell verlassen werden.',
+				intentTimeoutLabel: 'Klassifikations-Timeout (ms)',
+				intentTimeoutHelp:
+					'Budget für den Klassifikatoraufruf; Timeout oder Fehler fällt zurück (fail-open).',
+				intentHistoryMessagesLabel: 'Verlaufsnachrichten (1–20)',
+				intentHistoryMessagesHelp:
+					'Wie viele letzte Nachrichten dem Klassifikator übergeben werden.',
+				intentHistoryMaxCharsLabel: 'Auszug-Zeichenbudget',
+				intentContextWindowLabel: 'Kontextfenster',
+				intentContextWindowHelp: 'Vom Auto-Pseudo-Modell deklariertes Kontextfenster (Token); steuert Verbrauchsanzeige und Kompressionsdruck.',
+				intentHistoryMaxCharsHelp:
+					'Gesamtzeichengrenze des Gesprächsauszugs (200–20000).',
+				intentFallbackRouteLabel: 'Fallback-Modell',
+				intentFallbackRouteHelp:
+					'Bei Klassifikationsfehler: zuletzt geroutet → Fallback → erster Kandidat; leer = erster Kandidat.',
+				intentRouteUnset: 'Nicht festgelegt',
+				intentEffortFollow: 'Modellstandard',
+				intentDockAuto: 'Auto',
+				intentDockUnrouted: 'nicht geroutet',
+				intentDockUnconfigured:
+					'Intent-Routing ist nicht vollständig konfiguriert',
+				intentDockCache: 'Cache-Fenster: noch {seconds}s',
+				intentDockTipCandidates: 'Kandidaten: {count}',
+				intentDockTipOn: 'ein',
+				intentDockTipOff: 'aus',
+				intentModelLabelTrigger: 'Auto',
+				intentModelLabelFull: 'Auto (Intent-Routing)',
 			},
 			es: {
 				badge: 'Equipo autónomo',
@@ -1507,6 +2013,69 @@ window.__ModuleLoader__.load({
 				uiLocaleLabel: 'Idioma de la interfaz',
 				uiLocaleHelp: 'Automático sigue el idioma de la app DeepSeek Harness; al elegir un idioma, la interfaz del plugin se fija en él.',
 				uiLocaleAuto: 'Automático (seguir DSH)',
+				intentSectionTitle: 'Enrutado por intención',
+				intentSectionDescription:
+					'Al elegir el pseudo-modelo «Auto», un clasificador pequeño dirige cada turno al mejor candidato según la conversación; con ventana de reutilización de caché y umbral de confianza.',
+				intentEnabledLabel: 'Activar enrutado por intención',
+				intentEnabledHelp:
+					'Interruptor maestro; apagado = la selección «Auto» va directa a la cadena de reserva sin llamada al clasificador.',
+				intentClassifierRouteLabel: 'Modelo clasificador',
+				intentClassifierRouteHelp:
+					'Ruta (provider + model) del modelo pequeño que clasifica cada turno.',
+				intentClassifierEffortLabel: 'Esfuerzo de razonamiento del clasificador',
+				intentClassifierEffortHelp:
+					'Esfuerzo de razonamiento fijo opcional; prevalece sobre el valor por defecto del adaptador.',
+				intentClassifierKindLabel: 'Tipo de clasificador',
+				intentClassifierKindHelp:
+					'chat = modelo de chat del catálogo LLM; systemone = tipo de decisión con endpoint + modelo propios.',
+				intentClassifierKindChat: 'Modelo de chat (catálogo LLM)',
+				intentClassifierKindSystemone: 'Decisión (endpoint+modelo propios)',
+				intentClassifierEndpointLabel: 'Endpoint de decisión',
+				intentClassifierEndpointHelp: 'URL /v1/systemone completa que se llama directamente cuando el tipo de clasificador es el endpoint de decisión (sin proveedor LLM)',
+				intentSystemoneModelLabel: 'Modelo del endpoint de decisión',
+				intentSystemoneModelHelp: 'Parámetro model que se envía al endpoint de decisión (p. ej. tev1:4b-mxfp8); texto libre, no necesita estar en la lista de proveedores',
+				intentEndpointUnset: 'Sin establecer',
+				intentCandidatesLabel: 'Candidatos',
+				intentCandidatesHelp:
+					'Modelos a los que se puede enrutar; note es una descripción de capacidad en una línea que lee el clasificador.',
+				intentCandidatesEmpty:
+					'Sin candidatos: configure al menos 1 candidato para poder enrutar.',
+				intentCandidatesAdd: 'Añadir candidato',
+				intentCandidateRemove: 'Eliminar candidato',
+				intentCandidateNotePlaceholder:
+					'descripción de capacidad en una línea (para el clasificador)',
+				intentCacheTtlLabel: 'Ventana de reutilización de caché (segundos)',
+				intentCacheTtlHelp:
+					'Dentro de esta ventana una confianza baja mantiene el modelo actual y preserva la caché de prompt del proveedor.',
+				intentSwitchConfidenceLabel: 'Confianza para cambiar (0–100)',
+				intentSwitchConfidenceHelp:
+					'Solo con esta confianza de clasificación se permite dejar el modelo actual.',
+				intentTimeoutLabel: 'Tiempo máximo de clasificación (ms)',
+				intentTimeoutHelp:
+					'Presupuesto de la llamada al clasificador; tiempo agotado o fallo usa la reserva (fail-open).',
+				intentHistoryMessagesLabel: 'Mensajes de historial (1–20)',
+				intentHistoryMessagesHelp:
+					'Cuántos mensajes recientes se entregan al clasificador.',
+				intentHistoryMaxCharsLabel: 'Presupuesto de caracteres del extracto',
+				intentContextWindowLabel: 'Ventana de contexto',
+				intentContextWindowHelp: 'Ventana de contexto (tokens) declarada por el pseudo-modelo Auto; controla la visualización de uso y la presión de compactación.',
+				intentHistoryMaxCharsHelp:
+					'Límite total de caracteres del extracto de conversación (200–20000).',
+				intentFallbackRouteLabel: 'Modelo de reserva',
+				intentFallbackRouteHelp:
+					'Si falla la clasificación: último modelo enrutado → reserva → primer candidato; vacío = primer candidato.',
+				intentRouteUnset: 'Sin establecer',
+				intentEffortFollow: 'predeterminado del modelo',
+				intentDockAuto: 'Auto',
+				intentDockUnrouted: 'sin enrutar',
+				intentDockUnconfigured:
+					'El enrutado por intención no está completamente configurado',
+				intentDockCache: 'Ventana de caché: {seconds}s restantes',
+				intentDockTipCandidates: 'candidatos: {count}',
+				intentDockTipOn: 'sí',
+				intentDockTipOff: 'no',
+				intentModelLabelTrigger: 'Auto',
+				intentModelLabelFull: 'Auto (enrutado por intención)',
 			},
 			fr: {
 				badge: 'Équipe autonome',
@@ -1644,6 +2213,69 @@ window.__ModuleLoader__.load({
 				uiLocaleLabel: 'Langue de l’interface',
 				uiLocaleHelp: 'Auto suit la langue de l’application DeepSeek Harness ; choisir une langue force l’interface du plugin dans cette langue.',
 				uiLocaleAuto: 'Auto (suivre DSH)',
+				intentSectionTitle: 'Routage par intention',
+				intentSectionDescription:
+					'Lorsque le pseudo-modèle « Auto » est choisi, un petit classificateur route chaque tour vers le meilleur candidat d’après la conversation ; avec fenêtre de réutilisation du cache et seuil de confiance.',
+				intentEnabledLabel: 'Activer le routage par intention',
+				intentEnabledHelp:
+					'Interrupteur principal ; désactivé, la sélection « Auto » passe directement par la chaîne de secours sans appel au classificateur.',
+				intentClassifierRouteLabel: 'Modèle classificateur',
+				intentClassifierRouteHelp:
+					'Route (provider + model) du petit modèle qui classe chaque tour.',
+				intentClassifierEffortLabel: 'Effort de raisonnement du classificateur',
+				intentClassifierEffortHelp:
+					'Effort de raisonnement épinglé facultatif ; prime sur la valeur par défaut de l’adaptateur.',
+				intentClassifierKindLabel: 'Type de classificateur',
+				intentClassifierKindHelp:
+					'chat = modèle de chat du catalogue LLM ; systemone = type de décision avec endpoint + modèle personnalisés.',
+				intentClassifierKindChat: 'Modèle de chat (catalogue LLM)',
+				intentClassifierKindSystemone: 'Décision (endpoint+modèle personnalisés)',
+				intentClassifierEndpointLabel: 'Endpoint de décision',
+				intentClassifierEndpointHelp: 'URL /v1/systemone complète appelée directement quand le type de classificateur est l\'endpoint de décision (sans fournisseur LLM)',
+				intentSystemoneModelLabel: 'Modèle du point de décision',
+				intentSystemoneModelHelp: 'Paramètre model envoyé au point de décision (p. ex. tev1:4b-mxfp8) ; texte libre, inutile qu\'il figure dans la liste des fournisseurs',
+				intentEndpointUnset: 'Non défini',
+				intentCandidatesLabel: 'Candidats',
+				intentCandidatesHelp:
+					'Modèles vers lesquels le routage peut aller ; note est une description de capacité d’une ligne lue par le classificateur.',
+				intentCandidatesEmpty:
+					'Aucun candidat : configurez au moins 1 candidat pour permettre le routage.',
+				intentCandidatesAdd: 'Ajouter un candidat',
+				intentCandidateRemove: 'Supprimer le candidat',
+				intentCandidateNotePlaceholder:
+					'description de capacité en une ligne (pour le classificateur)',
+				intentCacheTtlLabel: 'Fenêtre de réutilisation du cache (secondes)',
+				intentCacheTtlHelp:
+					'Dans cette fenêtre, une confiance insuffisante conserve le modèle actuel et préserve le cache de prompt du fournisseur.',
+				intentSwitchConfidenceLabel: 'Confiance de bascule (0–100)',
+				intentSwitchConfidenceHelp:
+					'Seule une confiance de classification atteignant cette valeur permet de quitter le modèle actuel.',
+				intentTimeoutLabel: 'Délai de classification (ms)',
+				intentTimeoutHelp:
+					'Budget de l’appel au classificateur ; dépassé ou en échec, le secours prend le relais (fail-open).',
+				intentHistoryMessagesLabel: 'Messages d’historique (1–20)',
+				intentHistoryMessagesHelp:
+					'Nombre de messages récents transmis au classificateur.',
+				intentHistoryMaxCharsLabel: 'Budget de caractères de l’extrait',
+				intentContextWindowLabel: 'Fenêtre de contexte',
+				intentContextWindowHelp: 'Fenêtre de contexte (jetons) déclarée par le pseudo-modèle Auto ; pilote l\'affichage d\'utilisation et le seuil de compression.',
+				intentHistoryMaxCharsHelp:
+					'Plafond total de caractères de l’extrait de conversation (200–20000).',
+				intentFallbackRouteLabel: 'Modèle de secours',
+				intentFallbackRouteHelp:
+					'En cas d’échec : dernier modèle routé → secours → premier candidat ; vide = premier candidat.',
+				intentRouteUnset: 'Non défini',
+				intentEffortFollow: 'par défaut du modèle',
+				intentDockAuto: 'Auto',
+				intentDockUnrouted: 'non routé',
+				intentDockUnconfigured:
+					'Le routage par intention n’est pas entièrement configuré',
+				intentDockCache: 'Fenêtre de cache : {seconds}s restantes',
+				intentDockTipCandidates: 'candidats : {count}',
+				intentDockTipOn: 'activé',
+				intentDockTipOff: 'désactivé',
+				intentModelLabelTrigger: 'Auto',
+				intentModelLabelFull: 'Auto (routage par intention)',
 			},
 			it: {
 				badge: 'Squadra autonoma',
@@ -1781,6 +2413,69 @@ window.__ModuleLoader__.load({
 				uiLocaleLabel: 'Lingua dell’interfaccia',
 				uiLocaleHelp: 'Auto segue la lingua dell’app DeepSeek Harness; scegliere una lingua forza l’interfaccia del plugin in quella lingua.',
 				uiLocaleAuto: 'Auto (segui DSH)',
+				intentSectionTitle: 'Instradamento per intento',
+				intentSectionDescription:
+					'Quando si sceglie il pseudo-modello «Auto», un piccolo classificatore instrada ogni turno al candidato migliore in base alla conversazione; con finestra di riutilizzo della cache e soglia di confidenza.',
+				intentEnabledLabel: 'Attiva instradamento per intento',
+				intentEnabledHelp:
+					'Interruttore principale; spento = la selezione «Auto» va direttamente alla catena di riserva senza chiamate di classificazione.',
+				intentClassifierRouteLabel: 'Modello classificatore',
+				intentClassifierRouteHelp:
+					'Route (provider + model) del piccolo modello che classifica ogni turno.',
+				intentClassifierEffortLabel: 'Sforzo di ragionamento del classificatore',
+				intentClassifierEffortHelp:
+					'Sforzo di ragionamento fissato facoltativo; ha precedenza sul valore predefinito dell’adattatore.',
+				intentClassifierKindLabel: 'Tipo di classificatore',
+				intentClassifierKindHelp:
+					'chat = modello di chat dal catalogo LLM; systemone = tipo di decisione con endpoint + modello personalizzati.',
+				intentClassifierKindChat: 'Modello di chat (catalogo LLM)',
+				intentClassifierKindSystemone: 'Decisione (endpoint+modello personalizzati)',
+				intentClassifierEndpointLabel: 'Endpoint di decisione',
+				intentClassifierEndpointHelp: 'URL /v1/systemone completa chiamata direttamente quando il tipo di classificatore è l\'endpoint di decisione (senza provider LLM)',
+				intentSystemoneModelLabel: 'Modello dell\'endpoint di decisione',
+				intentSystemoneModelHelp: 'Parametro model inviato all\'endpoint di decisione (es. tev1:4b-mxfp8); testo libero, non deve stare nell\'elenco dei provider',
+				intentEndpointUnset: 'Non impostato',
+				intentCandidatesLabel: 'Candidati',
+				intentCandidatesHelp:
+					'Modelli verso cui è possibile instradare; note è una descrizione di capacità in una riga letta dal classificatore.',
+				intentCandidatesEmpty:
+					'Nessun candidato: configura almeno 1 candidato per consentire l’instradamento.',
+				intentCandidatesAdd: 'Aggiungi candidato',
+				intentCandidateRemove: 'Rimuovi candidato',
+				intentCandidateNotePlaceholder:
+					'descrizione di capacità in una riga (per il classificatore)',
+				intentCacheTtlLabel: 'Finestra di riutilizzo cache (secondi)',
+				intentCacheTtlHelp:
+					'In questa finestra una confidenza bassa mantiene il modello attuale e preserva la cache dei prompt del fornitore.',
+				intentSwitchConfidenceLabel: 'Confidenza di cambio (0–100)',
+				intentSwitchConfidenceHelp:
+					'Solo con questa confidenza di classificazione è possibile abbandonare il modello attuale.',
+				intentTimeoutLabel: 'Timeout di classificazione (ms)',
+				intentTimeoutHelp:
+					'Budget per la chiamata al classificatore; timeout o errore passano alla riserva (fail-open).',
+				intentHistoryMessagesLabel: 'Messaggi di cronologia (1–20)',
+				intentHistoryMessagesHelp:
+					'Quanti messaggi recenti vengono passati al classificatore.',
+				intentHistoryMaxCharsLabel: 'Budget di caratteri dell’estratto',
+				intentContextWindowLabel: 'Finestra di contesto',
+				intentContextWindowHelp: 'Finestra di contesto (token) dichiarata dal pseudo-modello Auto; determina la visualizzazione dell\'uso e la soglia di compressione.',
+				intentHistoryMaxCharsHelp:
+					'Limite totale di caratteri dell’estratto della conversazione (200–20000).',
+				intentFallbackRouteLabel: 'Modello di riserva',
+				intentFallbackRouteHelp:
+					'In caso di errore: ultimo modello instradato → riserva → primo candidato; vuoto = primo candidato.',
+				intentRouteUnset: 'Non impostato',
+				intentEffortFollow: 'predefinito del modello',
+				intentDockAuto: 'Auto',
+				intentDockUnrouted: 'non instradato',
+				intentDockUnconfigured:
+					'L’instradamento per intento non è completamente configurato',
+				intentDockCache: 'Finestra cache: {seconds}s rimanenti',
+				intentDockTipCandidates: 'candidati: {count}',
+				intentDockTipOn: 'on',
+				intentDockTipOff: 'off',
+				intentModelLabelTrigger: 'Auto',
+				intentModelLabelFull: 'Auto (instradamento per intento)',
 			},
 			pt: {
 				badge: 'Equipe autônoma',
@@ -1918,6 +2613,69 @@ window.__ModuleLoader__.load({
 				uiLocaleLabel: 'Idioma da interface',
 				uiLocaleHelp: 'Auto segue o idioma do aplicativo DeepSeek Harness; escolher um idioma força a interface do plugin para ele.',
 				uiLocaleAuto: 'Auto (seguir DSH)',
+				intentSectionTitle: 'Roteamento por intenção',
+				intentSectionDescription:
+					'Ao escolher o pseudo-modelo «Auto», um classificador pequeno direciona cada rodada ao melhor candidato conforme a conversa; com janela de reuso de cache e limite de confiança.',
+				intentEnabledLabel: 'Ativar roteamento por intenção',
+				intentEnabledHelp:
+					'Interruptor mestre; desligado = a seleção «Auto» vai direto à cadeia de reserva sem chamada ao classificador.',
+				intentClassifierRouteLabel: 'Modelo classificador',
+				intentClassifierRouteHelp:
+					'Rota (provider + model) do modelo pequeno que classifica cada rodada.',
+				intentClassifierEffortLabel: 'Esforço de raciocínio do classificador',
+				intentClassifierEffortHelp:
+					'Esforço de raciocínio fixo opcional; prevalece sobre o padrão do adaptador.',
+				intentClassifierKindLabel: 'Tipo de classificador',
+				intentClassifierKindHelp:
+					'chat = modelo de conversa do catálogo LLM; systemone = tipo de decisão com endpoint + modelo personalizados.',
+				intentClassifierKindChat: 'Modelo de conversa (catálogo LLM)',
+				intentClassifierKindSystemone: 'Decisão (endpoint+modelo personalizados)',
+				intentClassifierEndpointLabel: 'Endpoint de decisão',
+				intentClassifierEndpointHelp: 'URL /v1/systemone completa chamada diretamente quando o tipo de classificador é o endpoint de decisão (sem provedor LLM)',
+				intentSystemoneModelLabel: 'Modelo do endpoint de decisão',
+				intentSystemoneModelHelp: 'Parâmetro model enviado ao endpoint de decisão (ex.: tev1:4b-mxfp8); texto livre, não precisa estar na lista de provedores',
+				intentEndpointUnset: 'Não definido',
+				intentCandidatesLabel: 'Candidatos',
+				intentCandidatesHelp:
+					'Modelos para os quais o roteamento pode ir; note é uma descrição de capacidade em uma linha lida pelo classificador.',
+				intentCandidatesEmpty:
+					'Sem candidatos: configure pelo menos 1 candidato para permitir o roteamento.',
+				intentCandidatesAdd: 'Adicionar candidato',
+				intentCandidateRemove: 'Remover candidato',
+				intentCandidateNotePlaceholder:
+					'descrição de capacidade em uma linha (para o classificador)',
+				intentCacheTtlLabel: 'Janela de reuso de cache (segundos)',
+				intentCacheTtlHelp:
+					'Dentro desta janela, confiança baixa mantém o modelo atual e preserva o cache de prompt do fornecedor.',
+				intentSwitchConfidenceLabel: 'Confiança para troca (0–100)',
+				intentSwitchConfidenceHelp:
+					'Só com essa confiança de classificação é permitido sair do modelo atual.',
+				intentTimeoutLabel: 'Tempo limite da classificação (ms)',
+				intentTimeoutHelp:
+					'Orçamento da chamada ao classificador; tempo esgotado ou falha usa a reserva (fail-open).',
+				intentHistoryMessagesLabel: 'Mensagens de histórico (1–20)',
+				intentHistoryMessagesHelp:
+					'Quantas mensagens recentes são entregues ao classificador.',
+				intentHistoryMaxCharsLabel: 'Orçamento de caracteres do trecho',
+				intentContextWindowLabel: 'Janela de contexto',
+				intentContextWindowHelp: 'Janela de contexto (tokens) declarada pelo pseudo-modelo Auto; controla a exibição de uso e o limiar de compressão.',
+				intentHistoryMaxCharsHelp:
+					'Limite total de caracteres do trecho da conversa (200–20000).',
+				intentFallbackRouteLabel: 'Modelo de reserva',
+				intentFallbackRouteHelp:
+					'Se a classificação falhar: último modelo roteado → reserva → primeiro candidato; vazio = primeiro candidato.',
+				intentRouteUnset: 'Não definido',
+				intentEffortFollow: 'padrão do modelo',
+				intentDockAuto: 'Auto',
+				intentDockUnrouted: 'sem rota',
+				intentDockUnconfigured:
+					'O roteamento por intenção não está totalmente configurado',
+				intentDockCache: 'Janela de cache: {seconds}s restantes',
+				intentDockTipCandidates: 'candidatos: {count}',
+				intentDockTipOn: 'ligado',
+				intentDockTipOff: 'desligado',
+				intentModelLabelTrigger: 'Auto',
+				intentModelLabelFull: 'Auto (roteamento por intenção)',
 			},
 			ru: {
 				badge: 'Автономная команда',
@@ -2055,6 +2813,69 @@ window.__ModuleLoader__.load({
 				uiLocaleLabel: 'Язык интерфейса',
 				uiLocaleHelp: '«Авто» следует языку приложения DeepSeek Harness; выбор конкретного языка принудительно переводит на него интерфейс плагина.',
 				uiLocaleAuto: 'Авто (следовать DSH)',
+				intentSectionTitle: 'Маршрутизация по намерению',
+				intentSectionDescription:
+					'При выборе псевдомодели «Авто» небольшой классификатор направляет каждый ход к лучшему кандидату по содержанию диалога; с окном повторного использования кэша и порогом уверенности.',
+				intentEnabledLabel: 'Включить маршрутизацию по намерению',
+				intentEnabledHelp:
+					'Главный выключатель; выкл. = выбор «Авто» сразу идёт по резервной цепочке без вызова классификатора.',
+				intentClassifierRouteLabel: 'Модель-классификатор',
+				intentClassifierRouteHelp:
+					'Маршрут (provider + model) небольшой модели, классифицирующей каждый ход.',
+				intentClassifierEffortLabel: 'Усилие рассуждения классификатора',
+				intentClassifierEffortHelp:
+					'Необязательное фиксированное reasoning effort; важнее значения адаптера по умолчанию.',
+				intentClassifierKindLabel: 'Тип классификатора',
+				intentClassifierKindHelp:
+					'chat = диалоговая модель из каталога LLM; systemone = тип решения с собственными endpoint + моделью.',
+				intentClassifierKindChat: 'Диалоговая модель (каталог LLM)',
+				intentClassifierKindSystemone: 'Решение (свой endpoint+модель)',
+				intentClassifierEndpointLabel: 'Endpoint решений',
+				intentClassifierEndpointHelp: 'Полный URL /v1/systemone, вызываемый напрямую, когда тип классификатора — endpoint решений (без LLM-провайдера)',
+				intentSystemoneModelLabel: 'Модель endpoint решений',
+				intentSystemoneModelHelp: 'Параметр model, отправляемый на endpoint решений (напр. tev1:4b-mxfp8); свободный текст, запись в списке провайдеров не нужна',
+				intentEndpointUnset: 'Не задано',
+				intentCandidatesLabel: 'Кандидаты',
+				intentCandidatesHelp:
+					'Модели, к которым возможна маршрутизация; note — описание возможностей одной строкой для классификатора.',
+				intentCandidatesEmpty:
+					'Нет кандидатов: для маршрутизации нужен хотя бы 1 кандидат.',
+				intentCandidatesAdd: 'Добавить кандидата',
+				intentCandidateRemove: 'Удалить кандидата',
+				intentCandidateNotePlaceholder:
+					'описание возможностей одной строкой (для классификатора)',
+				intentCacheTtlLabel: 'Окно повторного использования кэша (секунды)',
+				intentCacheTtlHelp:
+					'Внутри окна при низкой уверенности сохраняется текущая модель — prompt-кэш провайдера не разрывается.',
+				intentSwitchConfidenceLabel: 'Уверенность переключения (0–100)',
+				intentSwitchConfidenceHelp:
+					'Только при такой уверенности классификации можно покинуть текущую модель.',
+				intentTimeoutLabel: 'Тайм-аут классификации (мс)',
+				intentTimeoutHelp:
+					'Бюджет вызова классификатора; тайм-аут или сбой — резервная цепочка (fail-open).',
+				intentHistoryMessagesLabel: 'Сообщений истории (1–20)',
+				intentHistoryMessagesHelp:
+					'Сколько последних сообщений передаётся классификатору.',
+				intentHistoryMaxCharsLabel: 'Лимит символов выборки',
+				intentContextWindowLabel: 'Окно контекста',
+				intentContextWindowHelp: 'Окно контекста (токены), объявляемое псевдомоделью Auto; определяет отображение использования и порог сжатия.',
+				intentHistoryMaxCharsHelp:
+					'Общий лимит символов выборки диалога (200–20000).',
+				intentFallbackRouteLabel: 'Резервная модель',
+				intentFallbackRouteHelp:
+					'При сбое классификации: прошлая модель → резерв → первый кандидат; пусто = первый кандидат.',
+				intentRouteUnset: 'Не задано',
+				intentEffortFollow: 'по умолчанию модели',
+				intentDockAuto: 'Авто',
+				intentDockUnrouted: 'не маршрутизировано',
+				intentDockUnconfigured:
+					'Маршрутизация по намерению настроена не полностью',
+				intentDockCache: 'Окно кэша: осталось {seconds} с',
+				intentDockTipCandidates: 'кандидаты: {count}',
+				intentDockTipOn: 'вкл',
+				intentDockTipOff: 'выкл',
+				intentModelLabelTrigger: 'Авто',
+				intentModelLabelFull: 'Авто (маршрутизация по намерению)',
 			},
 		};
 
@@ -2474,6 +3295,195 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+		/** Composer dock chip for intent routing (conversation.input.dock,
+		 * order 89 — one slot above the vision entry's 90): shows where the
+		 * session's auto-selected pseudo-model currently routes. Polls the
+		 * Host intent-state route every 15s exactly like the vision entry;
+		 * a failed fetch or a non-auto session renders null (fail-silent).
+		 * Pure display — no interactive controls (reset arrives later). */
+		function IntentDockEntry({ t, sessionId, useInput }) {
+			const [intent, setIntent] = React.useState(null);
+			// Send-burst detection: the composer draft dropping from non-empty
+			// to empty marks the moment a message leaves — the Host classifies
+			// DURING that turn's prepareCall, so a few staggered catch-up
+			// fetches right after make the chip flip in well under a second
+			// instead of waiting for the 15s poll.
+			const inputHook =
+				typeof useInput === 'function' ? useInput : () => () => ({ draft: '' });
+			const input = inputHook((s) => s) ?? {};
+			const draft = typeof input.draft === 'string' ? input.draft : '';
+			const prevDraft = React.useRef(draft);
+			const [burst, setBurst] = React.useState(0);
+			React.useEffect(() => {
+				const was = prevDraft.current;
+				prevDraft.current = draft;
+				if (was !== '' && draft === '') setBurst((n) => n + 1);
+			}, [draft]);
+			React.useEffect(() => {
+				let stopped = false;
+				let timer = null;
+				let inflight = false;
+				let rerun = false;
+				// Session-scoped slot: pass the scope's identity so the Host
+				// resolves intent-state for THIS session (restart on switch).
+				const query =
+					typeof sessionId === 'string' && sessionId !== ''
+						? `?session=${encodeURIComponent(sessionId)}`
+						: '';
+				const tick = async () => {
+					// One fetch at a time; a catch-up landing mid-flight
+					// queues exactly one short-delay re-run instead of
+					// forking a second poll loop.
+					if (inflight) {
+						rerun = true;
+						return;
+					}
+					inflight = true;
+					let next = null;
+					try {
+						const reply = await api.get(`intent-state${query}`);
+						const value = reply?.ok ? reply.value : null;
+						// Shape per design §5; anything unexpected degrades to
+						// null (no chip), never to a wrong label.
+						if (
+							value &&
+							typeof value === 'object' &&
+							value.autoSelected === true
+						)
+							next = {
+								enabled: value.enabled === true,
+								configured: value.configured === true,
+								model:
+									value.current &&
+									typeof value.current === 'object' &&
+									typeof value.current.model === 'string' &&
+									value.current.model !== ''
+										? value.current.model
+										: null,
+								confidence:
+									value.lastDecision &&
+									typeof value.lastDecision === 'object' &&
+									typeof value.lastDecision.confidence === 'number'
+										? value.lastDecision.confidence
+										: null,
+								cacheSeconds:
+									typeof value.cacheWindowRemainingMs === 'number' &&
+									value.cacheWindowRemainingMs > 0
+										? Math.round(value.cacheWindowRemainingMs / 1000)
+										: null,
+								candidates: Array.isArray(value.candidates)
+									? value.candidates.length
+									: 0,
+							};
+					} catch {
+						next = null;
+					}
+					inflight = false;
+					if (stopped) return;
+					setIntent(next);
+					timer = setTimeout(tick, rerun ? 400 : 15_000);
+					rerun = false;
+				};
+				void tick();
+				// Catch-up fetches after each send (burst) — the decision
+				// lands during prepareCall, typically within milliseconds
+				// for a local classifier; 4s covers a slow chat-channel one.
+				const catchups = [400, 1800, 4000].map((ms) =>
+					setTimeout(() => {
+						if (stopped) return;
+						if (timer !== null) clearTimeout(timer);
+						void tick();
+					}, ms),
+				);
+				return () => {
+					stopped = true;
+					if (timer !== null) clearTimeout(timer);
+					for (const c of catchups) clearTimeout(c);
+				};
+			}, [sessionId, burst]);
+			if (intent === null) return null;
+			const tipLines = [
+				`${t('intentEnabledLabel')}: ${t(
+					intent.enabled ? 'intentDockTipOn' : 'intentDockTipOff',
+				)}`,
+				intent.configured ? null : t('intentDockUnconfigured'),
+				t('intentDockTipCandidates', { count: intent.candidates }),
+				intent.cacheSeconds !== null
+					? t('intentDockCache', { seconds: intent.cacheSeconds })
+					: null,
+			].filter((line) => line !== null);
+			// Same dock-column formula as VisionDockEntry: keep the chip's
+			// left edge tracking the centered composer card in both shell
+			// states (hero narrows the stack, active does not).
+			return h(
+				'div',
+				{
+					'data-dsh-switchman': 'intent-dock-column',
+					style: {
+						boxSizing: 'border-box',
+						width: 'calc(100% - var(--dsh-composer-side-clearance, 16px) - var(--dsh-composer-side-clearance, 16px))',
+						maxWidth: 'var(--dsh-composer-card-max-width, 780px)',
+						margin: '0 auto',
+						flex: 'none',
+						display: 'flex',
+						flexDirection: 'column',
+						gap: 'var(--dsh-composer-stack-gap, 6px)',
+					},
+				},
+				h(
+					'p',
+					{
+						'data-dsh-switchman': 'intent-dock-chip',
+						title: tipLines.join(' · '),
+						style: {
+							margin: '0',
+							padding: '2px 0',
+							color: intent.configured
+								? 'var(--dsw-alias-label-secondary)'
+								: 'var(--dsw-alias-state-error-primary)',
+							fontSize: '12px',
+							lineHeight: '1.6',
+						},
+					},
+					'⚡ ',
+					t('intentDockAuto'),
+					' → ',
+					intent.model ?? t('intentDockUnrouted'),
+					intent.confidence !== null ? ` (${intent.confidence}%)` : '',
+					intent.configured ? null : ` · ${t('intentDockUnconfigured')}`,
+				),
+			);
+		}
+
+		/** Composer model-label override (conversation.input.model.label):
+		 * SINGLE seat — once registered, this component renders EVERY
+		 * model's label in trigger, menu, and option rows; the owner's
+		 * `fallback` (model.name) applies only while the seat is
+		 * unregistered. So: the pseudo provider 'dsh-switchman-auto'
+		 * presents as the short 「自动」 in the trigger caption and
+		 * 「自动（意图识别）」 in the root menu's current value and each
+		 * option row; every other provider renders the catalog model name
+		 * verbatim. Returning null here would blank the label (single
+		 * seats have no per-dispatch fallback), which is why the fallback
+		 * body is rendered explicitly. Fail-silent by contract. */
+		function IntentModelLabel({ provider, model, placement, t }) {
+			const fallback =
+				typeof model?.name === 'string' && model.name !== ''
+					? model.name
+					: '';
+			try {
+				if (provider?.id !== 'dsh-switchman-auto')
+					return h('span', null, fallback);
+				if (placement === 'trigger')
+					return h('span', null, t('intentModelLabelTrigger'));
+				if (placement === 'menu' || placement === 'option')
+					return h('span', null, t('intentModelLabelFull'));
+				return h('span', null, fallback);
+			} catch {
+				return h('span', null, fallback);
+			}
+		}
+
 		/** Home-sidebar panel icon (sidebar.panellist contract): the shell
 		 * row renderer passes { size, active } and colors the glyph via the
 		 * row's currentColor, so only size matters here. 16×16 stroke
@@ -2788,11 +3798,24 @@ window.__ModuleLoader__.load({
 				margin: '5px 0',
 				accentColor: 'var(--dsw-alias-brand-primary)',
 			},
+			/** One intent-candidate editor row: index, provider, model,
+			 *  effort, note, remove — all free-typed columns shrink to fit. */
+			intentCandidateRow: {
+				display: 'grid',
+				gridTemplateColumns:
+					'20px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 0.7fr) minmax(0, 1.3fr) auto',
+				gap: '6px',
+				alignItems: 'center',
+				padding: '2px 0',
+			},
 		};
 
 		/** One settings row: label + help on the left, control + status lines
 		 * (current value, suggestion, validation) on the right. */
-		function SettingsRow({ id, label, help, control, lines }) {
+		function SettingsRow({ id, label, help, control, lines, hidden }) {
+			// Rows irrelevant to the selected classifier channel are omitted
+			// entirely (React drops null children).
+			if (hidden) return null;
 			return h(
 				'div',
 				{ style: STYLE.row },
@@ -3391,16 +4414,21 @@ window.__ModuleLoader__.load({
 				(values.langConversation !== '' &&
 					!isCandidate(values.langConversation));
 			/** Per-field numeric validity: raw text (when present) must be a
-			 * whole number at or above the schema minimum. */
+			 * whole number at or above the schema minimum. The intent rows
+			 * share the same raw-text overlay and save gate. */
 			const numberInvalid = Object.fromEntries(
-				WM_NUMBER_FIELDS.map(({ field, min }) => {
-					const raw = numText[field];
-					return [
-						field,
-						raw !== undefined &&
-							(!/^\d+$/.test(raw.trim()) || Number(raw.trim()) < min),
-					];
-				}),
+				[...WM_NUMBER_FIELDS, ...INTENT_NUMBER_FIELDS].map(
+					({ field, min, max }) => {
+						const raw = numText[field];
+						return [
+							field,
+							raw !== undefined &&
+								(!/^\d+$/.test(raw.trim()) ||
+									Number(raw.trim()) < min ||
+									Number(raw.trim()) > (max ?? Infinity)),
+						];
+					},
+				),
 			);
 			const anyNumberInvalid = Object.values(numberInvalid).some(Boolean);
 			/** Ported hard rule (opencode config.ts): strict soft < hard < force. */
@@ -3638,6 +4666,41 @@ window.__ModuleLoader__.load({
 				wmSubagentCap: values.wmSubagentCap,
 				teamsMode: values.teamsMode,
 				syncWhitelist: values.syncWhitelist,
+				// Intent recognition (design: intent-routing.md §2): route
+				// objects materialize {provider, model} like the pool fields;
+				// candidate effort/note are always sent (blank string = unset,
+				// the Host coerces per its schema).
+				intentEnabled: values.intentEnabled,
+				intentClassifierRoute: {
+					provider: values.intentClassifierRoute.provider,
+					model: values.intentClassifierRoute.model,
+				},
+				intentClassifierEffort: values.intentClassifierEffort,
+				intentClassifierKind: values.intentClassifierKind,
+				intentClassifierEndpoint: values.intentClassifierEndpoint,
+				intentClassifierSystemoneModel: values.intentClassifierSystemoneModel,
+				intentCandidates: values.intentCandidates
+					// Silently drop unfinished rows (blank provider/model), the
+					// same contract as the pool lists — the Host would otherwise
+					// coerce-reject the whole write with an opaque 400.
+					.filter(
+						(entry) =>
+							String(entry.provider ?? '').trim() !== '' &&
+							String(entry.model ?? '').trim() !== '',
+					)
+					.map((entry) => ({
+						provider: entry.provider,
+						model: entry.model,
+						effort: entry.effort ?? '',
+						note: entry.note ?? '',
+					})),
+				...Object.fromEntries(
+					INTENT_NUMBER_FIELDS.map(({ field }) => [field, values[field]]),
+				),
+				intentFallbackRoute: {
+					provider: values.intentFallbackRoute.provider,
+					model: values.intentFallbackRoute.model,
+				},
 			};
 			if (sameValues(current, desired)) {
 				// Whitespace-only differences: nothing to write, close the draft.
@@ -3852,6 +4915,8 @@ window.__ModuleLoader__.load({
 			const wmId = `${headingId}-wm`;
 			// ---- teams section ids ----
 			const teamsId = `${headingId}-teams`;
+			// ---- intent section id ----
+			const intentId = `${headingId}-intent`;
 
 			/** One watermark number input: raw-text overlay over the draft
 			 * value (0 renders as the placeholder for the follow-force row),
@@ -3896,6 +4961,204 @@ window.__ModuleLoader__.load({
 				if (orderInvalid && WM_ORDER_FIELDS.includes(spec.field))
 					lines.push({ text: t('wmOrderInvalid'), invalid: true });
 				return lines;
+			};
+
+			// ---- intent section controls ----
+			/** One intent number input: the watermark rows' raw-text overlay
+			 * pattern under the intent section id (invalid text shows the
+			 * shared minimum hint and blocks saving via `invalid`). */
+			const intentNumberControl = (spec) => {
+				const { field } = spec;
+				const shown = numText[field] ?? String(values[field]);
+				return h('input', {
+					type: 'text',
+					inputMode: 'numeric',
+					id: `${intentId}-${field}`,
+					value: shown,
+					onChange: (event) => {
+						editNumber(field, event.target.value);
+					},
+					onBlur: blurNumber(field),
+					disabled: !editable,
+					'aria-label': t(INTENT_ROW_KEYS[field].label),
+					style: numberInvalid[field]
+						? {
+								...STYLE.control,
+								borderColor: 'var(--dsw-alias-state-error-primary)',
+								color: 'var(--dsw-alias-state-error-primary)',
+							}
+						: STYLE.control,
+				});
+			};
+
+			/** Status lines under one intent number row: minimum hint. */
+			const intentNumberLines = (spec) =>
+				numberInvalid[spec.field]
+					? [{ text: t('wmNumberInvalid', { min: spec.min }), invalid: true }]
+					: [];
+
+			/** Intent option sets fed by the DSH model catalog (the same
+			 *  source the shipped model-selection page uses). A stored
+			 *  provider/model that left the catalog stays selectable so a
+			 *  controlled select never misaligns. */
+			const intentProviders = () => [
+				...new Set(
+					[...catalogIndex.values()].map((meta) => meta.provider),
+				),
+			].sort();
+			const intentProviderName = (provider) => {
+				for (const meta of catalogIndex.values())
+					if (meta.provider === provider)
+						return meta.providerName ?? provider;
+				return provider;
+			};
+			const intentModelsFor = (provider) =>
+				[...catalogIndex.values()].filter(
+					(meta) => meta.provider === provider,
+				);
+			const intentProviderOptions = (current) => {
+				const providers = intentProviders();
+				if (current !== '' && !providers.includes(current))
+					providers.push(current);
+				return [
+					h('option', { value: '' }, t('intentRouteUnset')),
+					...providers.map((provider) =>
+						h(
+							'option',
+							{ key: provider, value: provider },
+							intentProviderName(provider),
+						),
+					),
+				];
+			};
+			const intentModelOptions = (provider, current) => {
+				const metas = intentModelsFor(provider);
+				return [
+					h('option', { value: '' }, t('intentRouteUnset')),
+					...metas.map((meta) =>
+						h(
+							'option',
+							{ key: meta.model, value: meta.model },
+							meta.modelName ?? meta.model,
+						),
+					),
+					provider !== '' &&
+					current !== '' &&
+					!metas.some((meta) => meta.model === current)
+						? h('option', { value: current }, current)
+						: null,
+				];
+			};
+			/** One {provider, model} intent route editor as two linked
+			 *  selects; switching providers drops a model the new provider
+			 *  does not offer. An untyped route stays the frozen
+			 *  empty-route default. */
+			const intentRouteControl = (field, label) => {
+				const route = values[field];
+				return h(
+					'div',
+					{ style: { display: 'flex', gap: '6px', minWidth: 0 } },
+					h(
+						'select',
+						{
+							...selectProps(
+								`${intentId}-${field}-provider`,
+								route.provider,
+								(next) => {
+									const kept = intentModelsFor(next).some(
+										(meta) => meta.model === route.model,
+									);
+									edit(field, {
+										provider: next,
+										model: kept ? route.model : '',
+									});
+								},
+							),
+							'aria-label': `${label} · provider`,
+						},
+						...intentProviderOptions(route.provider),
+					),
+					h(
+						'select',
+						{
+							...selectProps(
+								`${intentId}-${field}-model`,
+								route.model,
+								(next) => {
+									edit(field, { ...route, model: next });
+								},
+							),
+							disabled: !editable || route.provider === '',
+							'aria-label': `${label} · model`,
+						},
+						...intentModelOptions(route.provider, route.model),
+					),
+				);
+			};
+			/** Reasoning-effort select for one intent route: the model's
+			 *  wire efforts when the catalog reports them, the EFFORTS
+			 *  fallback otherwise; '' = adapter default. A stored value
+			 *  missing from the list stays selectable. */
+			const intentEffortSelect = (
+				id,
+				route,
+				value,
+				onCommit,
+				ariaLabel,
+			) => {
+				const meta = catalogIndex.get(routeKey(route));
+				const wire =
+					meta &&
+					Array.isArray(meta.reasoning?.efforts) &&
+					meta.reasoning.efforts.length > 0
+						? meta.reasoning.efforts
+						: EFFORTS.map((effort) => ({ id: effort }));
+				const seen = new Set(wire.map((entry) => entry.id));
+				const pending =
+					typeof value === 'string' && value !== '' && !seen.has(value)
+						? [{ id: value }]
+						: [];
+				return h(
+					'select',
+					{
+						id,
+						value,
+						onChange: (event) => onCommit(event.target.value),
+						disabled: !editable,
+						style: STYLE.effortSelect,
+						'aria-label': ariaLabel,
+					},
+					h('option', { value: '' }, t('intentEffortFollow')),
+					...[...wire, ...pending].map((entry) =>
+						h('option', { value: entry.id }, entry.name ?? entry.id),
+					),
+				);
+			};
+
+			/** Candidates list editing: the whole array is one draft field;
+			 * rows are addressed by position (the classifier reads them as
+			 * #1..#n, so order is meaningful). */
+			const editIntentCandidate = (index, patch) => {
+				edit(
+					'intentCandidates',
+					values.intentCandidates.map((entry, position) =>
+						position === index ? { ...entry, ...patch } : entry,
+					),
+				);
+			};
+			const addIntentCandidate = () => {
+				edit('intentCandidates', [
+					...values.intentCandidates,
+					{ provider: '', model: '', effort: '', note: '' },
+				]);
+			};
+			const removeIntentCandidate = (index) => {
+				edit(
+					'intentCandidates',
+					values.intentCandidates.filter(
+						(_entry, position) => position !== index,
+					),
+				);
 			};
 
 			/** Catalog status line: loading / error + retry / partial / empty. */
@@ -4310,6 +5573,318 @@ window.__ModuleLoader__.load({
 				h(
 					'section',
 					{
+						'aria-labelledby': intentId,
+						style: { ...STYLE.section, ...STYLE.sectionDivider },
+					},
+					h(
+						'h3',
+						{ id: intentId, style: STYLE.heading },
+						t('intentSectionTitle'),
+					),
+					h('p', { style: STYLE.description }, t('intentSectionDescription')),
+					h(
+						'div',
+						{ style: STYLE.rows },
+						h(SettingsRow, {
+							key: 'intentEnabled',
+							id: `${intentId}-enabled`,
+							label: t('intentEnabledLabel'),
+							help: t('intentEnabledHelp'),
+							control: h('input', {
+								type: 'checkbox',
+								id: `${intentId}-enabled`,
+								checked: values.intentEnabled,
+								onChange: () => {
+									edit('intentEnabled', !values.intentEnabled);
+								},
+								disabled: !editable,
+								style: STYLE.checkbox,
+							}),
+							lines: [],
+						}),
+						h(SettingsRow, {
+							key: 'intentClassifierRoute',
+							hidden: values.intentClassifierKind === 'systemone',
+							id: `${intentId}-classifier-route`,
+							label: t('intentClassifierRouteLabel'),
+							help: t('intentClassifierRouteHelp'),
+							control: intentRouteControl(
+								'intentClassifierRoute',
+								t('intentClassifierRouteLabel'),
+							),
+							lines:
+								values.intentClassifierRoute.provider === '' ||
+								values.intentClassifierRoute.model === ''
+									? [
+											{
+												text: t('intentRouteUnset'),
+												// The classifier is load-bearing only
+												// while routing is on.
+												invalid: values.intentEnabled,
+											},
+										]
+									: [
+											{
+												text: t('currentValue', {
+													value: `${values.intentClassifierRoute.provider}/${values.intentClassifierRoute.model}`,
+												}),
+												invalid: false,
+											},
+										],
+						}),
+						h(SettingsRow, {
+							key: 'intentClassifierEffort',
+							hidden: values.intentClassifierKind === 'systemone',
+							id: `${intentId}-classifier-effort`,
+							label: t('intentClassifierEffortLabel'),
+							help: t('intentClassifierEffortHelp'),
+							control: intentEffortSelect(
+								`${intentId}-classifier-effort`,
+								values.intentClassifierRoute,
+								values.intentClassifierEffort,
+								(next) => edit('intentClassifierEffort', next),
+								t('intentClassifierEffortLabel'),
+							),
+							lines: [],
+						}),
+						h(SettingsRow, {
+							key: 'intentClassifierKind',
+							id: `${intentId}-kind`,
+							label: t('intentClassifierKindLabel'),
+							help: t('intentClassifierKindHelp'),
+							control: h(
+								'select',
+								selectProps(
+									`${intentId}-kind`,
+									values.intentClassifierKind,
+									(kind) => {
+										if (INTENT_KINDS.includes(kind))
+											edit('intentClassifierKind', kind);
+									},
+								),
+								...INTENT_KINDS.map((kind) =>
+									h(
+										'option',
+										{ key: kind, value: kind },
+										t(
+											`intentClassifierKind${kind[0].toUpperCase()}${kind.slice(1)}`,
+										),
+									),
+								),
+							),
+							lines: [],
+						}),
+						h(SettingsRow, {
+							key: 'intentClassifierEndpoint',
+							hidden: values.intentClassifierKind !== 'systemone',
+							id: `${intentId}-classifier-endpoint`,
+							label: t('intentClassifierEndpointLabel'),
+							help: t('intentClassifierEndpointHelp'),
+							control: h('input', {
+								type: 'text',
+								value: values.intentClassifierEndpoint,
+								placeholder: 'http://127.0.0.1:11434/v1/systemone',
+								onChange: (event) =>
+									edit('intentClassifierEndpoint', event.target.value),
+								disabled: !editable,
+								'aria-label': t('intentClassifierEndpointLabel'),
+								style: STYLE.control,
+							}),
+							lines:
+								values.intentClassifierKind === 'systemone' &&
+								values.intentClassifierEndpoint.trim() === ''
+									? [
+										{
+											text: t('intentEndpointUnset'),
+											// Load-bearing only for that kind.
+											invalid: values.intentEnabled,
+										},
+									]
+								: [],
+						}),
+						h(SettingsRow, {
+							key: 'intentClassifierSystemoneModel',
+							hidden: values.intentClassifierKind !== 'systemone',
+							id: `${intentId}-systemone-model`,
+							label: t('intentSystemoneModelLabel'),
+							help: t('intentSystemoneModelHelp'),
+							control: h('input', {
+								type: 'text',
+								value: values.intentClassifierSystemoneModel,
+								placeholder: 'tev1:4b-mxfp8',
+								onChange: (event) =>
+									edit('intentClassifierSystemoneModel', event.target.value),
+								disabled: !editable,
+								'aria-label': t('intentSystemoneModelLabel'),
+								style: STYLE.control,
+							}),
+							lines:
+								values.intentClassifierKind === 'systemone' &&
+								values.intentClassifierSystemoneModel.trim() === ''
+									? [
+											{
+												text: t('intentEndpointUnset'),
+												// Load-bearing only for that kind.
+												invalid: values.intentEnabled,
+											},
+										]
+									: [],
+						}),
+						),
+					h('h4', { style: STYLE.subheading }, t('intentCandidatesLabel')),
+					h('p', { style: STYLE.description }, t('intentCandidatesHelp')),
+					values.intentCandidates.length === 0
+						? h('p', { style: STYLE.progress }, t('intentCandidatesEmpty'))
+						: h(
+								'div',
+								{ style: STYLE.rankList },
+								...values.intentCandidates.map((entry, index) =>
+									h(
+										'div',
+										{ key: index, style: STYLE.intentCandidateRow },
+										h(
+											'span',
+											{ style: STYLE.rankIndex },
+											String(index + 1),
+										),
+										h(
+											'select',
+											{
+												...selectProps(
+													`${intentId}-candidate-${index}-provider`,
+													entry.provider,
+													(next) => {
+														const kept = intentModelsFor(
+															next,
+														).some(
+															(meta) =>
+																meta.model ===
+																entry.model,
+														);
+														editIntentCandidate(index, {
+															provider: next,
+															model: kept
+																? entry.model
+																: '',
+														});
+													},
+												),
+												'aria-label': `${t('intentCandidatesLabel')} ${index + 1} · provider`,
+											},
+											...intentProviderOptions(entry.provider),
+										),
+										h(
+											'select',
+											{
+												...selectProps(
+													`${intentId}-candidate-${index}-model`,
+													entry.model,
+													(next) => {
+														editIntentCandidate(index, {
+															model: next,
+														});
+													},
+												),
+												disabled:
+													!editable || entry.provider === '',
+												'aria-label': `${t('intentCandidatesLabel')} ${index + 1} · model`,
+											},
+											...intentModelOptions(
+												entry.provider,
+												entry.model,
+											),
+										),
+										intentEffortSelect(
+											`${intentId}-candidate-${index}-effort`,
+											entry,
+											entry.effort ?? '',
+											(next) => {
+												editIntentCandidate(index, {
+													effort: next,
+												});
+											},
+											`${t('intentCandidatesLabel')} ${index + 1} · ${t('intentClassifierEffortLabel')}`,
+										),
+										h('input', {
+											type: 'text',
+											value: entry.note ?? '',
+											placeholder: t('intentCandidateNotePlaceholder'),
+											onChange: (event) =>
+												editIntentCandidate(index, {
+													note: event.target.value,
+												}),
+											disabled: !editable,
+											'aria-label': `${t('intentCandidatesLabel')} ${index + 1} · note`,
+											style: STYLE.control,
+										}),
+										h(
+											'button',
+											{
+												type: 'button',
+												onClick: () => {
+													removeIntentCandidate(index);
+												},
+												disabled: !editable,
+												title: t('intentCandidateRemove'),
+												'aria-label': t('intentCandidateRemove'),
+												style: STYLE.iconButton,
+											},
+											'✕',
+										),
+									),
+								),
+							),
+					h(
+						'button',
+						{
+							type: 'button',
+							onClick: addIntentCandidate,
+							disabled: !editable,
+							style: { ...STYLE.iconButton, marginTop: '6px' },
+						},
+						'+ ',
+						t('intentCandidatesAdd'),
+					),
+					h(
+						'div',
+						{ style: STYLE.rows },
+						h(SettingsRow, {
+							key: 'intentFallbackRoute',
+							id: `${intentId}-fallback`,
+							label: t('intentFallbackRouteLabel'),
+							help: t('intentFallbackRouteHelp'),
+							control: intentRouteControl(
+								'intentFallbackRoute',
+								t('intentFallbackRouteLabel'),
+							),
+							lines:
+								values.intentFallbackRoute.provider === '' ||
+								values.intentFallbackRoute.model === ''
+									? [{ text: t('intentRouteUnset'), invalid: false }]
+									: [
+											{
+												text: t('currentValue', {
+													value: `${values.intentFallbackRoute.provider}/${values.intentFallbackRoute.model}`,
+												}),
+												invalid: false,
+											},
+										],
+						}),
+						...INTENT_NUMBER_FIELDS.map((spec) =>
+							h(SettingsRow, {
+								key: spec.field,
+								id: `${intentId}-${spec.field}`,
+								label: t(INTENT_ROW_KEYS[spec.field].label),
+								help: t(INTENT_ROW_KEYS[spec.field].help),
+								control: intentNumberControl(spec),
+								lines: intentNumberLines(spec),
+							}),
+						),
+					),
+				),
+				h(
+					'section',
+					{
 						'aria-labelledby': wmId,
 						style: { ...STYLE.section, ...STYLE.sectionDivider },
 					},
@@ -4710,6 +6285,33 @@ window.__ModuleLoader__.load({
 							order: 90,
 						},
 						(kit) => h(VisionDockEntry, { ...kit, t }),
+					),
+				);
+				// Composer-adjacent intent chip (same dock list, order 89 —
+				// one slot above the vision hint's 90): shows where the
+				// session's auto-selected model currently routes. Same
+				// standard session-kit forwarding as the vision entry.
+				ctx.slots.inject('conversation.input.dock', () =>
+					ctx.slots.register(
+						{
+							name: 'conversation.input.dock',
+							id: 'dsh-switchman-intent',
+							order: 89,
+						},
+						(kit) => h(IntentDockEntry, { ...kit, t }),
+					),
+				);
+				// Composer model label (conversation.input.model.label): the
+				// ui-model-selection shell dispatches EVERY model's label
+				// through this single-seat component with owner props
+				// {provider:{id,name}, model, placement, selected} plus the
+				// standard session kit. Single seats render the owner
+				// fallback only while UNREGISTERED, so the component itself
+				// renders the catalog model name for real providers (see
+				// IntentModelLabel).
+				ctx.slots.inject('conversation.input.model.label', () =>
+					ctx.slots.register({ name: 'conversation.input.model.label' }, (kit) =>
+						h(IntentModelLabel, { ...kit, t }),
 					),
 				);
 				// Settings page: one settings.section entry. The restricted

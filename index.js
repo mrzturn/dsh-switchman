@@ -33,6 +33,18 @@
  * subagent / subagent_fork results with one `model: provider/model@effort`
  * line from the child session's modelSelection projection (the same channel
  * host/vision.js reuses for the per-session vision-state verdict).
+ *
+ * The intent layer (host/intent.js) adds the "auto" pseudo-model: a
+ * `dsh-switchman-auto` adapter registered on `ctx.llm` (native catalog entry,
+ * composer dropdown) plus an `agent/request` waterfall listener that rewrites
+ * the pseudo route onto a real model — a small classifier model scores the
+ * recent conversation against the configured candidate list once per turn,
+ * the decision pins for the turn's retries and later steps, and a
+ * provider-cache window keeps the current model while confidence stays below
+ * the switch threshold. The llm/sessions services are reached through
+ * defensive ctx.get reads (NOT declared in inject): a deployment without the
+ * llm service leaves this layer a warn-once no-op — a documented runtime
+ * precondition, like sessionQuery/pluginManager above.
  */
 
 import { readdirSync, readFileSync } from "node:fs";
@@ -60,6 +72,9 @@ import { applyContextWatch } from "./host/context-watch.js";
 // Vision dispatch gate (/vision command + vision-state route for the
 // composer-dock hint): unlocks image sending on text-only models.
 import { applyVision } from "./host/vision.js";
+// Intent-routing layer ("auto" pseudo-model: classifier-routed real model,
+// per-turn pin + prompt-cache window; intent-state/intent-reset routes).
+import { applyIntent } from "./host/intent.js";
 // Client-bridge routes (config snapshot/fenced write + model catalog for the
 // restricted browser half, which has no configForms/remote services).
 import { applyRoutes } from "./host/routes.js";
@@ -159,8 +174,8 @@ function loadSkillCandidates(root, warn) {
 
 /** Register the bundled dsh-switchman skill provider on `ctx.skills` and
  *  mount the language (lang), dispatch (dispatch), teams (teams), watermark
- *  (context-watch), vision (vision), subagent model visibility
- *  (subagent-model), and client-bridge (routes) layers. */
+ *  (context-watch), vision (vision), intent routing (intent), subagent model
+ *  visibility (subagent-model), and client-bridge (routes) layers. */
 function apply(ctx, config) {
 	const root = fileURLToPath(new URL("./skills/", import.meta.url));
 	const warn = (message) => ctx.logger.warn(`dsh-switchman: ${message}`);
@@ -179,6 +194,7 @@ function apply(ctx, config) {
 	applyTeams(ctx, config);
 	applyContextWatch(ctx, config);
 	applyVision(ctx, config);
+	applyIntent(ctx, config);
 	applySubagentModel(ctx);
 	applyRoutes(ctx, config);
 }

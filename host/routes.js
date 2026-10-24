@@ -26,6 +26,12 @@
  *                                      `session` query parameter judges image
  *                                      capability against THAT session's
  *                                      model (unknown/missing → root model).
+ *   GET  /api/dsh-switchman/intent-state — live intent-routing state for the
+ *                                      dock chip (optional `session` query
+ *                                      parameter judges THAT session's
+ *                                      auto-selection and pinned decision).
+ *   POST /api/dsh-switchman/intent-reset — { session } clears one session's
+ *                                      intent decision state (debug/reset).
  *   POST /api/dsh-switchman/ui-locale — the client half reports its active
  *                                      UI locale (feeds the ask guidance's
  *                                      question language; no settings write).
@@ -38,6 +44,7 @@
 
 import { authorizedChildRoutes } from "./dispatch.js";
 import { handoverSnapshot } from "./handover-state.js";
+import { clearSessionState, intentStateOf } from "./intent.js";
 import { pumpTeamsOrchestration, scheduleTeamsOrchestration, SWITCHMAN_SETTINGS_NS, teamsBundleState, teamsSyncSnapshot } from "./teams.js";
 import { reportedUiLocale, setReportedUiLocale } from "./ui-locale.js";
 import { visionStateOf } from "./vision.js";
@@ -50,6 +57,8 @@ const ROUTES = {
 	authorized: "/api/dsh-switchman/authorized",
 	handoverState: "/api/dsh-switchman/handover-state",
 	visionState: "/api/dsh-switchman/vision-state",
+	intentState: "/api/dsh-switchman/intent-state",
+	intentReset: "/api/dsh-switchman/intent-reset",
 	uiLocale: "/api/dsh-switchman/ui-locale",
 };
 
@@ -62,7 +71,14 @@ const ROUTES = {
 const NS = SWITCHMAN_SETTINGS_NS;
 
 /** All settings field names, grouped for coercion (mirrors host/config.js). */
-const STRING_FIELDS = ["langConversation", "langComments", "langDocs"];
+const STRING_FIELDS = [
+	"langConversation",
+	"langComments",
+	"langDocs",
+	"intentClassifierEffort",
+	"intentClassifierEndpoint",
+	"intentClassifierSystemoneModel",
+];
 const POOL_FIELDS = [
 	"poolEconomy",
 	"poolMechanical",
@@ -91,7 +107,27 @@ const BOOLEAN_FIELDS = [
 	// Teams switches (mirrors the teams* group in host/config.js)
 	"teamsMode",
 	"syncWhitelist",
+	// Intent recognition (mirrors the intent* group in host/config.js).
+	"intentEnabled",
 ];
+/** Intent numbers carry their own schema bounds (config.js), so the shared
+ *  NUMBER_FIELDS coercion (which only rejects negatives) is too loose — these
+ *  validate against each field's declared min/max. */
+const INTENT_NUMBER_FIELDS = [
+	{ field: "intentCacheTtlSeconds", min: 0, max: Number.POSITIVE_INFINITY, def: 300 },
+	{ field: "intentSwitchConfidence", min: 0, max: 100, def: 80 },
+	{ field: "intentTimeoutMs", min: 200, max: Number.POSITIVE_INFINITY, def: 3000 },
+	{ field: "intentHistoryMessages", min: 1, max: 20, def: 6 },
+	{ field: "intentHistoryMaxChars", min: 200, max: 20000, def: 2400 },
+	{ field: "intentContextWindow", min: 1024, max: Number.POSITIVE_INFINITY, def: 200000 },
+];
+/** Intent route references: unlike pool routes they round-trip the "unset"
+ *  {provider:"", model:""} pair, so they validate against the loosened
+ *  cleanIntentRoute (both keys must be strings; either may be empty). */
+const INTENT_ROUTE_FIELDS = ["intentClassifierRoute", "intentFallbackRoute"];
+/** Intent candidate list (route + optional effort/note per entry). */
+const INTENT_CANDIDATE_FIELDS = ["intentCandidates"];
+
 /** Per-pool effort-route lists (mirrors host/config.js pool*Efforts). */
 const EFFORTS_FIELDS = [
 	"poolEconomyEfforts",
@@ -106,6 +142,7 @@ const ENUM_FIELDS = {
 	langScope: ["global", "project"],
 	dispatchEnforce: ["off", "advice", "enforce"],
 	wmDenyMode: ["cap", "deny"],
+	intentClassifierKind: ["chat", "systemone"],
 };
 
 /** JSON response helper. */
@@ -233,6 +270,30 @@ function cleanEffortEntry(entry) {
 	return provider !== "" && model !== "" && effort !== "" ? { provider, model, effort } : null;
 }
 
+/** Coerce one intent route reference: both keys must be strings and either
+ *  may be empty (the round-tripped "unset" pair) — non-empty values trim.
+ *  null for any other shape. */
+function cleanIntentRoute(entry) {
+	if (entry === null || typeof entry !== "object") return null;
+	const provider = typeof entry.provider === "string" ? entry.provider.trim() : null;
+	const model = typeof entry.model === "string" ? entry.model.trim() : null;
+	return provider === null || model === null ? null : { provider, model };
+}
+
+/** Coerce one intent candidate: provider/model must be non-empty; effort/note
+ *  ride along as trimmed strings when non-empty, otherwise are omitted
+ *  (mirrors client.js's sanitizeIntentCandidate). */
+function cleanIntentCandidate(entry) {
+	if (entry === null || typeof entry !== "object") return null;
+	const provider = typeof entry.provider === "string" ? entry.provider.trim() : "";
+	const model = typeof entry.model === "string" ? entry.model.trim() : "";
+	if (provider === "" || model === "") return null;
+	const candidate = { provider, model };
+	if (typeof entry.effort === "string" && entry.effort.trim() !== "") candidate.effort = entry.effort.trim();
+	if (typeof entry.note === "string" && entry.note.trim() !== "") candidate.note = entry.note.trim();
+	return candidate;
+}
+
 /** Snapshot the plugin's live volatile config into plain JSON values. */
 export function snapshotOf(config) {
 	const values = {};
@@ -247,6 +308,18 @@ export function snapshotOf(config) {
 		values[field] = Array.isArray(rawOf(config?.[field]))
 			? rawOf(config[field]).map(cleanEffortEntry).filter(Boolean)
 			: [];
+	for (const field of INTENT_ROUTE_FIELDS) values[field] = cleanIntentRoute(rawOf(config?.[field])) ?? { provider: "", model: "" };
+	for (const field of INTENT_CANDIDATE_FIELDS)
+		values[field] = Array.isArray(rawOf(config?.[field]))
+			? rawOf(config[field]).map(cleanIntentCandidate).filter(Boolean)
+			: [];
+	values.intentClassifierKind = ENUM_FIELDS.intentClassifierKind.includes(rawOf(config?.intentClassifierKind))
+		? rawOf(config.intentClassifierKind)
+		: "chat";
+	for (const { field, def } of INTENT_NUMBER_FIELDS) {
+		const raw = Number(rawOf(config?.[field]));
+		values[field] = Number.isFinite(raw) ? raw : def;
+	}
 	values.uiLocale = ENUM_FIELDS.uiLocale.includes(rawOf(config?.uiLocale)) ? rawOf(config.uiLocale) : "auto";
 	values.langScope = ENUM_FIELDS.langScope.includes(rawOf(config?.langScope)) ? rawOf(config.langScope) : "global";
 	values.dispatchEnforce = ENUM_FIELDS.dispatchEnforce.includes(rawOf(config?.dispatchEnforce))
@@ -295,6 +368,24 @@ function coerceValues(input) {
 		const efforts = input[field].map(cleanEffortEntry);
 		if (efforts.some((entry) => entry === null)) return null;
 		values[field] = efforts;
+	}
+	for (const field of INTENT_ROUTE_FIELDS) {
+		const route = cleanIntentRoute(input[field]);
+		if (route === null) return null;
+		values[field] = route;
+	}
+	for (const field of INTENT_CANDIDATE_FIELDS) {
+		if (!Array.isArray(input[field])) return null;
+		const candidates = input[field].map(cleanIntentCandidate);
+		if (candidates.some((entry) => entry === null)) return null;
+		values[field] = candidates;
+	}
+	if (!ENUM_FIELDS.intentClassifierKind.includes(input.intentClassifierKind)) return null;
+	values.intentClassifierKind = input.intentClassifierKind;
+	for (const { field, min, max } of INTENT_NUMBER_FIELDS) {
+		const raw = Number(input[field]);
+		if (!Number.isFinite(raw) || raw < min || raw > max) return null;
+		values[field] = raw;
 	}
 	if (!ENUM_FIELDS.uiLocale.includes(input.uiLocale)) return null;
 	values.uiLocale = input.uiLocale;
@@ -496,6 +587,46 @@ export function makeRoutes(ctx, config) {
 					ctx.logger.warn(`dsh-switchman: vision-state read failed: ${error?.message ?? error}`);
 					writeJson(res, 500, { error: error?.message ?? String(error) });
 				}
+			},
+		},
+		{
+			kind: "exact",
+			path: ROUTES.intentState,
+			handler: async (req, res) => {
+				if (!guard(req, res, "GET")) return;
+				pumpTeamsOrchestration(ctx, config); // clean-context retry pump (see GET config)
+				try {
+					// Optional `session` query parameter (a child session id):
+					// report THAT session's auto-selection and pinned decision;
+					// a missing session reports enabled/configured/candidates
+					// with autoSelected=false.
+					const session = new URL(req.url ?? "/", "http://localhost").searchParams.get("session");
+					writeJson(res, 200, await intentStateOf(ctx, config, typeof session === "string" && session !== "" ? session : null));
+				} catch (error) {
+					ctx.logger.warn(`dsh-switchman: intent-state read failed: ${error?.message ?? error}`);
+					writeJson(res, 500, { error: error?.message ?? String(error) });
+				}
+			},
+		},
+		{
+			kind: "exact",
+			path: ROUTES.intentReset,
+			handler: async (req, res) => {
+				if (!guard(req, res, "POST")) return;
+				let body;
+				try {
+					body = await readJsonBody(req);
+				} catch (error) {
+					writeJson(res, 400, { error: error?.message ?? String(error) });
+					return;
+				}
+				const session = typeof body?.session === "string" ? body.session : "";
+				if (session === "") {
+					writeJson(res, 400, { error: "missing session" });
+					return;
+				}
+				clearSessionState(session);
+				writeJson(res, 200, { ok: true });
 			},
 		},
 		{

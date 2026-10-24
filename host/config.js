@@ -12,6 +12,7 @@
  * - pool/rank    dispatch pools and capability ranking (Phase 2)
  * - wm*          context watermark control (Phase 3)
  * - teams*       Agent Teams doctrine mode + whitelist sync (teams mode)
+ * - intent*      intent-routing "auto" pseudo-model (classifier + candidates)
  *
  * Ported from opencode-switchman's opencode-switchman.jsonc surface
  * (oc/src/config.ts:23-51, oc/src/types.ts:281-344) onto DSH settings.
@@ -42,6 +43,28 @@ export const EffortEntrySchema = z.object({
 	provider: z.string().min(1).required(),
 	model: z.string().min(1).required(),
 	effort: z.string().min(1).required(),
+});
+
+/** One intent-routing candidate: a real model route the classifier may pick,
+ *  plus an optional reasoning-effort pin and a one-line capability note the
+ *  classifier reads. effort/note follow RankEntrySchema.tier's optional style
+ *  (no `.required()`: schemastery passes undefined through, so entries may
+ *  omit either key). */
+export const IntentCandidateSchema = z.object({
+	provider: z.string().min(1).required(),
+	model: z.string().min(1).required(),
+	effort: z.string(),
+	note: z.string(),
+});
+
+/** One intent-layer route reference (classifier or fallback). Unlike
+ *  ModelRouteSchema this accepts the "unset" `{provider:"", model:""}`
+ *  pair the settings page round-trips — ModelRouteSchema's `.min(1)`
+ *  would reject that exact declared default on every settings write.
+ *  Consumers validate non-empty before trusting the route. */
+const IntentRouteSchema = z.object({
+	provider: z.string(),
+	model: z.string(),
 });
 
 /** All dsh-switchman settings. Field names are the settings mutation paths. */
@@ -132,6 +155,58 @@ export const Config = z.object({
 	 *  wholesale. The whitelist only applies to top-level sessions composed
 	 *  afterwards. */
 	syncWhitelist: z.boolean().default(false).volatile(),
+
+	// --- Intent recognition: classifier-routed "auto" model ----------------
+	/** Master switch for intent routing (design: .dsh-switchman/plans/
+	 *  intent-routing.md §2). OFF = an "auto"-selected session routes through
+	 *  the fallback chain (routedCurrent → intentFallbackRoute → first
+	 *  candidate) with NO classifier call. */
+	intentEnabled: z.boolean().default(false).volatile(),
+	/** Small-model route that classifies the conversation against the
+	 *  candidates. Empty = unset; classification is skipped (fail-open). */
+	intentClassifierRoute: IntentRouteSchema.default({ provider: "", model: "" }).volatile(),
+	/** Optional reasoning-effort pin for the classifier call ("" = adapter
+	 *  default). */
+	intentClassifierEffort: z.string().default("").volatile(),
+	/** Classifier channel; must be an explicit choice. "chat" calls the
+	 *  intentClassifierRoute above through its provider's standard chat
+	 *  API with a strict-JSON instruction. "systemone" = direct HTTP to a
+	 *  hand-configured ollama /v1/systemone decision endpoint — no
+	 *  provider, uses intentClassifierEndpoint +
+	 *  intentClassifierSystemoneModel. */
+	intentClassifierKind: z.union(["chat", "systemone"]).default("chat").volatile(),
+	/** Full URL of the ollama /v1/systemone endpoint for kind "systemone"
+	 *  (e.g. http://127.0.0.1:11434/v1/systemone). Empty = unset; that
+	 *  kind fails open to the fallback chain. */
+	intentClassifierEndpoint: z.string().default("").volatile(),
+	/** Model name sent to the decision endpoint for kind "systemone"
+	 *  (free text, e.g. tev1:4b-mxfp8). Independent of the llm provider
+	 *  catalog — no provider registration needed. Empty = unset; that
+	 *  kind fails open to the fallback chain. */
+	intentClassifierSystemoneModel: z.string().default("").volatile(),
+	/** Independent candidate list the "auto" pseudo-model may route to (NOT
+	 *  poolMain). Each entry: {provider, model, effort?, note?}. */
+	intentCandidates: z.array(IntentCandidateSchema).default([]).volatile(),
+	/** Provider prompt-cache reuse window: while the current route stays
+	 *  below the switch-confidence threshold, keep it for this many
+	 *  seconds since the last applied routing. */
+	intentCacheTtlSeconds: z.number().min(0).default(300).volatile(),
+	/** Classifier confidence (0-100) required to leave the current model. */
+	intentSwitchConfidence: z.number().min(0).max(100).default(80).volatile(),
+	/** Classification-call budget in ms; timeout/abort fails open to the
+	 *  fallback chain. */
+	intentTimeoutMs: z.number().min(200).default(3000).volatile(),
+	/** Recent user/assistant messages fed to the classifier. */
+	intentHistoryMessages: z.number().min(1).max(20).default(6).volatile(),
+	/** Total character budget for that conversation excerpt. */
+	intentHistoryMaxChars: z.number().min(200).max(20000).default(2400).volatile(),
+	/** Context window (tokens) declared by the "auto" pseudo-model. Purely
+	 *  advisory metadata: drives the usage popover and the auto-compaction
+	 *  pressure math for sessions routed through Auto. */
+	intentContextWindow: z.number().min(1024).default(200000).volatile(),
+	/** Optional last-resort route when the classifier fails and no previous
+	 *  routed model exists; empty = the first candidate. */
+	intentFallbackRoute: IntentRouteSchema.default({ provider: "", model: "" }).volatile(),
 });
 
 /** The six dispatch lanes, in display order. */
