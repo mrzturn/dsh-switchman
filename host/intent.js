@@ -137,19 +137,29 @@ export function readCandidates(field) {
 	// still waiting for its model (or a freshly added custom row) never
 	// dilutes the prompt.
 	const candidates = [];
-	const seenRoutes = new Set();
+	const byRoute = new Map();
 	for (const entry of effectiveIntentCandidates(mergeIntentCandidates(readList(field)))) {
 		if (entry.provider === AUTO_PROVIDER) continue; // self-reference guard, mirrors routeOf
-		// Same provider/model twice (a configured preset next to a legacy
-		// row with that route) would list one route twice with different
-		// notes; presets sort first, so the preset's note wins.
+		// Collapse same-route rows (several presets mapped to one model) into
+		// ONE classifier candidate. The merged note carries the route's FULL
+		// job description — keep-first would silently ignore the user's
+		// mapping for every non-first category on that route.
 		const routeKey = `${entry.provider}/${entry.model}`;
-		if (seenRoutes.has(routeKey)) continue;
-		seenRoutes.add(routeKey);
-		const candidate = { provider: entry.provider, model: entry.model };
-		if (typeof entry.effort === "string" && entry.effort.trim() !== "") candidate.effort = entry.effort.trim();
-		if (typeof entry.note === "string" && entry.note.trim() !== "") candidate.note = entry.note.trim();
-		candidates.push(candidate);
+		let candidate = byRoute.get(routeKey);
+		if (candidate === undefined) {
+			candidate = { provider: entry.provider, model: entry.model, noteSet: new Set() };
+			byRoute.set(routeKey, candidate);
+			candidates.push(candidate);
+		}
+		const note = typeof entry.note === "string" ? entry.note.trim() : "";
+		if (note !== "") candidate.noteSet.add(note);
+		const effort = typeof entry.effort === "string" ? entry.effort.trim() : "";
+		if (effort !== "" && candidate.effort === undefined) candidate.effort = effort;
+	}
+	for (const candidate of candidates) {
+		const notes = [...candidate.noteSet];
+		if (notes.length > 0) candidate.note = notes.join(" ");
+		delete candidate.noteSet;
 	}
 	return candidates;
 }
