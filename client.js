@@ -193,10 +193,10 @@ window.__ModuleLoader__.load({
 		/** Numeric watermark fields: settings field, schema minimum, and the
 		 * Host-side default (also the fallback for malformed stored values). */
 		const WM_NUMBER_FIELDS = [
-			{ field: 'wmSoftTokens', min: 1000, def: 50000 },
-			{ field: 'wmHardTokens', min: 2000, def: 90000 },
-			{ field: 'wmForceTokens', min: 3000, def: 130000 },
-			{ field: 'wmReadBudgetTokens', min: 200, def: 1500 },
+			{ field: 'wmSoftTokens', min: 1000, def: 80000 },
+			{ field: 'wmHardTokens', min: 2000, def: 120000 },
+			{ field: 'wmForceTokens', min: 3000, def: 150000 },
+			{ field: 'wmReadBudgetTokens', min: 200, def: 3000 },
 			{ field: 'wmSubagentForceTokens', min: 0, def: 0 },
 		];
 
@@ -226,7 +226,7 @@ window.__ModuleLoader__.load({
 		const INTENT_NUMBER_FIELDS = [
 			{ field: 'intentCacheTtlSeconds', min: 0, max: Infinity, def: 300 },
 			{ field: 'intentSwitchConfidence', min: 0, max: 100, def: 80 },
-			{ field: 'intentTimeoutMs', min: 200, max: Infinity, def: 3000 },
+			{ field: 'intentTimeoutMs', min: 200, max: Infinity, def: 60000 },
 			{ field: 'intentHistoryMessages', min: 1, max: 20, def: 6 },
 			{ field: 'intentHistoryMaxChars', min: 200, max: 20000, def: 2400 },
 			{ field: 'intentContextWindow', min: 1024, max: Infinity, def: 200000 },

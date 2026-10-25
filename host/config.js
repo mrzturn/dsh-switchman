@@ -128,13 +128,13 @@ export const Config = z.object({
 
 	// --- Phase 3: context watermark control --------------------------------
 	/** Soft watermark: advisory banner + delegation nudge (tokens). */
-	wmSoftTokens: z.number().min(1000).default(50000).volatile(),
+	wmSoftTokens: z.number().min(1000).default(80000).volatile(),
 	/** Hard watermark: read budget tightens, wrap-up advised (tokens). */
-	wmHardTokens: z.number().min(2000).default(90000).volatile(),
+	wmHardTokens: z.number().min(2000).default(120000).volatile(),
 	/** Force watermark: backup + compaction handover (tokens). */
-	wmForceTokens: z.number().min(3000).default(130000).volatile(),
+	wmForceTokens: z.number().min(3000).default(150000).volatile(),
 	/** Per-call read budget for read/glob/grep (tokens). */
-	wmReadBudgetTokens: z.number().min(200).default(1500).volatile(),
+	wmReadBudgetTokens: z.number().min(200).default(3000).volatile(),
 	/** Hard-tier behavior: cap reads and advise, or deny outright. */
 	wmDenyMode: z.union(["cap", "deny"]).default("cap").volatile(),
 	/** Force tier triggers backup + compaction automatically. */
@@ -205,7 +205,7 @@ export const Config = z.object({
 	intentSwitchConfidence: z.number().min(0).max(100).default(80).volatile(),
 	/** Classification-call budget in ms; timeout/abort fails open to the
 	 *  fallback chain. */
-	intentTimeoutMs: z.number().min(200).default(3000).volatile(),
+	intentTimeoutMs: z.number().min(200).default(60000).volatile(),
 	/** Recent user/assistant messages fed to the classifier. */
 	intentHistoryMessages: z.number().min(1).max(20).default(6).volatile(),
 	/** Total character budget for that conversation excerpt. */

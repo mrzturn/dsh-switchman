@@ -139,9 +139,9 @@ function isRoot(ctx, agent) {
 /** Live threshold snapshot from the volatile settings. */
 function readThresholds(config) {
 	return {
-		soft: readNumber(config.wmSoftTokens, 50000),
-		hard: readNumber(config.wmHardTokens, 90000),
-		force: readNumber(config.wmForceTokens, 130000),
+		soft: readNumber(config.wmSoftTokens, 80000),
+		hard: readNumber(config.wmHardTokens, 120000),
+		force: readNumber(config.wmForceTokens, 150000),
 	};
 }
 
@@ -865,7 +865,7 @@ function applyContextWatch(ctx, config) {
 			if (sessionId !== null && ACCOUNT_TOOLS.has(exec?.name ?? "")) {
 				const entry = accountRead(state, sessionId, resultTokens(result));
 				if (GATED_TOOLS.has(exec.name) && !state.paused.has(sessionId)) {
-					const budget = readNumber(config.wmReadBudgetTokens, 1500);
+					const budget = readNumber(config.wmReadBudgetTokens, 3000);
 					const ceiling = budget * CEILING_MULTIPLE;
 					const used = measureNow(ctx, exec.agent);
 					const th = readThresholds(config);
@@ -901,7 +901,7 @@ function applyContextWatch(ctx, config) {
 			if (!GATED_TOOLS.has(exec?.name ?? "")) return next();
 			const sessionId = sessionIdOf(exec?.agent);
 			if (sessionId === null || state.paused.has(sessionId)) return next();
-			const budget = readNumber(config.wmReadBudgetTokens, 1500);
+			const budget = readNumber(config.wmReadBudgetTokens, 3000);
 			if (turnUsed(state, sessionId) < budget * CEILING_MULTIPLE) return next();
 			const used = measureNow(ctx, exec.agent);
 			if (used === null) return next();

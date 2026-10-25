@@ -117,7 +117,7 @@ const BOOLEAN_FIELDS = [
 const INTENT_NUMBER_FIELDS = [
 	{ field: "intentCacheTtlSeconds", min: 0, max: Number.POSITIVE_INFINITY, def: 300 },
 	{ field: "intentSwitchConfidence", min: 0, max: 100, def: 80 },
-	{ field: "intentTimeoutMs", min: 200, max: Number.POSITIVE_INFINITY, def: 3000 },
+	{ field: "intentTimeoutMs", min: 200, max: Number.POSITIVE_INFINITY, def: 60000 },
 	{ field: "intentHistoryMessages", min: 1, max: 20, def: 6 },
 	{ field: "intentHistoryMaxChars", min: 200, max: 20000, def: 2400 },
 	{ field: "intentContextWindow", min: 1024, max: Number.POSITIVE_INFINITY, def: 200000 },

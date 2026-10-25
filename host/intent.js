@@ -146,7 +146,7 @@ function routeOf(value) {
 export function effectiveContextWindow(config) {
 	const user = Math.max(1024, Math.round(readNumber(config.intentContextWindow, 200000)));
 	if (!readBool(config.wmAutoHandover)) return user;
-	const floor = Math.ceil(readNumber(config.wmForceTokens, 130000) / 0.8);
+	const floor = Math.ceil(readNumber(config.wmForceTokens, 150000) / 0.8);
 	return Math.max(user, floor);
 }
 
@@ -518,7 +518,7 @@ async function classifyOnce(ctx, config, route, system, input, turnSignal) {
 	if (llm === undefined || llm === null || typeof llm.prepareCall !== "function" || typeof llm.stream !== "function") {
 		throw new Error("llm service unavailable");
 	}
-	const deadlineMs = Math.max(200, Math.round(readNumber(config.intentTimeoutMs, 3000)));
+	const deadlineMs = Math.max(200, Math.round(readNumber(config.intentTimeoutMs, 60000)));
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), deadlineMs);
 	const signal = turnSignal instanceof AbortSignal ? AbortSignal.any([controller.signal, turnSignal]) : controller.signal;
@@ -597,7 +597,7 @@ export async function classifySystemone(ctx, config, candidates, current, excerp
 			},
 		},
 	};
-	const deadlineMs = Math.max(200, Math.round(readNumber(config.intentTimeoutMs, 3000)));
+	const deadlineMs = Math.max(200, Math.round(readNumber(config.intentTimeoutMs, 60000)));
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), deadlineMs);
 	const signal = turnSignal instanceof AbortSignal ? AbortSignal.any([controller.signal, turnSignal]) : controller.signal;
@@ -766,7 +766,7 @@ export async function intentStateOf(ctx, config, sessionId = null) {
 			}
 		}
 	}
-	const forceTokens = readNumber(config.wmForceTokens, 130000);
+	const forceTokens = readNumber(config.wmForceTokens, 150000);
 	return {
 		enabled,
 		autoSelected: selection?.provider === AUTO_PROVIDER,
