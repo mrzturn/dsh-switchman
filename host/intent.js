@@ -34,6 +34,7 @@
 
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { effectiveIntentCandidates, mergeIntentCandidates } from "./intent-presets.js";
 import { sessionModelSelectionOf } from "./subagent-model.js";
 
 /** Pseudo provider id (must match client.js and the design contract). */
@@ -130,15 +131,22 @@ function routeOf(value) {
 }
 
 /** Validated intent-candidate list: routes plus their optional effort/note. */
-function readCandidates(field) {
+export function readCandidates(field) {
+	// Unified list = stored rows merged with the built-in presets; only
+	// enabled rows with a complete route reach the classifier, so a preset
+	// still waiting for its model (or a freshly added custom row) never
+	// dilutes the prompt.
 	const candidates = [];
-	for (const entry of readList(field)) {
-		if (entry === null || typeof entry !== "object") continue;
-		const provider = typeof entry.provider === "string" ? entry.provider.trim() : "";
-		const model = typeof entry.model === "string" ? entry.model.trim() : "";
-		if (provider === "" || model === "") continue;
-		if (provider === AUTO_PROVIDER) continue; // self-reference guard, mirrors routeOf
-		const candidate = { provider, model };
+	const seenRoutes = new Set();
+	for (const entry of effectiveIntentCandidates(mergeIntentCandidates(readList(field)))) {
+		if (entry.provider === AUTO_PROVIDER) continue; // self-reference guard, mirrors routeOf
+		// Same provider/model twice (a configured preset next to a legacy
+		// row with that route) would list one route twice with different
+		// notes; presets sort first, so the preset's note wins.
+		const routeKey = `${entry.provider}/${entry.model}`;
+		if (seenRoutes.has(routeKey)) continue;
+		seenRoutes.add(routeKey);
+		const candidate = { provider: entry.provider, model: entry.model };
 		if (typeof entry.effort === "string" && entry.effort.trim() !== "") candidate.effort = entry.effort.trim();
 		if (typeof entry.note === "string" && entry.note.trim() !== "") candidate.note = entry.note.trim();
 		candidates.push(candidate);

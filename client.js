@@ -323,17 +323,31 @@ window.__ModuleLoader__.load({
 		 * note]}) — the design's IntentCandidateSchema — or null; blank
 		 * effort/note fields are dropped rather than kept. */
 		function sanitizeIntentCandidate(entry) {
-			const route = sanitizeRoute(entry);
-			if (route === null) return null;
-			return {
-				...route,
-				...(typeof entry.effort === 'string' && entry.effort !== ''
-					? { effort: entry.effort }
-					: {}),
-				...(typeof entry.note === 'string' && entry.note !== ''
-					? { note: entry.note }
-					: {}),
+			if (entry === null || typeof entry !== 'object') return null;
+			const provider =
+				typeof entry.provider === 'string' ? entry.provider.trim() : '';
+			const model = typeof entry.model === 'string' ? entry.model.trim() : '';
+			const id =
+				typeof entry.id === 'string' && entry.id.trim() !== ''
+					? entry.id.trim()
+					: '';
+			// Only identified rows (preset or custom) may live without a
+			// route — a preset still waiting for its model must survive the
+			// snapshot round-trip instead of being dropped like junk.
+			if (id === '' && (provider === '' || model === '')) return null;
+			const candidate = {
+				id,
+				preset: entry.preset === true,
+				enabled: entry.enabled !== false,
+				provider,
+				model,
+				note: typeof entry.note === 'string' ? entry.note : '',
 			};
+			if (typeof entry.label === 'string' && entry.label !== '')
+				candidate.label = entry.label;
+			if (typeof entry.effort === 'string' && entry.effort !== '')
+				candidate.effort = entry.effort;
+			return candidate;
 		}
 
 		/** Is `value` one of the predefined candidates? */
@@ -509,7 +523,7 @@ window.__ModuleLoader__.load({
 				intentCandidates: values.intentCandidates
 					.map(
 						(entry) =>
-							`${routeKey(entry)}\0${entry.effort ?? ''}\0${entry.note ?? ''}`,
+							`${entry.id ?? ''}\0${entry.enabled === false ? '0' : '1'}\0${routeKey(entry)}\0${entry.effort ?? ''}\0${entry.note ?? ''}`,
 					)
 					.join('|'),
 				...Object.fromEntries(
@@ -823,6 +837,9 @@ window.__ModuleLoader__.load({
 				intentCandidatesEmpty: '暂无候选：至少配置 1 个候选，「自动」才能路由。',
 				intentCandidatesAdd: '添加候选',
 				intentCandidateRemove: '删除候选',
+				intentCandidateEnable: '启用',
+				intentCandidateUnset: '已启用但未选模型：暂不参与路由，选一个模型即生效',
+				intentCandidatePresetBadge: '预置',
 				intentCandidateNotePlaceholder: '一句话能力描述（给分类器看）',
 				intentCacheTtlLabel: '缓存续用窗口（秒）',
 				intentCacheTtlHelp:
@@ -1040,6 +1057,9 @@ window.__ModuleLoader__.load({
 					'No candidates yet: configure at least 1 candidate for routing to work.',
 				intentCandidatesAdd: 'Add candidate',
 				intentCandidateRemove: 'Remove candidate',
+				intentCandidateEnable: 'Enable',
+				intentCandidateUnset: 'Enabled but no model selected — excluded from routing until a model is chosen',
+				intentCandidatePresetBadge: 'Preset',
 				intentCandidateNotePlaceholder:
 					'one-line capability note (read by the classifier)',
 				intentCacheTtlLabel: 'Cache reuse window (seconds)',
@@ -1250,6 +1270,9 @@ window.__ModuleLoader__.load({
 				intentCandidatesEmpty: '暫無候選：至少設定 1 個候選，「自動」才能路由。',
 				intentCandidatesAdd: '新增候選',
 				intentCandidateRemove: '刪除候選',
+				intentCandidateEnable: '啟用',
+				intentCandidateUnset: '已啟用但未選模型：暫不參與路由，選一個模型即生效',
+				intentCandidatePresetBadge: '預置',
 				intentCandidateNotePlaceholder: '一句話能力描述（給分類器看）',
 				intentCacheTtlLabel: '快取續用視窗（秒）',
 				intentCacheTtlHelp:
@@ -1446,6 +1469,9 @@ window.__ModuleLoader__.load({
 					'候補なし：ルーティングには 1 件以上の候補が必要です。',
 				intentCandidatesAdd: '候補を追加',
 				intentCandidateRemove: '候補を削除',
+				intentCandidateEnable: '有効化',
+				intentCandidateUnset: '有効ですがモデル未選択：ルーティング対象外。モデルを選ぶと有効になります',
+				intentCandidatePresetBadge: 'プリセット',
 				intentCandidateNotePlaceholder: '一行の能力説明（分類器向け）',
 				intentCacheTtlLabel: 'キャッシュ再利用窓（秒）',
 				intentCacheTtlHelp:
@@ -1644,6 +1670,9 @@ window.__ModuleLoader__.load({
 					'후보 없음: 라우팅하려면 후보를 1개 이상 설정하세요.',
 				intentCandidatesAdd: '후보 추가',
 				intentCandidateRemove: '후보 삭제',
+				intentCandidateEnable: '사용',
+				intentCandidateUnset: '활성화되었으나 모델 미선택: 라우팅에서 제외됩니다. 모델을 선택하면 활성화됩니다',
+				intentCandidatePresetBadge: '프리셋',
 				intentCandidateNotePlaceholder: '한 줄 능력 설명(분류기용)',
 				intentCacheTtlLabel: '캐시 재사용 창(초)',
 				intentCacheTtlHelp:
@@ -1842,6 +1871,9 @@ window.__ModuleLoader__.load({
 					'Keine Kandidaten: Für das Routing ist mindestens 1 Kandidat nötig.',
 				intentCandidatesAdd: 'Kandidat hinzufügen',
 				intentCandidateRemove: 'Kandidat entfernen',
+				intentCandidateEnable: 'Aktivieren',
+				intentCandidateUnset: 'Aktiviert, aber ohne Modell — wird beim Routing übergangen; mit gewähltem Modell aktiv',
+				intentCandidatePresetBadge: 'Preset',
 				intentCandidateNotePlaceholder:
 					'Einzeilen-Fähigkeitsbeschreibung (für den Klassifikator)',
 				intentCacheTtlLabel: 'Cache-Fenster (Sekunden)',
@@ -2042,6 +2074,9 @@ window.__ModuleLoader__.load({
 					'Sin candidatos: configure al menos 1 candidato para poder enrutar.',
 				intentCandidatesAdd: 'Añadir candidato',
 				intentCandidateRemove: 'Eliminar candidato',
+				intentCandidateEnable: 'Activar',
+				intentCandidateUnset: 'Activada pero sin modelo: excluida del enrutado; se activa al elegir un modelo',
+				intentCandidatePresetBadge: 'Preset',
 				intentCandidateNotePlaceholder:
 					'descripción de capacidad en una línea (para el clasificador)',
 				intentCacheTtlLabel: 'Ventana de reutilización de caché (segundos)',
@@ -2242,6 +2277,9 @@ window.__ModuleLoader__.load({
 					'Aucun candidat : configurez au moins 1 candidat pour permettre le routage.',
 				intentCandidatesAdd: 'Ajouter un candidat',
 				intentCandidateRemove: 'Supprimer le candidat',
+				intentCandidateEnable: 'Activer',
+				intentCandidateUnset: 'Activée sans modèle — exclue du routage ; choisir un modèle l\'active',
+				intentCandidatePresetBadge: 'Preset',
 				intentCandidateNotePlaceholder:
 					'description de capacité en une ligne (pour le classificateur)',
 				intentCacheTtlLabel: 'Fenêtre de réutilisation du cache (secondes)',
@@ -2442,6 +2480,9 @@ window.__ModuleLoader__.load({
 					'Nessun candidato: configura almeno 1 candidato per consentire l’instradamento.',
 				intentCandidatesAdd: 'Aggiungi candidato',
 				intentCandidateRemove: 'Rimuovi candidato',
+				intentCandidateEnable: 'Attiva',
+				intentCandidateUnset: 'Attiva ma senza modello: esclusa dal routing; si attiva scegliendo un modello',
+				intentCandidatePresetBadge: 'Preset',
 				intentCandidateNotePlaceholder:
 					'descrizione di capacità in una riga (per il classificatore)',
 				intentCacheTtlLabel: 'Finestra di riutilizzo cache (secondi)',
@@ -2642,6 +2683,9 @@ window.__ModuleLoader__.load({
 					'Sem candidatos: configure pelo menos 1 candidato para permitir o roteamento.',
 				intentCandidatesAdd: 'Adicionar candidato',
 				intentCandidateRemove: 'Remover candidato',
+				intentCandidateEnable: 'Ativar',
+				intentCandidateUnset: 'Ativada sem modelo: excluída do roteamento; escolher um modelo ativa',
+				intentCandidatePresetBadge: 'Preset',
 				intentCandidateNotePlaceholder:
 					'descrição de capacidade em uma linha (para o classificador)',
 				intentCacheTtlLabel: 'Janela de reuso de cache (segundos)',
@@ -2842,6 +2886,9 @@ window.__ModuleLoader__.load({
 					'Нет кандидатов: для маршрутизации нужен хотя бы 1 кандидат.',
 				intentCandidatesAdd: 'Добавить кандидата',
 				intentCandidateRemove: 'Удалить кандидата',
+				intentCandidateEnable: 'Включить',
+				intentCandidateUnset: 'Включено, но модель не выбрана: исключено из маршрутизации; активируется после выбора модели',
+				intentCandidatePresetBadge: 'Пресет',
 				intentCandidateNotePlaceholder:
 					'описание возможностей одной строкой (для классификатора)',
 				intentCacheTtlLabel: 'Окно повторного использования кэша (секунды)',
@@ -3803,10 +3850,38 @@ window.__ModuleLoader__.load({
 			intentCandidateRow: {
 				display: 'grid',
 				gridTemplateColumns:
-					'20px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 0.7fr) minmax(0, 1.3fr) auto',
+					'20px 20px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 0.7fr) auto',
 				gap: '6px',
 				alignItems: 'center',
 				padding: '2px 0',
+			},
+			intentCandidateCard: {
+				display: 'flex',
+				flexDirection: 'column',
+				gap: '6px',
+				padding: '8px 0',
+			},
+			intentCandidateCaption: {
+				fontSize: '12px',
+				opacity: 0.75,
+			},
+			intentCandidatePreset: {
+				fontSize: '11px',
+				lineHeight: '20px',
+				padding: '0 8px',
+				borderRadius: '999px',
+				border: '1px solid var(--dsw-alias-border-primary, rgba(128, 128, 128, 0.4))',
+				whiteSpace: 'nowrap',
+				textAlign: 'center',
+			},
+			intentCandidateNote: {
+				width: '100%',
+				boxSizing: 'border-box',
+				minHeight: '56px',
+				resize: 'vertical',
+				padding: '6px 8px',
+				font: 'inherit',
+				lineHeight: 1.5,
 			},
 		};
 
@@ -4679,21 +4754,15 @@ window.__ModuleLoader__.load({
 				intentClassifierKind: values.intentClassifierKind,
 				intentClassifierEndpoint: values.intentClassifierEndpoint,
 				intentClassifierSystemoneModel: values.intentClassifierSystemoneModel,
+				// Full row shape (id/preset/enabled included) through the SAME
+				// sanitizer readCurrent uses — desired must stay structurally
+				// identical to current (toggle/preset persistence + clean
+				// dirty-check). Identified rows without a model survive
+				// (presets awaiting configuration, half-edited custom rows);
+				// only anonymous empty junk is dropped.
 				intentCandidates: values.intentCandidates
-					// Silently drop unfinished rows (blank provider/model), the
-					// same contract as the pool lists — the Host would otherwise
-					// coerce-reject the whole write with an opaque 400.
-					.filter(
-						(entry) =>
-							String(entry.provider ?? '').trim() !== '' &&
-							String(entry.model ?? '').trim() !== '',
-					)
-					.map((entry) => ({
-						provider: entry.provider,
-						model: entry.model,
-						effort: entry.effort ?? '',
-						note: entry.note ?? '',
-					})),
+					.map(sanitizeIntentCandidate)
+					.filter((entry) => entry !== null),
 				...Object.fromEntries(
 					INTENT_NUMBER_FIELDS.map(({ field }) => [field, values[field]]),
 				),
@@ -5147,9 +5216,19 @@ window.__ModuleLoader__.load({
 				);
 			};
 			const addIntentCandidate = () => {
+				// Client-generated id keeps the half-edited row alive across
+				// save/snapshot round-trips (host keeps identified empty rows).
 				edit('intentCandidates', [
 					...values.intentCandidates,
-					{ provider: '', model: '', effort: '', note: '' },
+					{
+						id: `u${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+						preset: false,
+						enabled: true,
+						provider: '',
+						model: '',
+						effort: '',
+						note: '',
+					},
 				]);
 			};
 			const removeIntentCandidate = (index) => {
@@ -5730,7 +5809,7 @@ window.__ModuleLoader__.load({
 										]
 									: [],
 						}),
-						),
+					),
 					h('h4', { style: STYLE.subheading }, t('intentCandidatesLabel')),
 					h('p', { style: STYLE.description }, t('intentCandidatesHelp')),
 					values.intentCandidates.length === 0
@@ -5741,99 +5820,139 @@ window.__ModuleLoader__.load({
 								...values.intentCandidates.map((entry, index) =>
 									h(
 										'div',
-										{ key: index, style: STYLE.intentCandidateRow },
+										{ key: entry.id ?? index, style: STYLE.intentCandidateCard },
 										h(
-											'span',
-											{ style: STYLE.rankIndex },
-											String(index + 1),
-										),
-										h(
-											'select',
-											{
-												...selectProps(
-													`${intentId}-candidate-${index}-provider`,
-													entry.provider,
-													(next) => {
-														const kept = intentModelsFor(
-															next,
-														).some(
-															(meta) =>
-																meta.model ===
-																entry.model,
-														);
-														editIntentCandidate(index, {
-															provider: next,
-															model: kept
-																? entry.model
-																: '',
-														});
-													},
-												),
-												'aria-label': `${t('intentCandidatesLabel')} ${index + 1} · provider`,
-											},
-											...intentProviderOptions(entry.provider),
-										),
-										h(
-											'select',
-											{
-												...selectProps(
-													`${intentId}-candidate-${index}-model`,
-													entry.model,
-													(next) => {
-														editIntentCandidate(index, {
-															model: next,
-														});
-													},
-												),
-												disabled:
-													!editable || entry.provider === '',
-												'aria-label': `${t('intentCandidatesLabel')} ${index + 1} · model`,
-											},
-											...intentModelOptions(
-												entry.provider,
-												entry.model,
+											'div',
+											{ style: STYLE.intentCandidateRow },
+											h('input', {
+												type: 'checkbox',
+												checked: entry.enabled !== false,
+												onChange: (event) => {
+													editIntentCandidate(index, {
+														enabled: event.target.checked,
+													});
+												},
+												disabled: !editable,
+												'aria-label': `${t('intentCandidateEnable')} · ${t('intentCandidatesLabel')} ${index + 1}`,
+											}),
+											h(
+												'span',
+												{ style: STYLE.rankIndex },
+												String(index + 1),
 											),
+											h(
+												'select',
+												{
+													...selectProps(
+														`${intentId}-candidate-${index}-provider`,
+														entry.provider,
+														(next) => {
+															const kept = intentModelsFor(
+																next,
+															).some(
+																(meta) =>
+																	meta.model ===
+																	entry.model,
+															);
+															editIntentCandidate(index, {
+																provider: next,
+																model: kept
+																	? entry.model
+																	: '',
+															});
+														},
+													),
+													'aria-label': `${t('intentCandidatesLabel')} ${index + 1} · provider`,
+												},
+												...intentProviderOptions(entry.provider),
+											),
+											h(
+												'select',
+												{
+													...selectProps(
+														`${intentId}-candidate-${index}-model`,
+														entry.model,
+														(next) => {
+															editIntentCandidate(index, {
+																model: next,
+															});
+														},
+													),
+													disabled:
+														!editable || entry.provider === '',
+													'aria-label': `${t('intentCandidatesLabel')} ${index + 1} · model`,
+												},
+												...intentModelOptions(
+													entry.provider,
+													entry.model,
+												),
+											),
+											intentEffortSelect(
+												`${intentId}-candidate-${index}-effort`,
+												entry,
+												entry.effort ?? '',
+												(next) => {
+														editIntentCandidate(index, {
+															effort: next,
+														});
+													},
+												`${t('intentCandidatesLabel')} ${index + 1} · ${t('intentClassifierEffortLabel')}`,
+											),
+											entry.preset === true
+												? h(
+														'span',
+														{ style: STYLE.intentCandidatePreset },
+														t('intentCandidatePresetBadge'),
+													)
+												: h(
+														'button',
+														{
+															type: 'button',
+															onClick: () => {
+																removeIntentCandidate(index);
+															},
+															disabled: !editable,
+															title: t('intentCandidateRemove'),
+															'aria-label': t('intentCandidateRemove'),
+															style: STYLE.iconButton,
+														},
+														'✕',
+													),
 										),
-										intentEffortSelect(
-											`${intentId}-candidate-${index}-effort`,
-											entry,
-											entry.effort ?? '',
-											(next) => {
-												editIntentCandidate(index, {
-													effort: next,
-												});
-											},
-											`${t('intentCandidatesLabel')} ${index + 1} · ${t('intentClassifierEffortLabel')}`,
-										),
-										h('input', {
-											type: 'text',
+										entry.preset === true
+											? h(
+													'span',
+													{ style: STYLE.intentCandidateCaption },
+													entry.label ?? entry.id,
+												)
+											: null,
+										h('textarea', {
 											value: entry.note ?? '',
 											placeholder: t('intentCandidateNotePlaceholder'),
+											readOnly: entry.preset === true,
 											onChange: (event) =>
 												editIntentCandidate(index, {
 													note: event.target.value,
 												}),
 											disabled: !editable,
 											'aria-label': `${t('intentCandidatesLabel')} ${index + 1} · note`,
-											style: STYLE.control,
-										}),
-										h(
-											'button',
-											{
-												type: 'button',
-												onClick: () => {
-													removeIntentCandidate(index);
-												},
-												disabled: !editable,
-												title: t('intentCandidateRemove'),
-												'aria-label': t('intentCandidateRemove'),
-												style: STYLE.iconButton,
+											style: {
+												...STYLE.intentCandidateNote,
+												...(entry.preset === true
+													? { opacity: 0.75, cursor: 'default' }
+													: {}),
 											},
-											'✕',
-										),
-									),
+										}),
+										entry.enabled !== false && entry.model.trim() === ''
+											? h(
+													'p',
+													{ style: STYLE.progress },
+													t('intentCandidateUnset'),
+												)
+											: null,
 								),
 							),
+					),
 					h(
 						'button',
 						{

@@ -46,13 +46,19 @@ export const EffortEntrySchema = z.object({
 });
 
 /** One intent-routing candidate: a real model route the classifier may pick,
- *  plus an optional reasoning-effort pin and a one-line capability note the
- *  classifier reads. effort/note follow RankEntrySchema.tier's optional style
- *  (no `.required()`: schemastery passes undefined through, so entries may
- *  omit either key). */
+ *  plus an optional reasoning-effort pin and a capability note the classifier
+ *  reads. Every row carries a stable id; preset rows (id owned by
+ *  host/intent-presets.js) keep a code-owned immutable note, while enabled /
+ *  provider / model / effort are user-configured — provider/model may be
+ *  empty while a preset waits for its route. effort/note follow
+ *  RankEntrySchema.tier's optional style (no `.required()`: schemastery
+ *  passes undefined through, so entries may omit either key). */
 export const IntentCandidateSchema = z.object({
-	provider: z.string().min(1).required(),
-	model: z.string().min(1).required(),
+	id: z.string(),
+	preset: z.boolean(),
+	enabled: z.boolean(),
+	provider: z.string(),
+	model: z.string(),
 	effort: z.string(),
 	note: z.string(),
 });
@@ -185,7 +191,9 @@ export const Config = z.object({
 	 *  kind fails open to the fallback chain. */
 	intentClassifierSystemoneModel: z.string().default("").volatile(),
 	/** Independent candidate list the "auto" pseudo-model may route to (NOT
-	 *  poolMain). Each entry: {provider, model, effort?, note?}. */
+	 *  poolMain). Each entry: {id, preset?, enabled?, provider, model,
+	 *  effort?, note?}; readers merge the built-in presets from
+	 *  host/intent-presets.js (see mergeIntentCandidates). */
 	intentCandidates: z.array(IntentCandidateSchema).default([]).volatile(),
 	/** Provider prompt-cache reuse window: while the current route stays
 	 *  below the switch-confidence threshold, keep it for this many

@@ -45,6 +45,7 @@
 import { authorizedChildRoutes } from "./dispatch.js";
 import { handoverSnapshot } from "./handover-state.js";
 import { clearSessionState, intentStateOf } from "./intent.js";
+import { INTENT_PRESETS, mergeIntentCandidates } from "./intent-presets.js";
 import { pumpTeamsOrchestration, scheduleTeamsOrchestration, SWITCHMAN_SETTINGS_NS, teamsBundleState, teamsSyncSnapshot } from "./teams.js";
 import { reportedUiLocale, setReportedUiLocale } from "./ui-locale.js";
 import { visionStateOf } from "./vision.js";
@@ -285,12 +286,25 @@ function cleanIntentRoute(entry) {
  *  (mirrors client.js's sanitizeIntentCandidate). */
 function cleanIntentCandidate(entry) {
 	if (entry === null || typeof entry !== "object") return null;
+	const id = typeof entry.id === "string" ? entry.id.trim() : "";
 	const provider = typeof entry.provider === "string" ? entry.provider.trim() : "";
 	const model = typeof entry.model === "string" ? entry.model.trim() : "";
-	if (provider === "" || model === "") return null;
-	const candidate = { provider, model };
-	if (typeof entry.effort === "string" && entry.effort.trim() !== "") candidate.effort = entry.effort.trim();
-	if (typeof entry.note === "string" && entry.note.trim() !== "") candidate.note = entry.note.trim();
+	const effort = typeof entry.effort === "string" ? entry.effort.trim() : "";
+	const note = typeof entry.note === "string" ? entry.note.trim() : "";
+	const preset = INTENT_PRESETS.find((row) => row.id === id) ?? null;
+	// Empty routes are legal ONLY for identified rows (a preset waiting for
+	// its model, or a half-edited custom row); anonymous empty junk is data
+	// noise and dropped.
+	if (preset === null && id === "" && provider === "" && model === "" && effort === "" && note === "") return null;
+	if (preset !== null) {
+		// Defense in depth: whatever the client echoes back, a preset row's
+		// note stays the code value and the row keeps its identity.
+		const candidate = { id: preset.id, preset: true, enabled: entry.enabled !== false, provider, model, note: preset.note };
+		if (effort !== "") candidate.effort = effort;
+		return candidate;
+	}
+	const candidate = { id, preset: false, enabled: entry.enabled !== false, provider, model, note };
+	if (effort !== "") candidate.effort = effort;
 	return candidate;
 }
 
@@ -310,9 +324,7 @@ export function snapshotOf(config) {
 			: [];
 	for (const field of INTENT_ROUTE_FIELDS) values[field] = cleanIntentRoute(rawOf(config?.[field])) ?? { provider: "", model: "" };
 	for (const field of INTENT_CANDIDATE_FIELDS)
-		values[field] = Array.isArray(rawOf(config?.[field]))
-			? rawOf(config[field]).map(cleanIntentCandidate).filter(Boolean)
-			: [];
+		values[field] = mergeIntentCandidates(rawOf(config?.[field]));
 	values.intentClassifierKind = ENUM_FIELDS.intentClassifierKind.includes(rawOf(config?.intentClassifierKind))
 		? rawOf(config.intentClassifierKind)
 		: "chat";
@@ -346,7 +358,9 @@ function whitelistSyncOf(config) {
 }
 
 /** Coerce and validate a client-submitted values object; null when invalid. */
-function coerceValues(input) {
+/** Validate+normalize an incoming settings payload; exported so the
+ *  smoke suite can exercise the PUT-fence round-trip invariant. */
+export function coerceValues(input) {
 	if (input === null || typeof input !== "object" || Array.isArray(input)) return null;
 	const values = {};
 	for (const field of STRING_FIELDS) {
@@ -502,7 +516,17 @@ export function makeRoutes(ctx, config) {
 				const current = snapshotOf(config);
 				if (body.expected !== undefined) {
 					const expected = coerceValues(body.expected);
-					if (expected === null || !sameValues(expected, current)) {
+					// Compare candidate rows through the idempotent merge on
+					// BOTH sides: the snapshot carries derived labels and the
+					// coerce path strips them, so a raw stringify would never
+					// match once presets exist (PHANTOM 409 on every save).
+					const fenceSame =
+						expected !== null &&
+						sameValues(
+							{ ...expected, intentCandidates: mergeIntentCandidates(expected.intentCandidates) },
+							{ ...current, intentCandidates: mergeIntentCandidates(current.intentCandidates) },
+						);
+					if (!fenceSame) {
 						writeJson(res, 409, { error: "conflict: settings changed since load", values: current });
 						return;
 					}
