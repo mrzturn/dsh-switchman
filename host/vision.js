@@ -21,12 +21,15 @@
  * placeholder, so the followup forbids that. With an empty vision
  * pool the command refuses with setup guidance instead, and the client
  * composer-dock hint (fed by GET /api/dsh-switchman/vision-state)
- * points at the same setting. The hint's imageCapable verdict normally
- * reads the first root session's model; the route's optional `session`
- * query parameter judges the named session's own model instead (via the
- * session-query observeSession channel shared with host/subagent-model.js),
- * so a child session on a different route no longer misreports — unknown
- * sessions fall back to the root verdict.
+ * points at the same setting. The route's optional `session` query
+ * parameter judges the named session's own model (via the session-query
+ * observeSession channel shared with host/subagent-model.js), so a child
+ * session on a different route no longer misreports — unknown sessions
+ * report null (unknown), never another conversation's verdict; only
+ * session-less probes fall back to a best-effort root verdict. Auto
+ * pseudo-model selections are judged through the intent layer's current
+ * decided route; the hint itself renders only on a positively confirmed
+ * text-only verdict (client.js), so "unknown" stays silent.
  */
 
 import { execFile as execFileCb } from "node:child_process";
@@ -36,6 +39,7 @@ import { access, copyFile, mkdir, open, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { dshHome } from "./lib/dsh-home.js";
+import { AUTO_PROVIDER, intentStateOf } from "./intent.js";
 import { sessionModelSelectionOf } from "./subagent-model.js";
 import { reportedUiLocale } from "./ui-locale.js";
 
@@ -200,13 +204,17 @@ async function materializeImage(store, ref, warn) {
  *  exact semantics: undefined inputModalities pass (no restriction
  *  declared); anything else must include "image". Returns null when
  *  unknowable (bad route, no llm service, resolution failure) — callers
- *  treat null as "don't know", never as capable/incapable. */
+ *  treat null as "don't know", never as capable/incapable.
+ *
+ *  The resolveModelInfo call MUST stay receiver-bound: LlmRuntime methods
+ *  read `this` (this.resolveModelInfoFor), so detaching the method turned
+ *  every probe into a TypeError → null (the "hint always shows" bug). */
 async function modelImageCapableOf(ctx, provider, model) {
 	try {
 		if (typeof provider !== "string" || provider === "" || typeof model !== "string" || model === "") return null;
-		const resolveModelInfo = ctx.get?.("llm", false)?.resolveModelInfo;
-		if (typeof resolveModelInfo !== "function") return null;
-		const info = await resolveModelInfo(provider, model);
+		const llm = ctx.get?.("llm", false);
+		if (llm === null || typeof llm !== "object" || typeof llm.resolveModelInfo !== "function") return null;
+		const info = await llm.resolveModelInfo(provider, model);
 		if (info?.inputModalities === undefined) return true;
 		return Array.isArray(info.inputModalities) && info.inputModalities.includes("image");
 	} catch {
@@ -214,15 +222,43 @@ async function modelImageCapableOf(ctx, provider, model) {
 	}
 }
 
+/** Image verdict for one session's model SELECTION. A concrete route is
+ *  judged directly; the dsh-switchman-auto pseudo route is judged through
+ *  the intent layer's current decided route (the adapter's routing point is
+ *  invisible to every DSH projection, so switchman's own routedCurrent is
+ *  the only source). No decision yet (fresh auto session) or an unreadable
+ *  intent state yields null — "don't know", not incapable. */
+async function selectionImageCapableOf(ctx, config, selection, sessionId) {
+	if (selection === null) return null;
+	if (selection.provider === AUTO_PROVIDER) {
+		try {
+			const state = await intentStateOf(ctx, config, sessionId);
+			const decided = state?.current;
+			if (decided === null || typeof decided !== "object") return null;
+			return modelImageCapableOf(ctx, decided.provider, decided.model);
+		} catch {
+			return null;
+		}
+	}
+	return modelImageCapableOf(ctx, selection.provider, selection.model);
+}
+
 /** Whether the first root session's selected model accepts image input.
- * Null when unknowable (no root, no usable selection). */
-async function rootImageCapableOf(ctx) {
+ *  Null when unknowable. Best-effort for probes WITHOUT a session id only
+ *  (the client dock always passes one): `selectionFor` lives on the
+ *  session-controller's internal controller, not on the cordis ctx.agents
+ *  registry, so the first read yields undefined on current DSH and the
+ *  dsh ≥0.2.2 `agent.model.current()` shape is tried as the second
+ *  attempt. The root's session id rides along so an auto-selection
+ *  resolves its decided route through the intent layer (agent ids are
+ *  session ids in the agents registry). */
+async function rootImageCapableOf(ctx, config) {
 	try {
 		const root = ctx.agents?.roots?.()?.[0];
 		if (root === undefined) return null;
-		const current = ctx.agents?.selectionFor?.(root)?.current;
+		const current = ctx.agents?.selectionFor?.(root)?.current ?? root?.model?.current?.();
 		if (!current?.provider || !current?.model) return null;
-		return modelImageCapableOf(ctx, current.provider, current.model);
+		return selectionImageCapableOf(ctx, config, current, typeof root?.id === "string" ? root.id : null);
 	} catch {
 		return null;
 	}
@@ -231,27 +267,27 @@ async function rootImageCapableOf(ctx) {
 /** Whether ONE named session's effective model accepts image input, via the
  *  session-query observeSession channel (shared with host/subagent-model.js;
  *  cold sessions resolve without activating the child). Null when the
- *  session is unknown, unreadable, or carries no selection yet — callers
- *  fall back to the root verdict. */
-async function sessionImageCapableOf(ctx, sessionId) {
-	const selection = await sessionModelSelectionOf(ctx, sessionId);
-	if (selection === null) return null;
-	return modelImageCapableOf(ctx, selection.provider, selection.model);
+ *  session is unknown, unreadable, or carries no selection yet. */
+async function sessionImageCapableOf(ctx, config, sessionId) {
+	return selectionImageCapableOf(ctx, config, await sessionModelSelectionOf(ctx, sessionId), sessionId);
 }
 
 /**
  * Live vision-gate state for the client hint route. `sessionId` (an optional
  * child session id, from the vision-state route's `session` query parameter)
- * judges image capability against THAT session's model; a missing/unknown
- * session falls back to the first root session's verdict.
+ * judges image capability against THAT session's model — a known-but-
+ * unreadable session stays null instead of judging some other conversation's
+ * root model. Only probes WITHOUT a session id fall back to the first root
+ * session's verdict.
  * @param {import("@deepseek-ai/cordis").Context} ctx - host plugin context.
  * @param {object} config - this plugin's live volatile config.
  * @param {string | null} [sessionId] - session to judge instead of the root.
  * @returns {Promise<{poolConfigured: boolean, imageCapable: boolean | null}>}
  */
 export async function visionStateOf(ctx, config, sessionId = null) {
-	let imageCapable = typeof sessionId === "string" && sessionId !== "" ? await sessionImageCapableOf(ctx, sessionId) : null;
-	if (imageCapable === null) imageCapable = await rootImageCapableOf(ctx);
+	const hasSession = typeof sessionId === "string" && sessionId !== "";
+	let imageCapable = hasSession ? await sessionImageCapableOf(ctx, config, sessionId) : null;
+	if (imageCapable === null && !hasSession) imageCapable = await rootImageCapableOf(ctx, config);
 	return {
 		poolConfigured: readPool(config.poolVision).length > 0,
 		imageCapable,
@@ -306,8 +342,8 @@ export function applyVision(ctx, config) {
 				return {
 					kind: "error",
 					text: isZh()
-						? "/vision：视觉池未配置模型。当前会话模型不支持读图——请先在 设置 → dsh-switchman → 派发池与模型排序 的「视觉池 · vision」中添加模型，再重新发送。"
-						: "/vision: the vision pool has no models. This session model cannot read images — add vision-pool models under Settings → dsh-switchman → dispatch pools, then resend.",
+						? "/vision：视觉池未配置模型——请先在 设置 → dsh-switchman → 派发池与模型排序 的「视觉池 · vision」中添加模型，再重新发送。"
+						: "/vision: the vision pool has no models — add vision-pool models under Settings → dsh-switchman → dispatch pools, then resend.",
 				};
 			}
 			const store = ctx.get?.("attachments", false);

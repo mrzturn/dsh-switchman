@@ -3175,11 +3175,17 @@ window.__ModuleLoader__.load({
 		 * 1. Guidance chip — DSH refuses to send pasted images while the
 		 *    session model has no image input; switchman's unlock is the
 		 *    /vision command backed by the vision pool. The chip renders
-		 *    whenever image support is not positively confirmed (probe
-		 *    false, or null = unresolved — the common live case: the
-		 *    Host-side model-info resolution often cannot resolve custom
-		 *    routes), polling the Host route at a slow fixed cadence;
-		 *    any failure renders nothing.
+		 *    ONLY when the Host probe positively confirms a text-only
+		 *    model (imageCapable === false); null (unresolved — no llm
+		 *    service, unknown session, fresh auto session with no routing
+		 *    decision yet) stays silent, because claiming "not supported"
+		 *    without a verdict was this feature's own bug (it warned on
+		 *    vision-capable models too). Refreshes IMMEDIATELY on a model
+		 *    switch (the modelSelection projection's `next` flips the moment
+		 *    the dropdown pick lands) and after each send (an auto session's
+		 *    decided route may change) via staggered catch-up fetches, with
+		 *    the slow 15s poll only as a fallback; any failure renders
+		 *    nothing.
 		 * 2. Reactive auto-conversion (v1) — when a plain send is refused
 		 *    host-side (session/attachment-invalid), rewrite the draft as
 		 *    "/vision <original text>" and resubmit once; the claimed
@@ -3188,13 +3194,19 @@ window.__ModuleLoader__.load({
 		 *    the authoritative image-gate signal; the probe's
 		 *    imageCapable only brakes the conversion when it positively
 		 *    says true. Session-scoped dock entries receive the standard
-		 *    kit (inputActions, useInput, useSession) automatically;
-		 *    loop safety = one conversion per promptError object
-		 *    identity + never converting a draft that already starts
-		 *    with "/". */
-		function VisionDockEntry({ t, sessionId, inputActions, useInput, useSession }) {
+		 *    kit (inputActions, useInput, useSession, useProjection)
+		 *    automatically; loop safety = one conversion per promptError
+		 *    object identity + never converting a draft that already
+		 *    starts with "/". */
+		function VisionDockEntry({ t, sessionId, inputActions, useInput, useSession, useProjection }) {
 			const [vision, setVision] = React.useState(null);
 			const [notice, setNotice] = React.useState(false);
+			// Refresh pulse — bumped by model-selection changes (composer
+			// dropdown) and send bursts (draft dropping to empty), mirroring
+			// IntentDockEntry's burst mechanism so the verdict updates
+			// immediately on a model switch instead of waiting out the
+			// 15s fallback poll. Restarts the probe effect below.
+			const [pulse, setPulse] = React.useState(0);
 			const handled = React.useRef(null);
 			const latest = React.useRef({ vision: null, draft: '', attachmentIds: [] });
 			React.useEffect(() => {
@@ -3205,12 +3217,22 @@ window.__ModuleLoader__.load({
 				// imageCapable from that session's model selection (subagent
 				// sessions included); without it the Host falls back to the
 				// root session and mislabels text-only children. Restarting
-				// the loop on `sessionId` re-probes immediately on a switch.
+				// the loop on `sessionId`/`pulse` re-probes immediately on a
+				// switch or a model-selection change.
 				const query =
 					typeof sessionId === 'string' && sessionId !== ''
 						? `?session=${encodeURIComponent(sessionId)}`
 						: '';
 				const tick = async () => {
+					// One fetch at a time; a catch-up landing mid-flight
+					// queues exactly one short-delay re-run instead of
+					// forking a second poll loop (same guard as the intent
+					// chip).
+					if (inflight) {
+						rerun = true;
+						return;
+					}
+					inflight = true;
 					let next = null;
 					try {
 						const reply = await api.get(`vision-state${query}`);
@@ -3222,16 +3244,32 @@ window.__ModuleLoader__.load({
 					} catch {
 						next = null;
 					}
+					inflight = false;
 					if (stopped) return;
 					setVision(next);
-					timer = setTimeout(tick, 15_000);
+					timer = setTimeout(tick, rerun ? 400 : 15_000);
+					rerun = false;
 				};
+				let inflight = false;
+				let rerun = false;
 				void tick();
+				// Catch-up fetches after the trigger — the model/selection
+				// event needs one append round-trip before the Host's
+				// observeSession read reflects it, and auto sessions may
+				// re-decide the route during prepareCall; 4s covers both.
+				const catchups = [400, 1800, 4000].map((ms) =>
+					setTimeout(() => {
+						if (stopped) return;
+						if (timer !== null) clearTimeout(timer);
+						void tick();
+					}, ms),
+				);
 				return () => {
 					stopped = true;
 					if (timer !== null) clearTimeout(timer);
+					for (const c of catchups) clearTimeout(c);
 				};
-			}, [sessionId]);
+			}, [sessionId, pulse]);
 			// Standard kit props are guaranteed by the session scope, but the
 			// hooks must be called unconditionally — degrade to no-op sources
 			// if a future shell ever mounts this entry outside that scope.
@@ -3239,11 +3277,45 @@ window.__ModuleLoader__.load({
 				typeof useInput === 'function' ? useInput : () => () => ({ draft: '', attachmentIds: [] });
 			const sessionHook =
 				typeof useSession === 'function' ? useSession : () => () => null;
+			const projectionHook =
+				typeof useProjection === 'function' ? useProjection : () => () => undefined;
 			const input = inputHook((s) => s) ?? {};
 			const promptError = sessionHook((s) => s.promptError);
+			// Wire view of the durable model-selection fold (same source the
+			// composer dropdown reads); `next` flips the moment a
+			// model/selection event lands, before any request runs.
+			const selection = projectionHook('modelSelection');
+			const draft = typeof input.draft === 'string' ? input.draft : '';
+			// Pulse trigger 1: any model-selection change (dropdown pick).
+			// The key string covers next+lastUsed so a re-render with a new
+			// object identity but the same selection does not pulse; the ref
+			// seeds from the first render's key so mounting with an existing
+			// selection does not pulse either (same seeding pattern as
+			// prevDraft below and IntentDockEntry's burst ref).
+			const selectionKey =
+				selection && typeof selection === 'object'
+					? [
+							selection.next?.provider ?? '',
+							selection.next?.model ?? '',
+							selection.next?.reasoningEffort ?? '',
+							selection.lastUsed?.provider ?? '',
+							selection.lastUsed?.model ?? '',
+						].join('|')
+					: null;
+			const prevSelectionKey = React.useRef(selectionKey);
+			// Pulse trigger 2: send burst (draft dropping to empty) — an
+			// auto session's decided route may have changed.
+			const prevDraft = React.useRef(draft);
+			React.useEffect(() => {
+				const selectionChanged = prevSelectionKey.current !== selectionKey;
+				const sendBurst = prevDraft.current !== '' && draft === '';
+				prevSelectionKey.current = selectionKey;
+				prevDraft.current = draft;
+				if (selectionChanged || sendBurst) setPulse((n) => n + 1);
+			}, [selectionKey, draft]);
 			latest.current = {
 				vision,
-				draft: typeof input.draft === 'string' ? input.draft : '',
+				draft,
 				attachmentIds: Array.isArray(input.attachmentIds) ? input.attachmentIds : [],
 			};
 			React.useEffect(() => {
@@ -3318,11 +3390,13 @@ window.__ModuleLoader__.load({
 							t('visionAutoConverted'),
 						)
 					: null,
-				// Hint whenever the probe cannot positively confirm image
-				// input — false (confirmed text-only) or null (unresolved,
-				// the common live case): /vision is harmless either way and
-				// this chip is the only composer-surface affordance for it.
-				vision !== null && vision.imageCapable !== true
+				// Hint ONLY on a positively confirmed text-only model
+				// (imageCapable === false). null means "unknown" (no llm
+				// service, unreadable session, auto session with no routing
+				// decision yet) — render nothing rather than a false
+				// "not supported" claim; the refusal-driven auto-conversion
+				// above still covers genuinely text-only sends.
+				vision !== null && vision.imageCapable === false
 					? h(
 							'p',
 							{
