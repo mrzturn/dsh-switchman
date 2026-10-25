@@ -164,9 +164,11 @@ export const Config = z.object({
 
 	// --- Intent recognition: classifier-routed "auto" model ----------------
 	/** Master switch for intent routing (design: .dsh-switchman/plans/
-	 *  intent-routing.md §2). OFF = an "auto"-selected session routes through
-	 *  the fallback chain (routedCurrent → intentFallbackRoute → first
-	 *  candidate) with NO classifier call. */
+	 *  intent-routing.md §2). The adapter stays mounted either way; OFF
+	 *  only hides the catalog entry (listModels returns [], the selector
+	 *  drops the empty group) — a session already on Auto routes through
+	 *  the documented fallback chain (routedCurrent → intentFallbackRoute
+	 *  → first candidate) with NO classifier call. */
 	intentEnabled: z.boolean().default(false).volatile(),
 	/** Small-model route that classifies the conversation against the
 	 *  candidates. Empty = unset; classification is skipped (fail-open). */
@@ -210,7 +212,11 @@ export const Config = z.object({
 	intentHistoryMaxChars: z.number().min(200).max(20000).default(2400).volatile(),
 	/** Context window (tokens) declared by the "auto" pseudo-model. Purely
 	 *  advisory metadata: drives the usage popover and the auto-compaction
-	 *  pressure math for sessions routed through Auto. */
+	 *  pressure math for sessions routed through Auto. While wmAutoHandover
+	 *  is on, the effective declared value is floored at
+	 *  ceil(wmForceTokens / 0.8) so the smooth handover always fires before
+	 *  the 0.8×-window auto-compaction (see effectiveContextWindow in
+	 *  host/intent.js). */
 	intentContextWindow: z.number().min(1024).default(200000).volatile(),
 	/** Optional last-resort route when the classifier fails and no previous
 	 *  routed model exists; empty = the first candidate. */

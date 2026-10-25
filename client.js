@@ -854,7 +854,7 @@ window.__ModuleLoader__.load({
 				intentHistoryMessagesHelp: '喂给分类器的最近消息条数。',
 				intentHistoryMaxCharsLabel: '摘录字符预算',
 				intentContextWindowLabel: '上下文窗口',
-				intentContextWindowHelp: 'Auto 伪模型声明的上下文窗口（token），用于用量显示与自动压缩水位。',
+				intentContextWindowHelp: 'Auto 伪模型声明的上下文窗口（token），用于用量显示与自动压缩水位；当 0.8×窗口低于 force 水位时生效值会自动抬升，保证平滑交接先触发。',
 				intentHistoryMaxCharsHelp: '对话摘录的总字符上限（200–20000）。',
 				intentFallbackRouteLabel: '兜底模型',
 				intentFallbackRouteHelp:
@@ -867,6 +867,7 @@ window.__ModuleLoader__.load({
 				intentDockDecided: '决策',
 				intentDockUnconfigured: '意图识别未配置完整',
 				intentDockCache: '缓存窗口剩余 {seconds} 秒',
+				intentDockOverflowRisk: '候选 {model} 窗口 {window}k 低于交接线，近上限可能溢出',
 				intentDockTipCandidates: '候选：{count}',
 				intentDockTipOn: '开',
 				intentDockTipOff: '关',
@@ -1078,7 +1079,7 @@ window.__ModuleLoader__.load({
 					'How many recent messages are fed to the classifier.',
 				intentHistoryMaxCharsLabel: 'Excerpt character budget',
 				intentContextWindowLabel: 'Context window',
-				intentContextWindowHelp: 'Context window (tokens) declared by the Auto pseudo-model; drives the usage popover and auto-compaction pressure.',
+				intentContextWindowHelp: 'Context window (tokens) declared by the Auto pseudo-model; drives the usage popover and auto-compaction pressure. When 0.8× the window is below the force watermark the effective value is raised automatically, so the smooth handover fires first.',
 				intentHistoryMaxCharsHelp:
 					'Total character cap of the conversation excerpt (200–20000).',
 				intentFallbackRouteLabel: 'Fallback model',
@@ -1093,6 +1094,7 @@ window.__ModuleLoader__.load({
 				intentDockUnconfigured:
 					'Intent routing is not fully configured',
 				intentDockCache: 'Cache window: {seconds}s left',
+				intentDockOverflowRisk: 'candidate {model} window {window}k is below the handover line; may overflow near the cap',
 				intentDockTipCandidates: 'candidates: {count}',
 				intentDockTipOn: 'on',
 				intentDockTipOff: 'off',
@@ -1291,7 +1293,7 @@ window.__ModuleLoader__.load({
 				intentHistoryMessagesHelp: '餵給分類器的最近訊息條數。',
 				intentHistoryMaxCharsLabel: '摘錄字元預算',
 				intentContextWindowLabel: '上下文視窗',
-				intentContextWindowHelp: 'Auto 偽模型宣告的上下文視窗（token），用於用量顯示與自動壓縮水位。',
+				intentContextWindowHelp: 'Auto 偽模型宣告的上下文視窗（token），用於用量顯示與自動壓縮水位；當 0.8×視窗低於 force 水位時生效值會自動抬升，確保平滑交接先觸發。',
 				intentHistoryMaxCharsHelp: '對話摘錄的總字元上限（200–20000）。',
 				intentFallbackRouteLabel: '備援模型',
 				intentFallbackRouteHelp:
@@ -1304,6 +1306,7 @@ window.__ModuleLoader__.load({
 				intentDockDecided: '決策',
 				intentDockUnconfigured: '意圖識別未設定完整',
 				intentDockCache: '快取視窗剩餘 {seconds} 秒',
+				intentDockOverflowRisk: '候選 {model} 視窗 {window}k 低於交接線，接近上限可能溢出',
 				intentDockTipCandidates: '候選：{count}',
 				intentDockTipOn: '開',
 				intentDockTipOff: '關',
@@ -1492,7 +1495,7 @@ window.__ModuleLoader__.load({
 				intentHistoryMessagesHelp: '分類器に渡す最近のメッセージ数。',
 				intentHistoryMaxCharsLabel: '抜粋文字数予算',
 				intentContextWindowLabel: 'コンテキストウィンドウ',
-				intentContextWindowHelp: 'Auto 疑似モデルが宣言するコンテキストウィンドウ（トークン）。使用量表示と自動圧縮のしきい値に使用。',
+				intentContextWindowHelp: 'Auto 疑似モデルが宣言するコンテキストウィンドウ（トークン）。使用量表示と自動圧縮のしきい値に使用。0.8×ウィンドウが force 水位を下回ると実効値が自動的に引き上げられ、平滑なハンドオーバーが先に発火します。',
 				intentHistoryMaxCharsHelp:
 					'会話抜粋の合計文字上限（200–20000）。',
 				intentFallbackRouteLabel: 'フォールバックモデル',
@@ -1507,6 +1510,7 @@ window.__ModuleLoader__.load({
 				intentDockUnconfigured:
 					'インテントルーティングの設定が不完全です',
 				intentDockCache: 'キャッシュ窓 残り {seconds} 秒',
+				intentDockOverflowRisk: '候補 {model} のウィンドウ {window}k はハンドオーバー線未満。上限付近で溢れる恐れがあります。',
 				intentDockTipCandidates: '候補：{count}',
 				intentDockTipOn: 'オン',
 				intentDockTipOff: 'オフ',
@@ -1695,7 +1699,7 @@ window.__ModuleLoader__.load({
 				intentHistoryMessagesHelp: '분류기에 전달할 최근 메시지 수.',
 				intentHistoryMaxCharsLabel: '발췌 문자 예산',
 				intentContextWindowLabel: '컨텍스트 윈도우',
-				intentContextWindowHelp: 'Auto 의사 모델이 선언하는 컨텍스트 윈도우(토큰). 사용량 표시와 자동 압축 기준에 사용.',
+				intentContextWindowHelp: 'Auto 의사 모델이 선언하는 컨텍스트 윈도우(토큰). 사용량 표시와 자동 압축 기준에 사용. 0.8×윈도우가 force 임계값보다 낮으면 실제 적용 값이 자동으로 상향되어 부드러운 인계가 먼저 실행됩니다.',
 				intentHistoryMaxCharsHelp:
 					'대화 발췌의 총 문자 상한(200–20000).',
 				intentFallbackRouteLabel: '폴백 모델',
@@ -1710,6 +1714,7 @@ window.__ModuleLoader__.load({
 				intentDockUnconfigured:
 					'의도 라우팅 설정이 완전하지 않습니다',
 				intentDockCache: '캐시 창 남은 {seconds}초',
+				intentDockOverflowRisk: '후보 {model} 창 {window}k가 인계선 미만입니다. 상한 근처에서 넘칠 수 있습니다.',
 				intentDockTipCandidates: '후보: {count}',
 				intentDockTipOn: '켬',
 				intentDockTipOff: '끔',
@@ -1900,7 +1905,7 @@ window.__ModuleLoader__.load({
 					'Wie viele letzte Nachrichten dem Klassifikator übergeben werden.',
 				intentHistoryMaxCharsLabel: 'Auszug-Zeichenbudget',
 				intentContextWindowLabel: 'Kontextfenster',
-				intentContextWindowHelp: 'Vom Auto-Pseudo-Modell deklariertes Kontextfenster (Token); steuert Verbrauchsanzeige und Kompressionsdruck.',
+				intentContextWindowHelp: 'Vom Auto-Pseudo-Modell deklariertes Kontextfenster (Token); steuert Verbrauchsanzeige und Kompressionsdruck. Liegt 0,8× des Fensters unter der Force-Schwelle, wird der effektive Wert automatisch angehoben, damit die sanfte Übergabe zuerst auslöst.',
 				intentHistoryMaxCharsHelp:
 					'Gesamtzeichengrenze des Gesprächsauszugs (200–20000).',
 				intentFallbackRouteLabel: 'Fallback-Modell',
@@ -1915,6 +1920,7 @@ window.__ModuleLoader__.load({
 				intentDockUnconfigured:
 					'Intent-Routing ist nicht vollständig konfiguriert',
 				intentDockCache: 'Cache-Fenster: noch {seconds}s',
+				intentDockOverflowRisk: 'Kandidat {model}: Fenster {window}k liegt unter der Übergabelinie; nahe dem Limit kann es überlaufen.',
 				intentDockTipCandidates: 'Kandidaten: {count}',
 				intentDockTipOn: 'ein',
 				intentDockTipOff: 'aus',
@@ -2105,7 +2111,7 @@ window.__ModuleLoader__.load({
 					'Cuántos mensajes recientes se entregan al clasificador.',
 				intentHistoryMaxCharsLabel: 'Presupuesto de caracteres del extracto',
 				intentContextWindowLabel: 'Ventana de contexto',
-				intentContextWindowHelp: 'Ventana de contexto (tokens) declarada por el pseudo-modelo Auto; controla la visualización de uso y la presión de compactación.',
+				intentContextWindowHelp: 'Ventana de contexto (tokens) declarada por el pseudo-modelo Auto; controla la visualización de uso y la presión de compactación. Si 0,8× la ventana queda por debajo del umbral force, el valor efectivo se eleva automáticamente para que el traspaso suave se dispare primero.',
 				intentHistoryMaxCharsHelp:
 					'Límite total de caracteres del extracto de conversación (200–20000).',
 				intentFallbackRouteLabel: 'Modelo de reserva',
@@ -2120,6 +2126,7 @@ window.__ModuleLoader__.load({
 				intentDockUnconfigured:
 					'El enrutado por intención no está completamente configurado',
 				intentDockCache: 'Ventana de caché: {seconds}s restantes',
+				intentDockOverflowRisk: 'El candidato {model} tiene una ventana de {window}k por debajo de la línea de traspaso; puede desbordarse cerca del límite.',
 				intentDockTipCandidates: 'candidatos: {count}',
 				intentDockTipOn: 'sí',
 				intentDockTipOff: 'no',
@@ -2310,7 +2317,7 @@ window.__ModuleLoader__.load({
 					'Nombre de messages récents transmis au classificateur.',
 				intentHistoryMaxCharsLabel: 'Budget de caractères de l’extrait',
 				intentContextWindowLabel: 'Fenêtre de contexte',
-				intentContextWindowHelp: 'Fenêtre de contexte (jetons) déclarée par le pseudo-modèle Auto ; pilote l\'affichage d\'utilisation et le seuil de compression.',
+				intentContextWindowHelp: 'Fenêtre de contexte (jetons) déclarée par le pseudo-modèle Auto ; pilote l\'affichage d\'utilisation et le seuil de compression. Si 0,8× la fenêtre passe sous le seuil force, la valeur effective est relevée automatiquement pour que la passation douce se déclenche d\'abord.',
 				intentHistoryMaxCharsHelp:
 					'Plafond total de caractères de l’extrait de conversation (200–20000).',
 				intentFallbackRouteLabel: 'Modèle de secours',
@@ -2325,6 +2332,7 @@ window.__ModuleLoader__.load({
 				intentDockUnconfigured:
 					'Le routage par intention n’est pas entièrement configuré',
 				intentDockCache: 'Fenêtre de cache : {seconds}s restantes',
+				intentDockOverflowRisk: 'Le candidat {model} a une fenêtre de {window}k sous la ligne de passation ; risque de débordement près du plafond.',
 				intentDockTipCandidates: 'candidats : {count}',
 				intentDockTipOn: 'activé',
 				intentDockTipOff: 'désactivé',
@@ -2515,7 +2523,7 @@ window.__ModuleLoader__.load({
 					'Quanti messaggi recenti vengono passati al classificatore.',
 				intentHistoryMaxCharsLabel: 'Budget di caratteri dell’estratto',
 				intentContextWindowLabel: 'Finestra di contesto',
-				intentContextWindowHelp: 'Finestra di contesto (token) dichiarata dal pseudo-modello Auto; determina la visualizzazione dell\'uso e la soglia di compressione.',
+				intentContextWindowHelp: 'Finestra di contesto (token) dichiarata dal pseudo-modello Auto; determina la visualizzazione dell\'uso e la soglia di compressione. Se 0,8× la finestra scende sotto la soglia force, il valore effettivo viene innalzato automaticamente così la consegna fluida scatta prima.',
 				intentHistoryMaxCharsHelp:
 					'Limite totale di caratteri dell’estratto della conversazione (200–20000).',
 				intentFallbackRouteLabel: 'Modello di riserva',
@@ -2530,6 +2538,7 @@ window.__ModuleLoader__.load({
 				intentDockUnconfigured:
 					'L’instradamento per intento non è completamente configurato',
 				intentDockCache: 'Finestra cache: {seconds}s rimanenti',
+				intentDockOverflowRisk: 'Il candidato {model} ha una finestra di {window}k sotto la linea di consegna; può traboccare vicino al limite.',
 				intentDockTipCandidates: 'candidati: {count}',
 				intentDockTipOn: 'on',
 				intentDockTipOff: 'off',
@@ -2720,7 +2729,7 @@ window.__ModuleLoader__.load({
 					'Quantas mensagens recentes são entregues ao classificador.',
 				intentHistoryMaxCharsLabel: 'Orçamento de caracteres do trecho',
 				intentContextWindowLabel: 'Janela de contexto',
-				intentContextWindowHelp: 'Janela de contexto (tokens) declarada pelo pseudo-modelo Auto; controla a exibição de uso e o limiar de compressão.',
+				intentContextWindowHelp: 'Janela de contexto (tokens) declarada pelo pseudo-modelo Auto; controla a exibição de uso e o limiar de compressão. Se 0,8× a janela ficar abaixo do limiar force, o valor efetivo é elevado automaticamente para que o handover suave dispare primeiro.',
 				intentHistoryMaxCharsHelp:
 					'Limite total de caracteres do trecho da conversa (200–20000).',
 				intentFallbackRouteLabel: 'Modelo de reserva',
@@ -2735,6 +2744,7 @@ window.__ModuleLoader__.load({
 				intentDockUnconfigured:
 					'O roteamento por intenção não está totalmente configurado',
 				intentDockCache: 'Janela de cache: {seconds}s restantes',
+				intentDockOverflowRisk: 'O candidato {model} tem uma janela de {window}k abaixo da linha de handover; pode transbordar perto do limite.',
 				intentDockTipCandidates: 'candidatos: {count}',
 				intentDockTipOn: 'ligado',
 				intentDockTipOff: 'desligado',
@@ -2925,7 +2935,7 @@ window.__ModuleLoader__.load({
 					'Сколько последних сообщений передаётся классификатору.',
 				intentHistoryMaxCharsLabel: 'Лимит символов выборки',
 				intentContextWindowLabel: 'Окно контекста',
-				intentContextWindowHelp: 'Окно контекста (токены), объявляемое псевдомоделью Auto; определяет отображение использования и порог сжатия.',
+				intentContextWindowHelp: 'Окно контекста (токены), объявляемое псевдомоделью Auto; определяет отображение использования и порог сжатия. Если 0,8× окна опускается ниже порога force, действующее значение автоматически поднимается, чтобы плавная передача сработала раньше.',
 				intentHistoryMaxCharsHelp:
 					'Общий лимит символов выборки диалога (200–20000).',
 				intentFallbackRouteLabel: 'Резервная модель',
@@ -2940,6 +2950,7 @@ window.__ModuleLoader__.load({
 				intentDockUnconfigured:
 					'Маршрутизация по намерению настроена не полностью',
 				intentDockCache: 'Окно кэша: осталось {seconds} с',
+				intentDockOverflowRisk: 'Кандидат {model} с окном {window}k ниже линии передачи; возможно переполнение у лимита.',
 				intentDockTipCandidates: 'кандидаты: {count}',
 				intentDockTipOn: 'вкл',
 				intentDockTipOff: 'выкл',
@@ -3526,6 +3537,26 @@ window.__ModuleLoader__.load({
 									value.cacheWindowRemainingMs > 0
 										? Math.round(value.cacheWindowRemainingMs / 1000)
 										: null,
+								// context.overflowRisk passthrough: keep the
+								// risk line only when the Host also named the
+								// narrowest candidate and its window (the
+								// tooltip needs both); anything missing
+								// degrades to null like every other segment.
+								overflowRisk:
+									value.context &&
+									typeof value.context === 'object' &&
+									value.context.overflowRisk === true &&
+									typeof value.context.minCandidateWindow === 'number' &&
+									value.context.minCandidateWindow > 0 &&
+									typeof value.context.minCandidateModel === 'string' &&
+									value.context.minCandidateModel !== ''
+										? {
+												model: value.context.minCandidateModel,
+												windowK: Math.round(
+													value.context.minCandidateWindow / 1000,
+												),
+											}
+										: null,
 								candidates: Array.isArray(value.candidates)
 									? value.candidates.length
 									: 0,
@@ -3565,6 +3596,12 @@ window.__ModuleLoader__.load({
 				t('intentDockTipCandidates', { count: intent.candidates }),
 				intent.cacheSeconds !== null
 					? t('intentDockCache', { seconds: intent.cacheSeconds })
+					: null,
+				intent.overflowRisk !== null
+					? t('intentDockOverflowRisk', {
+							model: intent.overflowRisk.model,
+							window: intent.overflowRisk.windowK,
+						})
 					: null,
 			].filter((line) => line !== null);
 			// Same dock-column formula as VisionDockEntry: keep the chip's

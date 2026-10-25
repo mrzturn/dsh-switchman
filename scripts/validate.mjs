@@ -25,6 +25,10 @@
  * 7. KV-cache stability: the watermark protocol texts stay digit-free and
  *    deterministic, ok tier renders "", and the live numbers go only through
  *    the systemPrompt.context tail channel (see host/context-watch.js).
+ * 8. Intent layer: the OFF-resident adapter (listModels hides the group,
+ *    the null route throws the documented error), the effectiveContextWindow
+ *    0.8 handover floor, the intent-state overflow-risk probe (normal /
+ *    null / throwing resolveModelInfo), and the 11-dictionary surface.
  *
  * Layout note: DSH Desktop ≤0.1.7 shipped a plain `app/node_modules` tree;
  * the renamed DeepSeek Harness app packs the same tree into `app.asar`
@@ -384,3 +388,162 @@ console.log("OK: npm/market surface (icon, locale meta, files, peer-only schemas
 console.log("OK: bundle isolation (zero runtime dependencies — host packages are peers, no profile-root shadowing)");
 console.log(`OK: ${skillDirs.length} bundled skill(s) parse with intact assets: ${skillDirs.join(", ")}`);
 if (!SKIP_HOST_CHECK) console.log(`doctrine suffix length: ${suffixes[0].length} chars`);
+
+// ---- intent layer: OFF-resident adapter, window floor, state enrichment ----
+const intent = await import(new URL("../host/intent.js", import.meta.url));
+
+// effectiveContextWindow: the 0.8 handover floor, its opt-out, defaults, clamp.
+assert.equal(intent.effectiveContextWindow({}), 200000, "empty config keeps the 200000 default window");
+assert.equal(
+	intent.effectiveContextWindow({ wmAutoHandover: true, intentContextWindow: 100000 }),
+	162500,
+	"default wmForceTokens path: floor = ceil(130000 / 0.8) must lift a small window",
+);
+assert.equal(
+	intent.effectiveContextWindow({ wmAutoHandover: true, intentContextWindow: 100000, wmForceTokens: 200000 }),
+	250000,
+	"explicit wmForceTokens drives the floor",
+);
+assert.equal(
+	intent.effectiveContextWindow({ wmAutoHandover: true, intentContextWindow: 400000 }),
+	400000,
+	"a larger user window wins over the floor",
+);
+assert.equal(
+	intent.effectiveContextWindow({ wmAutoHandover: false, intentContextWindow: 100000, wmForceTokens: 200000 }),
+	100000,
+	"wmAutoHandover=false must not lift the window",
+);
+assert.equal(intent.effectiveContextWindow({ intentContextWindow: 500 }), 1024, "window clamps up to 1024");
+
+// Minimal cordis-flavored mock: ctx.inject(["llm"], cb) runs cb at once with
+// a fake llm fiber; the registered adapter is captured for direct probing.
+function mountAutoAdapter(config) {
+	const mounted = [];
+	const llmFiber = {
+		llm: {
+			registerAdapter: (_providers, adapter) => {
+				mounted.push(adapter);
+				return () => {};
+			},
+			prepareCall: () => {},
+			stream: () => {},
+		},
+		effect: () => {},
+		on: () => {},
+	};
+	const ctx = {
+		logger: { warn: () => {} },
+		inject: (_deps, body) => body(llmFiber),
+		get: () => null,
+	};
+	intent.applyIntent(ctx, config);
+	assert.equal(mounted.length, 1, "applyIntent must register the adapter");
+	return mounted[0];
+}
+
+// P1: OFF keeps the adapter mounted but hides the catalog group; the flag is
+// read at CALL time (a mount-time snapshot regression must turn this red).
+let intentOn = false;
+const liveAdapter = mountAutoAdapter({ intentEnabled: { get: () => intentOn } });
+assert.deepEqual(await liveAdapter.listModels("dsh-switchman-auto"), [], "OFF listModels must hide the Auto group");
+intentOn = true;
+assert.equal(
+	(await liveAdapter.listModels("dsh-switchman-auto")).length,
+	1,
+	"the SAME adapter must expose the Auto entry the moment the flag flips ON",
+);
+assert.equal(
+	(await liveAdapter.resolveModel("dsh-switchman-auto", "auto")).context.contextWindow,
+	200000,
+	"resolveModel declares the effective window",
+);
+const offAdapter = liveAdapter;
+
+// P1: nothing routable → explicit error, not the old TypeError on route.provider.
+await assert.rejects(
+	() => offAdapter.stream({ sessionId: "validate-off-route" }).next(),
+	/no route available.*pick a concrete model/u,
+	"the null-route stream must throw the documented error",
+);
+
+// P3: intentStateOf enrichment — resolveModelInfo normal / null / throwing tri-state.
+const probeCalls = [];
+const llmMock = {
+	// Method shorthand on purpose: a detached call (const fn = llm.resolveModelInfo)
+	// loses `this`, the assert below throws inside intentStateOf's per-candidate
+	// catch, every window reads as null, and the outer minCandidateWindow
+	// assertion fails — pinning the receiver-bound contract from vision.js.
+	resolveModelInfo: async function probe(provider, model) {
+		assert.equal(this, llmMock, "resolveModelInfo must stay receiver-bound");
+		probeCalls.push(`${provider}/${model}`);
+		if (provider === "boom") throw new Error("resolve failed");
+		if (model === "opaque") return { name: model }; // no context → don't know
+		return { context: { contextWindow: model === "wide" ? 400000 : 64000 } };
+	},
+};
+const stateCtx = { get: (name) => (name === "llm" ? llmMock : null) };
+const state = await intent.intentStateOf(
+	stateCtx,
+	{
+		intentEnabled: true,
+		wmAutoHandover: true,
+		wmForceTokens: 130000,
+		intentCandidates: [
+			{ provider: "ok", model: "wide" },
+			{ provider: "boom", model: "x" },
+			{ provider: "ok", model: "opaque" },
+			{ provider: "ok", model: "small" },
+		],
+	},
+	null,
+);
+assert.equal(state.context.contextWindow, 200000, "intent-state reports the effective window");
+assert.equal(state.context.minCandidateWindow, 64000, "probe keeps the smallest KNOWN window (null probes skipped)");
+assert.equal(state.context.minCandidateModel, "small", "probe names the narrowest candidate");
+assert.equal(state.context.overflowRisk, true, "64000 < 130000 flags overflow risk");
+assert.deepEqual(
+	probeCalls,
+	["ok/wide", "boom/x", "ok/opaque", "ok/small"],
+	"probes run sequentially over every candidate",
+);
+
+// Above the watermark → no risk; missing llm service → don't know, never throws.
+const safeState = await intent.intentStateOf(
+	stateCtx,
+	{ intentCandidates: [{ provider: "ok", model: "wide" }] },
+	null,
+);
+assert.equal(safeState.context.minCandidateWindow, 400000, "a known wide window is reported");
+assert.equal(safeState.context.overflowRisk, false, "default wmForceTokens path: 400000 >= 130000 is not risky");
+const noLlmState = await intent.intentStateOf(
+	{ get: () => null },
+	{ intentCandidates: [{ provider: "ok", model: "wide" }] },
+	null,
+);
+assert.equal(noLlmState.context.minCandidateWindow, null, "missing llm service reads as don't know");
+assert.equal(noLlmState.context.minCandidateModel, null, "no window → no model named");
+assert.equal(noLlmState.context.overflowRisk, false, "don't know never flags risk");
+
+// P2/P3 client surface: every inline dictionary carries the new key and the
+// amended help text (11 dictionaries: zh/en DICTS + 9 EXTRA_UI_DICTS).
+const overflowRiskKeys = CLIENT_SOURCE.match(/intentDockOverflowRisk:/gu) ?? [];
+assert.equal(overflowRiskKeys.length, 11, "all 11 dictionaries must define intentDockOverflowRisk");
+const windowHelps = CLIENT_SOURCE.match(/intentContextWindowHelp:/gu) ?? [];
+assert.equal(windowHelps.length, 11, "all 11 dictionaries must define intentContextWindowHelp");
+assert.match(
+	CLIENT_SOURCE,
+	/当 0\.8×窗口低于 force 水位时生效值会自动抬升/u,
+	"zh intentContextWindowHelp must explain the floor",
+);
+// Heuristic floor for the other 10 locales: every amended help mentions the
+// 0.8 ratio (decimal-comma variants included). ≥11 keeps a dropped locale red;
+// pre-existing mentions elsewhere only inflate, never mask a full miss.
+const ratioMentions = CLIENT_SOURCE.match(/0[.,]8/gu) ?? [];
+assert.ok(ratioMentions.length >= 11, "every intentContextWindowHelp should mention the 0.8 ratio");
+assert.match(
+	CLIENT_SOURCE,
+	/minCandidateWindow|overflowRisk/u,
+	"the dock mapping must pass the overflow-risk fields through",
+);
+console.log("OK: intent layer (OFF-resident adapter, 0.8 window floor, overflow-risk probe, 11-dict surface)");

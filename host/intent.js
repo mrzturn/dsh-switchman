@@ -24,8 +24,8 @@
  * Fail-open everywhere: a missing service, an unconfigured classifier, a
  * timeout/abort, or an unparseable verdict degrades to the fallback chain
  * (pinned → previous routed route → intentFallbackRoute → first candidate);
- * with nothing configured the pseudo model passes through and the adapter's
- * last-resort stream explains what to configure. All services are reached
+ * with nothing routable at all the stream throws an explicit error telling
+ * the user to pick a concrete model. All services are reached
  * through defensive `ctx.get` reads — a deployment without the `llm` service
  * leaves the layer a warn-once no-op (documented runtime precondition, same
  * as index.js's inject note for sessionQuery/pluginManager). The classifier's
@@ -131,6 +131,23 @@ function routeOf(value) {
 	const route = { provider, model };
 	if (typeof value.effort === "string" && value.effort.trim() !== "") route.effort = value.effort.trim();
 	return route;
+}
+
+/** Effective context window (tokens) the Auto pseudo-model should declare.
+ *  The point of a custom Auto window is to position DSH core's
+ *  0.8×-window auto-compaction line AFTER switchman's absolute force-tier
+ *  handover, so the smooth four-step handover always fires before the
+ *  cruder single-shot compaction. The 0.8 ratio is compaction-basic's
+ *  default thresholdRatio (documented assumption, docs/porting-plan.md).
+ *  While wmAutoHandover is on, the declared value is floored at
+ *  ceil(wmForceTokens / 0.8) to preserve that invariant; with automatic
+ *  handover off the user's raw window is respected as-is — they opted out
+ *  of the handover pipeline, so the 0.8 line may sit wherever they put it. */
+export function effectiveContextWindow(config) {
+	const user = Math.max(1024, Math.round(readNumber(config.intentContextWindow, 200000)));
+	if (!readBool(config.wmAutoHandover)) return user;
+	const floor = Math.ceil(readNumber(config.wmForceTokens, 130000) / 0.8);
+	return Math.max(user, floor);
 }
 
 /** Validated intent-candidate list: routes plus their optional effort/note. */
@@ -717,6 +734,39 @@ export async function intentStateOf(ctx, config, sessionId = null) {
 	const selection = typeof sessionId === "string" && sessionId !== "" ? await sessionModelSelectionOf(ctx, sessionId) : null;
 	const now = Date.now();
 	const ttlMs = Math.max(0, readNumber(config.intentCacheTtlSeconds, 300)) * 1000;
+	// Smallest REAL context window across the candidates, probed through
+	// llm.resolveModelInfo. The call MUST stay receiver-bound (the
+	// host/vision.js lesson): LlmRuntime methods read `this`, so fetch the
+	// service via ctx.get and call ON the llm object — a detached call
+	// TypeErrors into null. Sequential awaits, one try/catch per candidate;
+	// every failure (missing service, unknown model, throw, non-finite
+	// value) reads as null = "don't know", never throws, fail-open.
+	let llm = null;
+	try {
+		const service = ctx.get?.("llm", false);
+		if (service !== null && typeof service === "object" && typeof service.resolveModelInfo === "function") llm = service;
+	} catch {
+		llm = null;
+	}
+	let minCandidateWindow = null;
+	let minCandidateModel = null;
+	if (llm !== null) {
+		for (const candidate of candidates) {
+			let window = null;
+			try {
+				const info = await llm.resolveModelInfo(candidate.provider, candidate.model);
+				const value = info?.context?.contextWindow;
+				window = typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+			} catch {
+				window = null;
+			}
+			if (window !== null && (minCandidateWindow === null || window < minCandidateWindow)) {
+				minCandidateWindow = window;
+				minCandidateModel = candidate.model;
+			}
+		}
+	}
+	const forceTokens = readNumber(config.wmForceTokens, 130000);
 	return {
 		enabled,
 		autoSelected: selection?.provider === AUTO_PROVIDER,
@@ -732,6 +782,20 @@ export async function intentStateOf(ctx, config, sessionId = null) {
 		lastDecision: state?.lastDecision ?? null,
 		cacheWindowRemainingMs:
 			typeof state?.routedAt === "number" ? Math.max(0, Math.round(state.routedAt + ttlMs - now)) : 0,
+		context: {
+			// Effective declared window (the handover floor applies — see
+			// effectiveContextWindow) plus the smallest candidate window
+			// probe. overflowRisk is informational ONLY (drives a dock
+			// tooltip line): a candidate narrower than the force watermark
+			// may overflow near the cap before the handover line — it never
+			// gates routing here.
+			contextWindow: effectiveContextWindow(config),
+			minCandidateWindow,
+			// The route owning that minimum rides along so the client can
+			// name the risky model; null exactly when minCandidateWindow is.
+			minCandidateModel: minCandidateWindow === null ? null : minCandidateModel,
+			overflowRisk: minCandidateWindow !== null && minCandidateWindow < forceTokens,
+		},
 		candidates: candidates.map((candidate) => ({
 			provider: candidate.provider,
 			model: candidate.model,
@@ -764,14 +828,21 @@ function createAutoAdapter(ctx, config, warn) {
 		imageRequestPricing: () => undefined,
 		/** Base-class default: preserve normalized images untouched. */
 		imageRequestTarget: (_provider, _model, image) => ({ width: image.width, height: image.height, maxBytes: image.bytes }),
-		listModels: async (provider) => [
-			{ provider, id: AUTO_MODEL, name: "Auto", description: "Intent-based model routing by switchman" },
-		],
+		/** Catalog entries, decided per call from the live config: OFF hides
+		 *  the group (the selector drops adapters whose listModels yields an
+		 *  empty array) while the adapter stays mounted, so flipping the
+		 *  toggle re-exposes Auto with no remount, and a session already on
+		 *  Auto keeps routing through the documented fallback chain (no
+		 *  classifier call). */
+		listModels: async (provider) =>
+			readBool(config.intentEnabled)
+				? [{ provider, id: AUTO_MODEL, name: "Auto", description: "Intent-based model routing by switchman" }]
+				: [],
 		resolveModel: async (provider, model) => ({
 			provider,
 			id: model,
 			name: "Auto",
-			context: { contextWindow: Math.round(readNumber(config.intentContextWindow, 200000)) },
+			context: { contextWindow: effectiveContextWindow(config) },
 		}),
 		/** Base-class default (replicated): the registry's stream path calls
 		 *  prepareCall and dispatches through the returned stream — it never
@@ -792,6 +863,15 @@ function createAutoAdapter(ctx, config, warn) {
 				route = await routeAutoRequest(ctx, config, { agent: { session: { id: sessionId } }, signal: options?.signal }, warn);
 				if (route !== null) requestPin.set(options, route);
 			}
+			// routeAutoRequest returning null means nothing is routable
+			// (disabled + no fallback + no candidates) and the caller was
+			// supposed to degrade — but the adapter IS the last caller, so
+			// the contract ends here: fail loudly and legibly instead of the
+			// old TypeError on `route.provider`, telling the user the fix.
+			if (route === null)
+				throw new Error(
+					"dsh-switchman auto: no route available (intent routing disabled, no fallback model, no candidates) — pick a concrete model",
+				);
 			const { reasoningEffort: _droppedPseudoEffort, ...rest } = options ?? {};
 			const forwarded = {
 				...rest,
@@ -814,6 +894,10 @@ let warnedUnavailable = false;
 /**
  * Mount the intent-routing layer: the pseudo adapter and the session/disposed
  * cleanup. (Routing itself lives in the adapter's stream — see the header.)
+ * The adapter mounts REGARDLESS of intentEnabled — a degraded-resident OFF
+ * mode: listModels returns [] so the selector hides the Auto group (see
+ * createAutoAdapter), and a session already on Auto keeps streaming through
+ * the documented fallback chain with no classifier call.
  *
  * The llm service is deliberately NOT in the plugin's `inject` list (see
  * index.js): a deployment without it must still mount the rest of the plugin.
@@ -832,9 +916,6 @@ let warnedUnavailable = false;
 export function applyIntent(ctx, config) {
 	const warn = (message) => ctx.logger?.warn?.(`dsh-switchman: ${message}`);
 	ctx.inject(["llm"], (llmCtx) => {
-		if (!readBool(config.intentEnabled)) {
-			return; // feature off: no pseudo provider in the catalog
-		}
 		try {
 			const llm = llmCtx.llm;
 			if (llm === undefined || llm === null || typeof llm.registerAdapter !== "function" || typeof llm.prepareCall !== "function" || typeof llm.stream !== "function") {
