@@ -863,6 +863,8 @@ window.__ModuleLoader__.load({
 				intentEffortFollow: '跟随模型默认',
 				intentDockAuto: '自动',
 				intentDockUnrouted: '未路由',
+				intentDockUsing: '在用',
+				intentDockDecided: '决策',
 				intentDockUnconfigured: '意图识别未配置完整',
 				intentDockCache: '缓存窗口剩余 {seconds} 秒',
 				intentDockTipCandidates: '候选：{count}',
@@ -1086,6 +1088,8 @@ window.__ModuleLoader__.load({
 				intentEffortFollow: 'model default',
 				intentDockAuto: 'Auto',
 				intentDockUnrouted: 'unrouted',
+				intentDockUsing: 'using',
+				intentDockDecided: 'decided',
 				intentDockUnconfigured:
 					'Intent routing is not fully configured',
 				intentDockCache: 'Cache window: {seconds}s left',
@@ -1296,6 +1300,8 @@ window.__ModuleLoader__.load({
 				intentEffortFollow: '跟隨模型預設',
 				intentDockAuto: '自動',
 				intentDockUnrouted: '未路由',
+				intentDockUsing: '在用',
+				intentDockDecided: '決策',
 				intentDockUnconfigured: '意圖識別未設定完整',
 				intentDockCache: '快取視窗剩餘 {seconds} 秒',
 				intentDockTipCandidates: '候選：{count}',
@@ -1496,6 +1502,8 @@ window.__ModuleLoader__.load({
 				intentEffortFollow: 'モデルのデフォルト',
 				intentDockAuto: '自動',
 				intentDockUnrouted: '未ルーティング',
+				intentDockUsing: '使用中',
+				intentDockDecided: '判定',
 				intentDockUnconfigured:
 					'インテントルーティングの設定が不完全です',
 				intentDockCache: 'キャッシュ窓 残り {seconds} 秒',
@@ -1697,6 +1705,8 @@ window.__ModuleLoader__.load({
 				intentEffortFollow: '모델 기본값',
 				intentDockAuto: '자동',
 				intentDockUnrouted: '미라우팅',
+				intentDockUsing: '사용 중',
+				intentDockDecided: '판정',
 				intentDockUnconfigured:
 					'의도 라우팅 설정이 완전하지 않습니다',
 				intentDockCache: '캐시 창 남은 {seconds}초',
@@ -1900,6 +1910,8 @@ window.__ModuleLoader__.load({
 				intentEffortFollow: 'Modellstandard',
 				intentDockAuto: 'Auto',
 				intentDockUnrouted: 'nicht geroutet',
+				intentDockUsing: 'aktiv',
+				intentDockDecided: 'entschieden',
 				intentDockUnconfigured:
 					'Intent-Routing ist nicht vollständig konfiguriert',
 				intentDockCache: 'Cache-Fenster: noch {seconds}s',
@@ -2103,6 +2115,8 @@ window.__ModuleLoader__.load({
 				intentEffortFollow: 'predeterminado del modelo',
 				intentDockAuto: 'Auto',
 				intentDockUnrouted: 'sin enrutar',
+				intentDockUsing: 'en uso',
+				intentDockDecided: 'decidido',
 				intentDockUnconfigured:
 					'El enrutado por intención no está completamente configurado',
 				intentDockCache: 'Ventana de caché: {seconds}s restantes',
@@ -2306,6 +2320,8 @@ window.__ModuleLoader__.load({
 				intentEffortFollow: 'par défaut du modèle',
 				intentDockAuto: 'Auto',
 				intentDockUnrouted: 'non routé',
+				intentDockUsing: 'en cours',
+				intentDockDecided: 'décidé',
 				intentDockUnconfigured:
 					'Le routage par intention n’est pas entièrement configuré',
 				intentDockCache: 'Fenêtre de cache : {seconds}s restantes',
@@ -2509,6 +2525,8 @@ window.__ModuleLoader__.load({
 				intentEffortFollow: 'predefinito del modello',
 				intentDockAuto: 'Auto',
 				intentDockUnrouted: 'non instradato',
+				intentDockUsing: 'in uso',
+				intentDockDecided: 'deciso',
 				intentDockUnconfigured:
 					'L’instradamento per intento non è completamente configurato',
 				intentDockCache: 'Finestra cache: {seconds}s rimanenti',
@@ -2712,6 +2730,8 @@ window.__ModuleLoader__.load({
 				intentEffortFollow: 'padrão do modelo',
 				intentDockAuto: 'Auto',
 				intentDockUnrouted: 'sem rota',
+				intentDockUsing: 'em uso',
+				intentDockDecided: 'decidido',
 				intentDockUnconfigured:
 					'O roteamento por intenção não está totalmente configurado',
 				intentDockCache: 'Janela de cache: {seconds}s restantes',
@@ -2915,6 +2935,8 @@ window.__ModuleLoader__.load({
 				intentEffortFollow: 'по умолчанию модели',
 				intentDockAuto: 'Авто',
 				intentDockUnrouted: 'не маршрутизировано',
+				intentDockUsing: 'в работе',
+				intentDockDecided: 'решено',
 				intentDockUnconfigured:
 					'Маршрутизация по намерению настроена не полностью',
 				intentDockCache: 'Окно кэша: осталось {seconds} с',
@@ -3418,9 +3440,12 @@ window.__ModuleLoader__.load({
 
 		/** Composer dock chip for intent routing (conversation.input.dock,
 		 * order 89 — one slot above the vision entry's 90): shows where the
-		 * session's auto-selected pseudo-model currently routes. Polls the
-		 * Host intent-state route every 15s exactly like the vision entry;
-		 * a failed fetch or a non-auto session renders null (fail-silent).
+		 * session's auto-selected pseudo-model currently routes AND the
+		 * last decision's recommendation with its confidence as two labeled
+		 * segments (they coincide — decide-and-apply — but the labels make
+		 * "in use" vs "decided" explicit). Polls the Host intent-state
+		 * route every 15s exactly like the vision entry; a failed fetch or
+		 * a non-auto session renders null (fail-silent).
 		 * Pure display — no interactive controls (reset arrives later). */
 		function IntentDockEntry({ t, sessionId, useInput }) {
 			const [intent, setIntent] = React.useState(null);
@@ -3486,6 +3511,15 @@ window.__ModuleLoader__.load({
 									typeof value.lastDecision === 'object' &&
 									typeof value.lastDecision.confidence === 'number'
 										? value.lastDecision.confidence
+										: null,
+								decisionModel:
+									// lastDecision.best is "provider/model"; display the
+									// model part only, matching the routed model above.
+									value.lastDecision &&
+									typeof value.lastDecision === 'object' &&
+									typeof value.lastDecision.best === 'string' &&
+									value.lastDecision.best !== ''
+										? value.lastDecision.best.slice(value.lastDecision.best.indexOf('/') + 1)
 										: null,
 								cacheSeconds:
 									typeof value.cacheWindowRemainingMs === 'number' &&
@@ -3568,9 +3602,24 @@ window.__ModuleLoader__.load({
 					},
 					'⚡ ',
 					t('intentDockAuto'),
-					' → ',
-					intent.model ?? t('intentDockUnrouted'),
-					intent.confidence !== null ? ` (${intent.confidence}%)` : '',
+					' · ',
+					// Dual display: the route in use RIGHT NOW and the last
+					// decision's recommendation with its confidence — they
+					// coincide after every send (decide-and-apply), but the
+					// explicit labels answer "is this what I'm using or what
+					// it suggests?" without guessing.
+					intent.model !== null
+						? [
+								`${t('intentDockUsing')} ${intent.model}`,
+								intent.decisionModel !== null
+									? `${t('intentDockDecided')} ${intent.decisionModel}${
+											intent.confidence !== null ? ` (${intent.confidence}%)` : ''
+										}`
+									: null,
+							]
+								.filter((part) => part !== null)
+								.join(' · ')
+						: t('intentDockUnrouted'),
 					intent.configured ? null : ` · ${t('intentDockUnconfigured')}`,
 				),
 			);
