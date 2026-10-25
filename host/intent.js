@@ -13,7 +13,10 @@
  * "() => current could not be cloned".) The switch is silent (no
  * `[model changed]` notice, no cache-breaking session mutation); retries
  * re-dispatching the same options object pin to the decided route via a
- * WeakMap; a provider prompt-cache window keeps the current model while the
+ * WeakMap; every model call within one user message reuses that message's
+ * decision — the turn pin keys on the newest user/message event id, because
+ * GenerateOptions carries no turn number (the abandoned waterfall did);
+ * a provider prompt-cache window keeps the current model while the
  * classifier's confidence stays below the switch threshold (design:
  * .dsh-switchman/plans/intent-routing.md — field names/protocol/state machine
  * are frozen there).
@@ -437,6 +440,42 @@ function sessionHistoryOf(ctx, sessionId, config) {
 	}
 }
 
+/** Session event snapshot for turn-key extraction (empty array on any
+ *  unreadable state — the pin then degrades to the no-user key, never
+ *  throws; same defensive ctx.sessions access as sessionHistoryOf). */
+function snapshotEventsOf(ctx, sessionId) {
+	try {
+		const session = ctx.sessions?.get?.(sessionId);
+		const events = typeof session?.snapshotEvents === "function" ? session.snapshotEvents() : [];
+		return Array.isArray(events) ? events : [];
+	} catch {
+		return [];
+	}
+}
+
+/** The per-turn pin key: the id of the newest HUMAN user/message event
+ *  (source.kind === "user"; seq fallback when the id is missing). Only the
+ *  human kind counts: goal rounds (kind "goal"), compaction checkpoints and
+ *  session recalls (kind "plugin"), and subagent-settled notices are
+ *  user/message events too, but they are autonomous-work artifacts — keying
+ *  on them would re-classify mid-work exactly like the bug this fixes. The
+ *  guard mirrors sessionHistoryOf's excerpt eligibility, so the pin boundary
+ *  and the classifier input stay consistent. GenerateOptions carries no
+ *  turn/step (the abandoned agent/request waterfall did), so this event is
+ *  the only turn boundary visible at the adapter's stream. (design §4,
+ *  2026-10-25) */
+function turnKeyOf(sessionId, events) {
+	for (let i = events.length - 1; i >= 0; i--) {
+		const event = events[i];
+		if (event?.type !== "user/message") continue;
+		const data = event?.data;
+		if (data?.source?.kind !== "user") continue;
+		const id = typeof data?.id === "string" && data.id !== "" ? data.id : `seq:${typeof event?.seq === "number" ? event.seq : i}`;
+		return `${sessionId}:${id}`;
+	}
+	return `${sessionId}:no-user`;
+}
+
 // ---------------------------------------------------------------------------
 // Classifier call (session-title-llm pattern; local deadline, no new deps).
 // ---------------------------------------------------------------------------
@@ -589,12 +628,23 @@ async function routeAutoRequest(ctx, config, payload, warn) {
 	const fallback = readRoute(config.intentFallbackRoute);
 	const rawSessionId = payload?.agent?.session?.id;
 	const sessionId = typeof rawSessionId === "string" && rawSessionId !== "" ? rawSessionId : null;
-	const turn = typeof payload?.turn === "number" && Number.isInteger(payload.turn) && payload.turn > 0 ? payload.turn : 0;
 	const state = sessionId === null ? null : stateOf(sessionId);
-	const turnKey = sessionId !== null && turn > 0 ? `${sessionId}:${turn}` : null;
-
-	// Turn pin: retries and later steps of the same turn reuse the decision.
+	// Turn pin keyed by the newest human message (turnKeyOf): one
+	// classification per user message; every model call of the agent loop
+	// within that message reuses the decision. GenerateOptions has no
+	// turn/step, so the old numeric-turn pin could never fire — every step
+	// re-classified, observed as the dock chip's decision churning mid-work
+	// (2026-10-25 fix; design §4 note).
+	const turnKey = sessionId === null ? null : turnKeyOf(sessionId, snapshotEventsOf(ctx, sessionId));
 	if (state !== null && turnKey !== null && state.pinnedTurnKey === turnKey && routeOf(state.decision) !== null) {
+		// Pin hit = another call routed on the decided model: the provider
+		// prompt cache is being hit again, so the rolling window renews (the
+		// §4 keep-branch rule — without this, any turn longer than
+		// intentCacheTtlSeconds would freeze the window and the next message
+		// would switch at sub-threshold confidence via switch-cache-expired,
+		// discarding a cache that was hit all turn). lastDecision stays
+		// untouched — it timestamps the decision, not the last use.
+		state.routedAt = Date.now();
 		return state.decision;
 	}
 
