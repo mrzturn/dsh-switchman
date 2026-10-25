@@ -22,6 +22,9 @@
  *    install can never hoist a second copy into the profile root and shadow
  *    the host's (the mechanism that crashed dshmarket while 1.7.0 shipped
  *    schemastery as a dependency).
+ * 7. KV-cache stability: the watermark protocol texts stay digit-free and
+ *    deterministic, ok tier renders "", and the live numbers go only through
+ *    the systemPrompt.context tail channel (see host/context-watch.js).
  *
  * Layout note: DSH Desktop ≤0.1.7 shipped a plain `app/node_modules` tree;
  * the renamed DeepSeek Harness app packs the same tree into `app.asar`
@@ -326,6 +329,50 @@ for (const asset of [
 ]) {
 	assert.ok(existsSync(join(SKILLS_DIR, asset)), `skills/${asset} is missing`);
 }
+
+// ---- KV-cache stability guard (watermark head/tail split) -------------------
+// The watermark's static protocol lives in systemPrompt.section (byte-stable
+// request head); the live tier + bucketed used reading lives ONLY in the
+// systemPrompt.context tail channel (append-only runtime-context snapshot).
+// Any digit leaking into the protocol texts would churn the head per step and
+// kill the prompt-cache prefix again — these assertions pin the invariant.
+
+const cw = await import(new URL("../host/context-watch.js", import.meta.url));
+for (const [name, text] of [
+	["PROTOCOL_ROOT_TEXT", cw.PROTOCOL_ROOT_TEXT],
+	["PROTOCOL_SUB_TEXT", cw.PROTOCOL_SUB_TEXT],
+	["PAUSED_LINE", cw.PAUSED_LINE],
+]) {
+	assert.ok(text.length > 0, `${name} is empty`);
+	assert.doesNotMatch(text, /\d/u, `${name} must stay digit-free (byte-stable head invariant)`);
+}
+const WM_TH = { soft: 50000, hard: 90000, force: 130000 };
+assert.equal(cw.renderRootWatermark("ok", 12345, WM_TH, {}), "", "root watermark must be silent at ok tier");
+assert.equal(cw.renderSubWatermark(12345, WM_TH), "", "sub watermark must be silent at ok tier");
+for (const [level, used] of [
+	["soft", 62000],
+	["hard", 95000],
+	["force", 131000],
+]) {
+	for (const status of [{}, { autoHandover: true, cooldownMin: 10 }, { phase: "compacting", attempt: 2 }]) {
+		const a = cw.renderRootWatermark(level, used, WM_TH, status);
+		const b = cw.renderRootWatermark(level, used, WM_TH, status);
+		assert.equal(a, b, `renderRootWatermark(${level}) must be deterministic`);
+		assert.ok(a.length > 0, `${level} tier must render a live root line`);
+	}
+	const s1 = cw.renderSubWatermark(used, WM_TH);
+	const s2 = cw.renderSubWatermark(used, WM_TH);
+	assert.equal(s1, s2, `renderSubWatermark(${level}) must be deterministic`);
+	assert.ok(s1.length > 0, `${level} tier must render a live sub line`);
+}
+assert.match(cw.renderRootWatermark("soft", 62000, WM_TH, {}), /~60k/u, "used reading must be 5k-bucketed");
+assert.equal(cw.bucketKilo(0), "0k", "bucketKilo(0) must be 0k");
+assert.equal(cw.bucketKilo(52000), "50k", "bucketKilo(52000) must bucket down to 50k");
+const cwSource = readFileSync(fileURLToPath(new URL("../host/context-watch.js", import.meta.url)), "utf8");
+assert.match(cwSource, /ctx\.systemPrompt\.context\(\s*\{/u, "watermark must register the tail runtime-context channel");
+assert.match(cwSource, /order:\s*300,/u, "tail context must sit after the core runtime-context placements");
+assert.match(cwSource, /required:\s*true,\s*\n\s*interpolate:\s*false,/u, "tail context must survive suppressRuntimeContext and skip interpolation");
+console.log("OK: watermark head protocol byte-stable; live numbers confined to the tail context line");
 
 console.log(
 	SKIP_HOST_CHECK
