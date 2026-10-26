@@ -7,6 +7,16 @@
  * `tools/pre-execute` waterfall listener denies `subagent` calls that name
  * a provider+model outside every configured pool and modelRank.
  *
+ * The same listener also runs an annotation sanitation pass in EVERY mode:
+ * a model id copied verbatim off the rendered table can embed its
+ * display-only `(TIER)`/`@effort` annotations (the recommendation table is
+ * the one string an LLM is most tempted to copy), which DSH's exact-match
+ * child-route whitelist then rejects with a generic binding error that
+ * pushes the caller back to implicit dispatch — silently losing the lane's
+ * route. The sanitation denies such calls with the exact corrected
+ * arguments instead (exec.arguments is deep-frozen by the runtime, so a
+ * deny is the only correction channel `tools/pre-execute` offers).
+ *
  * Model-facing text is English and byte-stable for a given configuration
  * (the anchor line never varies with UI locale). All reads go through the
  * live volatile references, so settings edits apply without a plugin
@@ -177,6 +187,103 @@ function effortMapOf(pool) {
 	return effortOf;
 }
 
+/** Trailing display annotations renderPoolsBlock appends to a pool entry:
+ *  the `(S)/(A)/(B)/(C)` capability-grade parenthetical (uppercase only —
+ *  that is what renderRoute emits), the `@effort` pin, and the
+ *  `⚠not-authorized` drift marker. */
+const TRAILING_EFFORT = /@([A-Za-z0-9._-]+)$/;
+const TRAILING_TIER = /\([SABC]\)$/;
+const TRAILING_MARKER = /\s*⚠not-authorized$/u;
+
+/** Strip every trailing display annotation from a model id
+ *  ("m(A)@high" → "m"), looped so any order reduces; an unannotated id
+ *  round-trips unchanged. */
+function stripTrailingAnnotations(model) {
+	let s = model.trim();
+	for (;;) {
+		const next = s.replace(TRAILING_MARKER, "").replace(TRAILING_EFFORT, "").replace(TRAILING_TIER, "").trim();
+		if (next === s) return s;
+		s = next;
+	}
+}
+
+/** Folded-key → first configured {provider, model} route over every lane
+ *  and modelRank — the enforce gate's matcher, factored out so the
+ *  sanitation pass shares it. Empty when nothing is configured. */
+function configuredRoutes(config) {
+	const routes = new Map();
+	const add = (route) => {
+		if (!isModelRoute(route)) return;
+		const key = normalizeModelKey(route.provider, route.model);
+		if (key !== "" && !routes.has(key)) routes.set(key, { provider: route.provider, model: route.model });
+	};
+	for (const lane of LANES) for (const route of readList(config[laneField(lane)])) add(route);
+	for (const entry of readList(config.modelRank)) add(entry);
+	return routes;
+}
+
+/** First effort pin configured for one folded route key, across every
+ *  lane's effort list (null when the route carries no pin) — completes a
+ *  corrective hint whose copied id kept only the (TIER) annotation. */
+function configuredEffortPin(config, key) {
+	for (const lane of LANES) {
+		for (const entry of readList(config[laneEffortsField(lane)])) {
+			if (!isEffortEntry(entry)) continue;
+			if (normalizeModelKey(entry.provider, entry.model) === key) return entry.effort;
+		}
+	}
+	return null;
+}
+
+/** Corrective deny reason for one delegation call whose model argument
+ *  embeds pool-table display annotations, or null to pass through. The
+ *  stripped id must match a configured route (folded, like the enforce
+ *  gate) — an unknown id is left to DSH's own route validation, so an
+ *  exotic-but-real id that merely looks annotated never gets denied.
+ *  Covers the plain suffix copy ("m(A)", "m(A)@high"), the whole-cell copy
+ *  including the ⚠not-authorized drift marker, and the provider-combined
+ *  copy ("provider/m(A)" with provider left empty). The reasoning_effort
+ *  hint rides along when the copied string carried the @effort annotation
+ *  or the matched route holds a configured pin, and the call did not
+ *  already set reasoning_effort itself. */
+function annotationFixOf(args, config) {
+	const model = typeof args?.model === "string" ? args.model.trim() : "";
+	if (model === "") return null;
+	const providerGiven = typeof args?.provider === "string" && args.provider.trim() !== "";
+	let provider = providerGiven ? args.provider.trim() : "";
+	let modelPart = model;
+	if (!providerGiven && modelPart.includes("/")) {
+		const cut = modelPart.lastIndexOf("/");
+		provider = modelPart.slice(0, cut).trim();
+		modelPart = modelPart.slice(cut + 1).trim();
+	}
+	modelPart = modelPart.replace(TRAILING_MARKER, "").trim();
+	const effortMatch = TRAILING_EFFORT.exec(modelPart);
+	const stripped = stripTrailingAnnotations(modelPart);
+	if (stripped === modelPart || stripped === "") return null;
+	const key = normalizeModelKey(provider, stripped);
+	const matched = key === "" ? undefined : configuredRoutes(config).get(key);
+	if (matched === undefined) return null;
+	// The re-dispatch must name BOTH fields whenever the original call left
+	// provider empty (provider+model go together on these tools), even when
+	// the provider was recoverable from a combined "provider/model(…)" copy.
+	// A provider-given whole-cell copy still carries its "provider/" prefix
+	// inside the stripped id — the matched route's clean model is the only
+	// suggestion DSH's exact-match whitelist will actually accept.
+	const modelFix = stripped.includes("/") ? matched.model : stripped;
+	const fields = providerGiven
+		? `model "${modelFix}"`
+		: `provider "${provider !== "" ? provider : matched.provider}", model "${modelFix}"`;
+	const hasExplicitEffort = typeof args?.reasoning_effort === "string" && args.reasoning_effort.trim() !== "";
+	const pinned = effortMatch !== null ? effortMatch[1] : configuredEffortPin(config, key);
+	const effort = hasExplicitEffort || pinned === null ? "" : ` and reasoning_effort "${pinned}"`;
+	return (
+		`[SWITCHMAN:POOLS] the model argument "${args.model}" embeds pool-table display annotations — ` +
+		`the (S/A/B/C) capability grade and any @effort suffix are annotations, NOT parts of the model id. ` +
+		`Re-dispatch this call with ${fields}${effort}, keeping every other argument unchanged.`
+	);
+}
+
 /** The `[SWITCHMAN:POOLS]` block: anchor line, one line per configured lane,
  *  then the guidance lines (byte-stable for a given configuration). Routes
  *  outside the session's DSH-authorized child models carry a ⚠not-authorized
@@ -207,7 +314,8 @@ function renderPoolsBlock(state) {
 		`When delegating via subagent/workflow, pick a model from the lane matching the task category; spawn_teammate takes no model argument (lanes do not apply to it).`,
 		`Lanes marked * are in manual order: dispatch follows the listed order exactly (the head is the first choice).`,
 		`effort: economy=medium mechanical=medium main=medium (high for complex tasks) hard=high vision=multimodal-capable model review=high; an unconfigured lane uses the system default model.`,
-		`A route suffixed @effort has a manually pinned reasoning effort — pass it as reasoning_effort when delegating to that model (it overrides the lane default).`,
+		`Entries render as provider/model(TIER)@effort: (TIER) is the S/A/B/C capability grade and @effort a manually pinned reasoning effort — both are display-only annotations, NEVER parts of the model id.`,
+		`Decompose before dispatching: provider/model(TIER)@effort → provider=provider, model=model, reasoning_effort=effort (a pin overrides the lane default); a route without @effort carries no per-route pin — fall back to the lane's default effort above.`,
 		`Review delegations: anchor independence on the code AUTHOR's model, not the main session's (author = the agent that produced the diff: its explicit dispatch route, or the inherited session model when unspecified). Prefer a reviewer model different from the author's; also avoiding the session model is a bonus (its integration pass already covers that angle). If no pool entry differs from the author, same-model review is allowed — declare DOWNGRADED and state whether it is relative to the author or the session.`,
 		`Explicit provider/model/effort on subagent/workflow calls is validated against this session's DSH-authorized child models (DSH Settings: allow agents to choose subagent models) — NOT against this table; when denied, discover allowed routes via list_subagent_models, or dispatch implicitly by omitting all three fields (the child then uses configured defaults or inherits the parent route).`,
 	);
@@ -253,34 +361,38 @@ function applyDispatch(ctx, config) {
 		},
 	});
 
-	// Enforce gate (tools/pre-execute waterfall): deny decisions are returned
-	// directly WITHOUT calling next() — { kind: "deny", reason } — while every
-	// other path must call and return next(). Only subagent calls that name
-	// both provider and model are checked; model-less calls use the system
-	// default and pass through untouched.
+	// Annotation sanitation (every mode) + enforce gate (enforce mode only).
+	// Both are tools/pre-execute waterfall listeners in one registration:
+	// deny decisions are returned directly WITHOUT calling next() —
+	// { kind: "deny", reason } — while every other path must call and
+	// return next(). The sanitation covers subagent and subagent_fork; the
+	// enforce gate below stays subagent-only with both provider and model
+	// named; model-less calls use the system default and pass through.
 	ctx.on("tools/pre-execute", (exec, next) => {
 		try {
+			if (exec?.name !== "subagent" && exec?.name !== "subagent_fork") return next();
+			const args = exec.arguments;
+
+			// Annotation sanitation: a model id copied verbatim off the
+			// rendered table embeds its display-only (TIER)/@effort/⚠
+			// annotations; DSH's exact-match whitelist would reject it with
+			// a generic binding error that pushes the caller back to
+			// implicit dispatch, losing the lane's route. Deny with the
+			// exact corrected arguments instead — one immediate retry on
+			// the intended route.
+			const fix = annotationFixOf(args, config);
+			if (fix !== null) return { kind: "deny", reason: fix };
+
+			// Enforce gate: unchanged semantics, now sharing the factored
+			// configuredRoutes matcher (same folded keys as before).
 			if (readField(config.dispatchEnforce) !== "enforce") return next();
 			if (exec?.name !== "subagent") return next();
-			const args = exec.arguments;
 			if (typeof args?.provider !== "string" || args.provider === "") return next();
 			if (typeof args?.model !== "string" || args.model === "") return next();
 			const key = normalizeModelKey(args.provider, args.model);
 			if (key === "") return next();
 
-			const allowed = new Set();
-			for (const lane of LANES) {
-				for (const route of readList(config[laneField(lane)])) {
-					if (!isModelRoute(route)) continue;
-					const routeKey = normalizeModelKey(route.provider, route.model);
-					if (routeKey !== "") allowed.add(routeKey);
-				}
-			}
-			for (const entry of readList(config.modelRank)) {
-				if (!isModelRoute(entry)) continue;
-				const rankKey = normalizeModelKey(entry.provider, entry.model);
-				if (rankKey !== "") allowed.add(rankKey);
-			}
+			const allowed = configuredRoutes(config);
 			if (allowed.size === 0 || allowed.has(key)) return next();
 
 			const state = readDispatchState(ctx, config);
