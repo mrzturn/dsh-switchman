@@ -386,6 +386,10 @@ export function applyContextTrim(ctx, config) {
 		const rawSnapshot = messages.slice();
 		if (view.applied > 0) replaceInPlace(messages, view.messages);
 		const viewTokens = estimateTokensOf(view.messages);
+		// Per-request application evidence: whether the ledger's blocks actually
+		// locate inside THIS re-send (the host may compact/replace history, in
+		// which case applied=0 explains a stuck-high view without any failure).
+		decisionLog(`session=${sessionId} view-applied applied=${view.applied} foldedMsgs=${view.foldedMessages} view=${Math.round(viewTokens)} blocks=${Array.isArray(ledger.blocks) ? ledger.blocks.length : 0}`);
 		const model = { provider: options.provider ?? null, model: options.model ?? null };
 		captureOf(sessionId, rawSnapshot, model, viewTokens);
 		metrics.noteView(sessionId, viewTokens, model);
