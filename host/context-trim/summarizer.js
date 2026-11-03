@@ -132,8 +132,9 @@ export function mechanicalSummary(messages, startIdx, endIdx, refOf) {
  * renderMaterial output; deadlineMs: hard budget. Returns the summary
  * text, or null on ANY failure (caller skips the fold cycle). */
 export async function summarizeWithModel(llm, route, materialText, options = {}) {
-	if (route === null || route === undefined) return null;
-	if (typeof llm?.prepareCall !== "function") return null;
+	const fail = typeof options.onFail === "function" ? options.onFail : null;
+	if (route === null || route === undefined) { fail?.("no-route"); return null; }
+	if (typeof llm?.prepareCall !== "function") { fail?.("no-prepare-call"); return null; }
 	const deadlineMs = Number.isFinite(options.deadlineMs) && options.deadlineMs > 0 ? options.deadlineMs : SUMMARY_TIMEOUT_MS;
 	const maxTokens = Number.isFinite(options.maxTokens) && options.maxTokens > 0 ? options.maxTokens : 8_192;
 	const controller = new AbortController();
@@ -154,12 +155,14 @@ export async function summarizeWithModel(llm, route, materialText, options = {})
 		for await (const chunk of call.stream(streamOptions)) {
 			if (chunk?.type === "text-delta" && typeof chunk.text === "string") text += chunk.text;
 			else if (chunk?.type === "finish") {
-				if (chunk.kind === "error" || chunk.kind === "aborted") return null;
+				if (chunk.kind === "error" || chunk.kind === "aborted") { fail?.(`stream-${chunk.kind}`); return null; }
 			}
 		}
 		const summary = text.trim();
-		return summary === "" ? null : summary;
-	} catch {
+		if (summary === "") { fail?.("empty-output"); return null; }
+		return summary;
+	} catch (error) {
+		fail?.(`error: ${error?.message ?? error}`);
 		return null;
 	} finally {
 		clearTimeout(timer);

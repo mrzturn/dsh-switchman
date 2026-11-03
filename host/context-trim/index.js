@@ -429,7 +429,9 @@ export function applyContextTrim(ctx, config) {
 		} else {
 			const llm = ctx.get("llm", false);
 			const route = sideRouteFor(sessionId);
-			summary = await summarizeWithModel(llm, route, renderMaterial(capture.messages, startIdx, endIdx, refOf), {});
+			summary = await summarizeWithModel(llm, route, renderMaterial(capture.messages, startIdx, endIdx, refOf), {
+				onFail: (why) => decisionLog(`session=${sessionId} summary-fail why=${why}`),
+			});
 			if (summary === null) return "summary-unavailable"; // skip cycle, fail-open
 		}
 		const positions = refPositions(capture.messages);
@@ -479,6 +481,10 @@ export function applyContextTrim(ctx, config) {
 			decisionLog(`session=${sessionId} via=${via} action=${decision.action} tier=${decision.tier ?? "-"} reason=${decision.reason || "-"} view=${Math.round(capture.viewTokens)} window=${windowTokens ?? "null"}`);
 			if (decision.action === "none") return;
 			const outcome = await runFoldCycle(sessionId, decision);
+			// Outcome lands in the decision log too: warn() has no reachable
+			// sink on some hosts, and the commit/fail boundary is exactly what
+			// live diagnosis needs.
+			decisionLog(`session=${sessionId} outcome=${outcome} tier=${decision.tier}`);
 			warn(`[context-trim] ${sessionId}: ${outcome} (${decision.reason})`);
 		} catch (error) {
 			warn(`[context-trim] fold cycle failed: ${error?.message ?? error}`);
