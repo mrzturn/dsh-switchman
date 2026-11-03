@@ -264,6 +264,8 @@ export function applyContextTrim(ctx, config) {
 			const now = Date.now();
 			const firstSeen = inheritFirstSeen.get(sessionId) ?? now;
 			inheritFirstSeen.set(sessionId, firstSeen);
+			if (inheritFirstSeen.size > 2000) inheritFirstSeen.delete(inheritFirstSeen.keys().next().value);
+			if (inheritWarned.size > 2000) inheritWarned.delete(inheritWarned.values().next().value); // same bound family as inheritDecided
 			const ledger = store.ledgerOf(sessionId);
 			if ((Array.isArray(ledger.blocks) && ledger.blocks.length > 0) || ledger.inheritedFrom !== null) return finish(); // already folded / already inherited
 			const link = forkLinkOf(freshLinks(), sessionId);
@@ -352,9 +354,11 @@ export function applyContextTrim(ctx, config) {
 			const windowTokens = info?.context?.contextWindow;
 			const value = Number.isFinite(windowTokens) && windowTokens > 0 ? windowTokens : null;
 			windowCache.set(key, { windowTokens: value, at: now });
+			if (windowCache.size > 200) windowCache.delete(windowCache.keys().next().value);
 			return value;
 		} catch {
 			windowCache.set(key, { windowTokens: null, at: now });
+			if (windowCache.size > 200) windowCache.delete(windowCache.keys().next().value);
 			return null;
 		}
 	}
@@ -475,6 +479,7 @@ export function applyContextTrim(ctx, config) {
 		const lowView = estimateTokensOf(buildView(capture.messages, lowLedger, { protectedTail: thresholdsNow().protectedTail }).messages);
 		store.recordFoldBaseline(sessionId, capture.viewTokens, lowView);
 		if (decision.action === "emergency") lastEmergencyAtBySession.set(sessionId, Date.now());
+		if (lastEmergencyAtBySession.size > 200) lastEmergencyAtBySession.delete(lastEmergencyAtBySession.keys().next().value);
 		return `folded:${decision.tier}:${count} msgs (~${approxTokens} tokens)`;
 	}
 
@@ -766,6 +771,7 @@ export function applyContextTrim(ctx, config) {
 					const nowMs = Date.now();
 					if (nowMs - (lastStreamCheckAt.get(wrappedSession) ?? 0) >= 60_000) {
 						lastStreamCheckAt.set(wrappedSession, nowMs);
+						if (lastStreamCheckAt.size > 200) lastStreamCheckAt.delete(lastStreamCheckAt.keys().next().value);
 						void maybeFold(wrappedSession, "stream");
 					}
 				}
