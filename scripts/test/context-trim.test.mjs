@@ -557,7 +557,7 @@ describe("assembly: applyContextTrim with a mock ctx", () => {
 		trimProtectedTail: 6,
 		trimMaxFoldsPerHour: 6,
 		trimSideModel: { provider: "", model: "" },
-		trimStateDir: "",
+		trimStateDir: mkdtempSync(join(tmpdir(), "trim-live-")),
 	};
 
 	test("registers prompt section, context line, tools, and the llm listener", () => {

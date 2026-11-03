@@ -24,7 +24,7 @@
  * trimMaxFoldsPerHour, trimSideModel, trimStateDir.
  */
 
-import { appendFileSync, mkdirSync, statSync } from "node:fs";
+import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { buildView, estimateTokensOf, injectView, ledgerIsStale, rangeIsSegmentAligned, refOf, refPositions } from "./view.js";
 import { computeFoldableRange, evaluateTrigger, EMERGENCY_COOLDOWN_MS } from "./trigger.js";
@@ -218,7 +218,9 @@ export function applyContextTrim(ctx, config) {
 			const dir = store.stateDir;
 			if (typeof dir !== "string" || dir === "") return;
 			mkdirSync(dir, { recursive: true });
-			appendFileSync(join(dir, "decisions.log"), `${new Date().toISOString()} ${entry}\n`);
+						const logPath = join(dir, "decisions.log");
+			if ((statSync(logPath, { throwIfNoEntry: false })?.size ?? 0) > 2_000_000) renameSync(logPath, `${logPath}.1`); // bound the log, keep one previous generation
+			appendFileSync(logPath, `${new Date().toISOString()} ${entry}\n`);
 		} catch {
 			/* observability must never throw */
 		}
@@ -549,13 +551,14 @@ export function applyContextTrim(ctx, config) {
 					const ledger = sessionId !== null ? store.ledgerOf(sessionId) : null;
 					const model = captureModelOf(sessionId);
 					const windowTokens = model === null ? null : cachedWindowOf(model);
-					return renderTrimContextLine(label, {
+					const growthBaseline = ledger !== null && Number.isFinite(ledger.lastFoldLowTokens) && ledger.lastFoldLowTokens > 0 ? ledger.lastFoldLowTokens : ledger !== null && Number.isFinite(ledger.lastFoldViewTokens) && ledger.lastFoldViewTokens > 0 ? ledger.lastFoldViewTokens : null;
+return renderTrimContextLine(label, {
 						enabled: enabledNow(),
 						mode: modeNow(),
 						viewTokens: record?.viewTokens ?? null,
 						windowTokens,
 						folds: Array.isArray(ledger?.blocks) ? ledger.blocks.length : 0,
-						growthTokens: record?.viewTokens !== null && record !== undefined && ledger !== null && Number.isFinite(ledger.lastFoldViewTokens) && ledger.lastFoldViewTokens > 0 ? record.viewTokens - ledger.lastFoldViewTokens : null,
+						growthTokens: record?.viewTokens !== null && record !== undefined && growthBaseline !== null ? record.viewTokens - growthBaseline : null,
 						lastModel: record?.lastModel ?? null,
 					});
 				} catch {
