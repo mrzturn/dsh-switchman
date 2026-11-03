@@ -257,6 +257,44 @@ window.__ModuleLoader__.load({
 			},
 		};
 
+		/** Context-trim folding modes (Host config.js trimMode, design:
+		 *  .dsh-switchman/analysis/context-trim-port-design.md): off =
+		 *  never fold, advisory = the model invokes the trim tools,
+		 *  auto = automatic idle folds. */
+		const TRIM_MODES = ['off', 'advisory', 'auto'];
+
+		/** Numeric trim fields: settings field, schema minimum, and the
+		 *  Host-side default (also the fallback for malformed stored
+		 *  values). Percent fields cap at 100 like their Host schema. */
+		const TRIM_NUMBER_FIELDS = [
+			{ field: 'trimGrowthTokens', min: 1000, def: 22500 },
+			{ field: 'trimIncrementTokens', min: 1000, def: 50000 },
+			{ field: 'trimPressurePercent', min: 5, max: 100, def: 75 },
+			{ field: 'trimEmergencyPercent', min: 5, max: 100, def: 95 },
+			{ field: 'trimWindowTokens', min: 0, def: 0 },
+		];
+
+		/** Dictionary keys per numeric trim row. */
+		const TRIM_ROW_KEYS = {
+			trimGrowthTokens: { label: 'trimGrowthLabel', help: 'trimGrowthHelp' },
+			trimIncrementTokens: {
+				label: 'trimIncrementLabel',
+				help: 'trimIncrementHelp',
+			},
+			trimPressurePercent: {
+				label: 'trimPressureLabel',
+				help: 'trimPressureHelp',
+			},
+			trimEmergencyPercent: {
+				label: 'trimEmergencyLabel',
+				help: 'trimEmergencyHelp',
+			},
+			trimWindowTokens: {
+				label: 'trimWindowLabel',
+				help: 'trimWindowHelp',
+			},
+		};
+
 		/** Every settings field this page edits, in mutate order. */
 		const ALL_FIELDS = [
 			'uiLocale',
@@ -270,6 +308,10 @@ window.__ModuleLoader__.load({
 			'wmDenyMode',
 			'wmAutoHandover',
 			'wmSubagentCap',
+			// Context trim (design: context-trim-port-design.md).
+			'trimMode',
+			'trimEnabled',
+			...TRIM_NUMBER_FIELDS.map(({ field }) => field),
 			'teamsMode',
 			'syncWhitelist',
 			// Intent recognition (design: intent-routing.md §2).
@@ -435,6 +477,14 @@ window.__ModuleLoader__.load({
 				wmDenyMode: value?.wmDenyMode === 'deny' ? 'deny' : 'cap',
 				wmAutoHandover: bool('wmAutoHandover', true),
 				wmSubagentCap: bool('wmSubagentCap', true),
+				// Context trim (design: context-trim-port-design.md).
+				trimMode: TRIM_MODES.includes(value?.trimMode)
+					? value.trimMode
+					: 'auto',
+				trimEnabled: bool('trimEnabled', true),
+				...Object.fromEntries(
+					TRIM_NUMBER_FIELDS.map((spec) => [spec.field, number(spec)]),
+				),
 				teamsMode: bool('teamsMode', false),
 				syncWhitelist: bool('syncWhitelist', false),
 				// Intent recognition (design: intent-routing.md §2): route
@@ -509,6 +559,11 @@ window.__ModuleLoader__.load({
 				wmDenyMode: values.wmDenyMode,
 				wmAutoHandover: values.wmAutoHandover,
 				wmSubagentCap: values.wmSubagentCap,
+				trimMode: values.trimMode,
+				trimEnabled: values.trimEnabled,
+				...Object.fromEntries(
+					TRIM_NUMBER_FIELDS.map(({ field }) => [field, values[field]]),
+				),
 				teamsMode: values.teamsMode,
 				syncWhitelist: values.syncWhitelist,
 				// Intent recognition: routes compare as route keys, the
@@ -792,6 +847,25 @@ window.__ModuleLoader__.load({
 				wmSubagentFollowForce: '跟随 force 档（0）',
 				wmCommands:
 					'命令：/ctx-pause 暂停水位干预 · /ctx-resume 恢复干预 · /ctx-handover 立即备份并交接压缩。',
+				trimSectionTitle: '上下文裁剪',
+				trimModeLabel: '自动裁剪模式',
+				trimModeHelp:
+					'空闲时何时把历史折叠为摘要：off = 从不折叠，advisory = 仅模型主动调用，auto = 自动折叠。',
+				trimEnabledLabel: '启用自动裁剪',
+				trimEnabledHelp: '上下文裁剪层的总开关。',
+				trimGrowthLabel: '增长阈值（token）',
+				trimGrowthHelp: '视图较上次折叠增长超过该 token 数后触发折叠。',
+				trimIncrementLabel: '增量阈值（token）',
+				trimIncrementHelp: '可折叠片段至少要覆盖的新增 token 数。',
+				trimPressureLabel: '压力阈值（%）',
+				trimPressureHelp: '出站视图达到上下文窗口的这一百分比时折叠。',
+				trimEmergencyLabel: '紧急阈值（%）',
+				trimEmergencyHelp: '达到窗口的这一百分比时立即机械折叠。',
+				trimModeOff: '关闭',
+				trimWindowLabel: '窗口上限（token）',
+				trimWindowHelp: '压力与紧急档按 min(模型窗口, 上限) 计算；0 = 跟随强制水位（wmForceTokens）。',
+				trimModeAdvisory: '仅建议',
+				trimModeAuto: '自动',
 				teamsSectionTitle: '智能体团队',
 				teamsSectionDescription:
 					'切换派发形态：关闭为纯 subagent 派发（DSH 出厂保守团队策略接管）；开启后注入自主团队规程并启用 Agent Teams。',
@@ -1013,6 +1087,28 @@ window.__ModuleLoader__.load({
 				wmSubagentFollowForce: 'Follow the force tier (0)',
 				wmCommands:
 					'Commands: /ctx-pause suspends watermark actions · /ctx-resume resumes them · /ctx-handover backs up and hands over now.',
+				trimSectionTitle: 'Context trim',
+				trimModeLabel: 'Trim mode',
+				trimModeHelp:
+					'When to fold history into summaries at idle: off = never, advisory = model-invoked only, auto = automatic folds.',
+				trimEnabledLabel: 'Enable auto-trim',
+				trimEnabledHelp: 'Master switch for the context-trim layer.',
+				trimGrowthLabel: 'Growth threshold (tokens)',
+				trimGrowthHelp:
+					'Fold once the view grows this many tokens since the last fold.',
+				trimIncrementLabel: 'Increment threshold (tokens)',
+				trimIncrementHelp: 'Minimum new tokens a foldable span must cover.',
+				trimPressureLabel: 'Pressure threshold (%)',
+				trimPressureHelp:
+					'Fold when the outbound view reaches this percent of the context window.',
+				trimEmergencyLabel: 'Emergency threshold (%)',
+				trimEmergencyHelp:
+					'Immediate mechanical fold at this percent of the window.',
+				trimWindowLabel: 'Window cap (tokens)',
+				trimWindowHelp: 'Pressure and emergency tiers use min(model window, cap); 0 = follow wmForceTokens.',
+				trimModeOff: 'Off',
+				trimModeAdvisory: 'Advisory',
+				trimModeAuto: 'Auto',
 				teamsSectionTitle: 'Agent teams',
 				teamsSectionDescription:
 					"Switch the dispatch shape: off is plain subagent dispatch (DSH's factory conservative team policy takes over); on injects the autonomous team doctrine and enables Agent Teams.",
@@ -1234,6 +1330,25 @@ window.__ModuleLoader__.load({
 				wmSubagentForceHelp: '僅覆蓋子智能體的 force 檔（soft/hard 與主會話共用）；0 = 跟隨上方強制水位。',
 				wmSubagentFollowForce: '跟隨 force 檔（0）',
 				wmCommands: '命令：/ctx-pause 暫停水位干預 · /ctx-resume 恢復干預 · /ctx-handover 立即備份並交接壓縮。',
+				trimSectionTitle: '上下文裁剪',
+				trimModeLabel: '自動裁剪模式',
+				trimModeHelp:
+					'閒置時何時將歷史摺疊為摘要：off = 從不摺疊，advisory = 僅模型主動呼叫，auto = 自動摺疊。',
+				trimEnabledLabel: '啟用自動裁剪',
+				trimEnabledHelp: '上下文裁剪層的總開關。',
+				trimGrowthLabel: '增長閾值（token）',
+				trimGrowthHelp: '檢視較上次摺疊增長超過該 token 數後觸發摺疊。',
+				trimIncrementLabel: '增量閾值（token）',
+				trimIncrementHelp: '可摺疊片段至少要涵蓋的新增 token 數。',
+				trimPressureLabel: '壓力閾值（%）',
+				trimPressureHelp: '出站檢視達到上下文視窗的這一百分比時摺疊。',
+				trimEmergencyLabel: '緊急閾值（%）',
+				trimEmergencyHelp: '達到視窗的這一百分比時立即機械摺疊。',
+				trimModeOff: '關閉',
+				trimWindowLabel: '視窗上限（token）',
+				trimWindowHelp: '壓力與緊急檔按 min(模型視窗, 上限) 計算；0 = 跟隨強制水位（wmForceTokens）。',
+				trimModeAdvisory: '僅建議',
+				trimModeAuto: '自動',
 				teamsSectionTitle: '智能體團隊',
 				teamsSectionDescription: '切換派發形態：關閉為純 subagent 派發（DSH 出廠保守團隊策略接管）；開啟後注入自主團隊規程並啟用 Agent Teams。',
 				teamsModeLabel: '智能體團隊模式',
@@ -1434,6 +1549,29 @@ window.__ModuleLoader__.load({
 				wmSubagentForceHelp: 'サブエージェントの force 段階のみを上書きします（soft/hard はメインセッションと共通）。0 なら上の強制水位に従います。',
 				wmSubagentFollowForce: 'force 段階に従う（0）',
 				wmCommands: 'コマンド：/ctx-pause で水位アクションを一時停止 · /ctx-resume で再開 · /ctx-handover で今すぐバックアップしてハンドオーバー。',
+				trimSectionTitle: 'コンテキストトリム',
+				trimModeLabel: 'トリムモード',
+				trimModeHelp:
+					'アイドル時に履歴を要約へ折りたたむタイミング：off = 折りたたまない、advisory = モデル呼び出しのみ、auto = 自動で折りたたむ。',
+				trimEnabledLabel: '自動トリムを有効化',
+				trimEnabledHelp: 'コンテキストトリム層のマスタースイッチ。',
+				trimGrowthLabel: '増加しきい値（token）',
+				trimGrowthHelp:
+					'前回の折りたたみからこのトークン数以上増えたら折りたたみます。',
+				trimIncrementLabel: '増分しきい値（token）',
+				trimIncrementHelp:
+					'折りたたみ対象の範囲がカバーする必要のある最小トークン数。',
+				trimPressureLabel: '圧力しきい値（%）',
+				trimPressureHelp:
+					'送信ビューがコンテキストウィンドウのこの割合に達したら折りたたみます。',
+				trimEmergencyLabel: '緊急しきい値（%）',
+				trimEmergencyHelp:
+					'ウィンドウのこの割合に達したら即座に機械的に折りたたみます。',
+				trimWindowLabel: 'ウィンドウ上限（トークン）',
+				trimWindowHelp: '圧力・緊急ティアは min(モデルウィンドウ, 上限) で計算。0 = wmForceTokens に追従。',
+				trimModeOff: 'オフ',
+				trimModeAdvisory: 'アドバイザリー',
+				trimModeAuto: '自動',
 				teamsSectionTitle: 'エージェントチーム',
 				teamsSectionDescription: 'ディスパッチ形態の切り替え：オフは通常の subagent ディスパッチ（DSH 出荷時の保守的なチームポリシーが引き継ぎ）。オンにすると自律チーム規律を注入し、Agent Teams を有効にします。',
 				teamsModeLabel: 'エージェントチームモード',
@@ -1638,6 +1776,28 @@ window.__ModuleLoader__.load({
 				wmSubagentForceHelp: '서브에이전트의 force 단계만 덮어씁니다(soft/hard는 메인 세션과 공유). 0이면 위 강제 수위를 따릅니다.',
 				wmSubagentFollowForce: 'force 단계 따르기(0)',
 				wmCommands: '명령: /ctx-pause 수위 개입 일시 중지 · /ctx-resume 재개 · /ctx-handover 지금 백업하고 핸드오버.',
+				trimSectionTitle: '컨텍스트 트림',
+				trimModeLabel: '트림 모드',
+				trimModeHelp:
+					'유휴 시 언제 기록을 요약으로 접을지: off = 접지 않음, advisory = 모델 호출 시에만, auto = 자동 접기.',
+				trimEnabledLabel: '자동 트림 사용',
+				trimEnabledHelp: '컨텍스트 트림 계층의 마스터 스위치.',
+				trimGrowthLabel: '증가 임계값(token)',
+				trimGrowthHelp: '마지막 접기 이후 이만큼의 토큰이 늘면 접습니다.',
+				trimIncrementLabel: '증분 임계값(token)',
+				trimIncrementHelp:
+					'접을 수 있는 구간이 최소한 포함해야 하는 새 토큰 수.',
+				trimPressureLabel: '압력 임계값(%)',
+				trimPressureHelp:
+					'발신 뷰가 컨텍스트 창의 이 백분율에 도달하면 접습니다.',
+				trimEmergencyLabel: '긴급 임계값(%)',
+				trimEmergencyHelp:
+					'창의 이 백분율에 도달하면 즉시 기계적으로 접습니다.',
+				trimWindowLabel: '윈도우 상한(토큰)',
+				trimWindowHelp: '압력·긴급 티어는 min(모델 윈도우, 상한)으로 계산. 0 = wmForceTokens를 따름.',
+				trimModeOff: '끄기',
+				trimModeAdvisory: '조언',
+				trimModeAuto: '자동',
 				teamsSectionTitle: '에이전트 팀',
 				teamsSectionDescription: '디스패치 형태 전환: 끄면 일반 subagent 디스패치입니다(DSH 출고 기본 보수적 팀 정책이 이어받음). 켜면 자율 팀 규율을 주입하고 Agent Teams를 활성화합니다.',
 				teamsModeLabel: '에이전트 팀 모드',
@@ -1842,6 +2002,29 @@ window.__ModuleLoader__.load({
 				wmSubagentForceHelp: 'Überschreibt nur die Force-Stufe der Subagents (soft/hard teilen sich mit der Haupt-Session); 0 folgt dem erzwungenen Wasserstand oben.',
 				wmSubagentFollowForce: 'Der Force-Stufe folgen (0)',
 				wmCommands: 'Befehle: /ctx-pause pausiert Wasserstand-Aktionen · /ctx-resume setzt sie fort · /ctx-handover sichert jetzt und übergibt sofort.',
+				trimSectionTitle: 'Kontext-Trim',
+				trimModeLabel: 'Trim-Modus',
+				trimModeHelp:
+					'Wann der Verlauf im Leerlauf zu Zusammenfassungen gefaltet wird: off = nie, advisory = nur per Modellaufruf, auto = automatisches Falten.',
+				trimEnabledLabel: 'Auto-Trim aktivieren',
+				trimEnabledHelp: 'Hauptschalter für die Kontext-Trim-Schicht.',
+				trimGrowthLabel: 'Wachstumsschwelle (Token)',
+				trimGrowthHelp:
+					'Faltet, sobald die Ansicht seit dem letzten Falten um so viele Token gewachsen ist.',
+				trimIncrementLabel: 'Zuwachsschwelle (Token)',
+				trimIncrementHelp:
+					'Minimale neue Token, die ein faltbarer Bereich abdecken muss.',
+				trimPressureLabel: 'Druckschwelle (%)',
+				trimPressureHelp:
+					'Faltet, wenn die ausgehende Ansicht diesen Prozentanteil des Kontextfensters erreicht.',
+				trimEmergencyLabel: 'Notfallschwelle (%)',
+				trimEmergencyHelp:
+					'Sofortiges mechanisches Falten bei diesem Prozentanteil des Fensters.',
+				trimWindowLabel: 'Fensterlimit (Token)',
+				trimWindowHelp: 'Druck- und Notfallstufen rechnen mit min(Modellfenster, Limit); 0 = folgt wmForceTokens.',
+				trimModeOff: 'Aus',
+				trimModeAdvisory: 'Empfehlung',
+				trimModeAuto: 'Auto',
 				teamsSectionTitle: 'Agent-Teams',
 				teamsSectionDescription: 'Wechselt die Dispatch-Form: Aus ist gewöhnlicher Subagent-Versand (die konservative Werks-Teamrichtlinie von DSH greift); an speist die autonome Team-Doktrin ein und aktiviert Agent Teams.',
 				teamsModeLabel: 'Agent-Teams-Modus',
@@ -2048,6 +2231,30 @@ window.__ModuleLoader__.load({
 				wmSubagentForceHelp: 'Solo sobrescribe el nivel forzado de los subagentes (soft/hard se comparten con la sesión principal); 0 sigue el nivel forzado de arriba.',
 				wmSubagentFollowForce: 'Seguir el nivel forzado (0)',
 				wmCommands: 'Comandos: /ctx-pause suspende las acciones del nivel · /ctx-resume las reanuda · /ctx-handover hace copia y traspasa ahora.',
+				trimSectionTitle: 'Recorte de contexto',
+				trimModeLabel: 'Modo de recorte',
+				trimModeHelp:
+					'Cuándo plegar el historial en resúmenes en reposo: off = nunca, advisory = solo por invocación del modelo, auto = plegado automático.',
+				trimEnabledLabel: 'Activar recorte automático',
+				trimEnabledHelp:
+					'Interruptor maestro de la capa de recorte de contexto.',
+				trimGrowthLabel: 'Umbral de crecimiento (tokens)',
+				trimGrowthHelp:
+					'Pliega cuando la vista crezca esta cantidad de tokens desde el último plegado.',
+				trimIncrementLabel: 'Umbral de incremento (tokens)',
+				trimIncrementHelp:
+					'Mínimo de tokens nuevos que debe cubrir un tramo plegable.',
+				trimPressureLabel: 'Umbral de presión (%)',
+				trimPressureHelp:
+					'Pliega cuando la vista saliente alcanza este porcentaje de la ventana de contexto.',
+				trimEmergencyLabel: 'Umbral de emergencia (%)',
+				trimEmergencyHelp:
+					'Plegado mecánico inmediato al alcanzar este porcentaje de la ventana.',
+				trimWindowLabel: 'Límite de ventana (tokens)',
+				trimWindowHelp: 'Los niveles de presión y emergencia usan min(ventana del modelo, límite); 0 = sigue a wmForceTokens.',
+				trimModeOff: 'Desactivado',
+				trimModeAdvisory: 'Consejo',
+				trimModeAuto: 'Auto',
 				teamsSectionTitle: 'Equipos de agentes',
 				teamsSectionDescription: 'Cambia la forma de despacho: desactivado es despacho simple de subagentes (aplica la política conservadora de fábrica de DSH); activado inyecta la doctrina de equipo autónomo y habilita Agent Teams.',
 				teamsModeLabel: 'Modo de equipos de agentes',
@@ -2254,6 +2461,30 @@ window.__ModuleLoader__.load({
 				wmSubagentForceHelp: 'Ne remplace que le palier force des subagents (soft/hard partagés avec la session principale) ; 0 suit la ligne d’eau force ci-dessus.',
 				wmSubagentFollowForce: 'Suivre le palier force (0)',
 				wmCommands: 'Commandes : /ctx-pause suspend les actions de niveau d’eau · /ctx-resume les reprend · /ctx-handover sauvegarde et remet maintenant.',
+				trimSectionTitle: 'Rognage du contexte',
+				trimModeLabel: 'Mode de rognage',
+				trimModeHelp:
+					'Quand replier l’historique en résumés au repos : off = jamais, advisory = sur invocation du modèle uniquement, auto = repli automatique.',
+				trimEnabledLabel: 'Activer le rognage automatique',
+				trimEnabledHelp:
+					'Interrupteur principal de la couche de rognage de contexte.',
+				trimGrowthLabel: 'Seuil de croissance (jetons)',
+				trimGrowthHelp:
+					'Replie dès que la vue grossit d’autant de jetons depuis le dernier repli.',
+				trimIncrementLabel: 'Seuil d’incrément (jetons)',
+				trimIncrementHelp:
+					'Nombre minimal de nouveaux jetons qu’un segment repliable doit couvrir.',
+				trimPressureLabel: 'Seuil de pression (%)',
+				trimPressureHelp:
+					'Replie quand la vue sortante atteint ce pourcentage de la fenêtre de contexte.',
+				trimEmergencyLabel: 'Seuil d’urgence (%)',
+				trimEmergencyHelp:
+					'Repli mécanique immédiat à ce pourcentage de la fenêtre.',
+				trimWindowLabel: 'Plafond de fenêtre (jetons)',
+				trimWindowHelp: 'Les paliers pression/urgence utilisent min(fenêtre du modèle, plafond) ; 0 = suit wmForceTokens.',
+				trimModeOff: 'Off',
+				trimModeAdvisory: 'Advisory',
+				trimModeAuto: 'Auto',
 				teamsSectionTitle: 'Agent Teams',
 				teamsSectionDescription: 'Change la forme du dispatch : éteint, c’est le dispatch subagent simple (la politique d’équipe prudente d’usine de DSH reprend la main) ; allumé, la doctrine d’équipe autonome est injectée et les Agent Teams sont activés.',
 				teamsModeLabel: 'Mode Agent Teams',
@@ -2460,6 +2691,30 @@ window.__ModuleLoader__.load({
 				wmSubagentForceHelp: 'Sostituisce solo la soglia force dei subagent (soft/hard restano condivise con la sessione principale); 0 segue la soglia force sopra.',
 				wmSubagentFollowForce: 'Segui la soglia force (0)',
 				wmCommands: 'Comandi: /ctx-pause sospende le azioni da livello dell’acqua · /ctx-resume le riprende · /ctx-handover fa backup e handover subito.',
+				trimSectionTitle: 'Riduzione del contesto',
+				trimModeLabel: 'Modalità di riduzione',
+				trimModeHelp:
+					'Quando comprimere la cronologia in riepiloghi a riposo: off = mai, advisory = solo su invocazione del modello, auto = riduzione automatica.',
+				trimEnabledLabel: 'Attiva riduzione automatica',
+				trimEnabledHelp:
+					'Interruttore principale del livello di riduzione del contesto.',
+				trimGrowthLabel: 'Soglia di crescita (token)',
+				trimGrowthHelp:
+					'Comprime quando la vista cresce di questo numero di token dall’ultima compressione.',
+				trimIncrementLabel: 'Soglia di incremento (token)',
+				trimIncrementHelp:
+					'Numero minimo di token nuovi che un tratto comprimibile deve coprire.',
+				trimPressureLabel: 'Soglia di pressione (%)',
+				trimPressureHelp:
+					'Comprime quando la vista in uscita raggiunge questa percentuale della finestra di contesto.',
+				trimEmergencyLabel: 'Soglia di emergenza (%)',
+				trimEmergencyHelp:
+					'Riduzione meccanica immediata a questa percentuale della finestra.',
+				trimWindowLabel: 'Limite finestra (token)',
+				trimWindowHelp: 'Le soglie di pressione/emergenza usano min(finestra del modello, limite); 0 = segue wmForceTokens.',
+				trimModeOff: 'Off',
+				trimModeAdvisory: 'Advisory',
+				trimModeAuto: 'Auto',
 				teamsSectionTitle: 'Agent Teams',
 				teamsSectionDescription: 'Cambia la forma del dispatch: spento è il semplice dispatch via subagent (subentra la politica di squadra prudente di fabbrica di DSH); acceso inietta la dottrina di squadra autonoma e abilita gli Agent Teams.',
 				teamsModeLabel: 'Modalità Agent Teams',
@@ -2666,6 +2921,30 @@ window.__ModuleLoader__.load({
 				wmSubagentForceHelp: 'Sobrepõe apenas o limiar force dos subagents (soft/hard são compartilhados com a sessão principal); 0 segue o limiar force acima.',
 				wmSubagentFollowForce: 'Seguir o limiar force (0)',
 				wmCommands: 'Comandos: /ctx-pause suspende as ações de nível de água · /ctx-resume as retoma · /ctx-handover faz backup e handover agora.',
+				trimSectionTitle: 'Corte de contexto',
+				trimModeLabel: 'Modo de corte',
+				trimModeHelp:
+					'Quando dobrar o histórico em resumos na ociosidade: off = nunca, advisory = apenas por invocação do modelo, auto = dobra automática.',
+				trimEnabledLabel: 'Ativar corte automático',
+				trimEnabledHelp:
+					'Interruptor principal da camada de corte de contexto.',
+				trimGrowthLabel: 'Limiar de crescimento (tokens)',
+				trimGrowthHelp:
+					'Dobra quando a visualização crescer essa quantidade de tokens desde a última dobra.',
+				trimIncrementLabel: 'Limiar de incremento (tokens)',
+				trimIncrementHelp:
+					'Mínimo de tokens novos que um trecho dobrável deve cobrir.',
+				trimPressureLabel: 'Limiar de pressão (%)',
+				trimPressureHelp:
+					'Dobra quando a visualização de saída atinge essa porcentagem da janela de contexto.',
+				trimEmergencyLabel: 'Limiar de emergência (%)',
+				trimEmergencyHelp:
+					'Dobra mecânica imediata nessa porcentagem da janela.',
+				trimWindowLabel: 'Limite de janela (tokens)',
+				trimWindowHelp: 'Os níveis de pressão e emergência usam min(janela do modelo, limite); 0 = segue wmForceTokens.',
+				trimModeOff: 'Off',
+				trimModeAdvisory: 'Advisory',
+				trimModeAuto: 'Auto',
 				teamsSectionTitle: 'Agent Teams',
 				teamsSectionDescription: 'Muda o formato do despacho: desligado é o despacho simples via subagent (entra a política conservadora de equipe de fábrica do DSH); ligado injeta a doutrina de equipe autônoma e habilita os Agent Teams.',
 				teamsModeLabel: 'Modo Agent Teams',
@@ -2872,6 +3151,29 @@ window.__ModuleLoader__.load({
 				wmSubagentForceHelp: 'Меняет только линию force субагентов (soft/hard общие с главной сессией); 0 — следовать линии force выше.',
 				wmSubagentFollowForce: 'Следовать линии force (0)',
 				wmCommands: 'Команды: /ctx-pause приостанавливает действия по уровню воды · /ctx-resume возобновляет их · /ctx-handover делает резервную копию и передаёт прямо сейчас.',
+				trimSectionTitle: 'Обрезка контекста',
+				trimModeLabel: 'Режим обрезки',
+				trimModeHelp:
+					'Когда сворачивать историю в сводки в простое: off = никогда, advisory = только по вызову модели, auto = автоматически.',
+				trimEnabledLabel: 'Включить автообрезку',
+				trimEnabledHelp: 'Главный выключатель слоя обрезки контекста.',
+				trimGrowthLabel: 'Порог роста (токенов)',
+				trimGrowthHelp:
+					'Сворачивает, когда представление вырастает на столько токенов с прошлого сворачивания.',
+				trimIncrementLabel: 'Порог прироста (токенов)',
+				trimIncrementHelp:
+					'Минимум новых токенов, которые должен покрывать сворачиваемый диапазон.',
+				trimPressureLabel: 'Порог давления (%)',
+				trimPressureHelp:
+					'Сворачивает, когда исходящее представление достигает этого процента окна контекста.',
+				trimEmergencyLabel: 'Аварийный порог (%)',
+				trimEmergencyHelp:
+					'Немедленное механическое сворачивание при этом проценте окна.',
+				trimWindowLabel: 'Лимит окна (токены)',
+				trimWindowHelp: 'Уровни давления и аварийный считают от min(окно модели, лимит); 0 = следует за wmForceTokens.',
+				trimModeOff: 'Off',
+				trimModeAdvisory: 'Advisory',
+				trimModeAuto: 'Авто',
 				teamsSectionTitle: 'Agent Teams',
 				teamsSectionDescription: 'Переключает форму диспетчеризации: выключено — обычный dispatch через субагентов (вступает консервативная заводская командная политика DSH); включено — внедряется регламент автономной команды и включаются Agent Teams.',
 				teamsModeLabel: 'Режим Agent Teams',
@@ -4649,10 +4951,14 @@ window.__ModuleLoader__.load({
 				(values.langConversation !== '' &&
 					!isCandidate(values.langConversation));
 			/** Per-field numeric validity: raw text (when present) must be a
-			 * whole number at or above the schema minimum. The intent rows
+			 * whole number at or above the schema minimum. The trim and intent rows
 			 * share the same raw-text overlay and save gate. */
 			const numberInvalid = Object.fromEntries(
-				[...WM_NUMBER_FIELDS, ...INTENT_NUMBER_FIELDS].map(
+								[
+					...WM_NUMBER_FIELDS,
+					...TRIM_NUMBER_FIELDS,
+					...INTENT_NUMBER_FIELDS,
+				].map(
 					({ field, min, max }) => {
 						const raw = numText[field];
 						return [
@@ -4899,6 +5205,11 @@ window.__ModuleLoader__.load({
 				wmDenyMode: values.wmDenyMode,
 				wmAutoHandover: values.wmAutoHandover,
 				wmSubagentCap: values.wmSubagentCap,
+				trimMode: values.trimMode,
+				trimEnabled: values.trimEnabled,
+				...Object.fromEntries(
+					TRIM_NUMBER_FIELDS.map(({ field }) => [field, values[field]]),
+				),
 				teamsMode: values.teamsMode,
 				syncWhitelist: values.syncWhitelist,
 				// Intent recognition (design: intent-routing.md §2): route
@@ -5146,6 +5457,8 @@ window.__ModuleLoader__.load({
 			const teamsId = `${headingId}-teams`;
 			// ---- intent section id ----
 			const intentId = `${headingId}-intent`;
+			// ---- trim section id ----
+			const trimId = `${headingId}-trim`;
 
 			/** One watermark number input: raw-text overlay over the draft
 			 * value (0 renders as the placeholder for the follow-force row),
@@ -5222,6 +5535,38 @@ window.__ModuleLoader__.load({
 
 			/** Status lines under one intent number row: minimum hint. */
 			const intentNumberLines = (spec) =>
+				numberInvalid[spec.field]
+					? [{ text: t('wmNumberInvalid', { min: spec.min }), invalid: true }]
+					: [];
+			/** One trim number input: the watermark rows' raw-text overlay
+			 * pattern under the trim section id (invalid text shows the
+			 * shared minimum hint and blocks saving via `invalid`). */
+			const trimNumberControl = (spec) => {
+				const { field } = spec;
+				const shown = numText[field] ?? String(values[field]);
+				return h('input', {
+					type: 'text',
+					inputMode: 'numeric',
+					id: `${trimId}-${field}`,
+					value: shown,
+					onChange: (event) => {
+						editNumber(field, event.target.value);
+					},
+					onBlur: blurNumber(field),
+					disabled: !editable,
+					'aria-label': t(TRIM_ROW_KEYS[field].label),
+					style: numberInvalid[field]
+						? {
+								...STYLE.control,
+								borderColor: 'var(--dsw-alias-state-error-primary)',
+								color: 'var(--dsw-alias-state-error-primary)',
+							}
+						: STYLE.control,
+				});
+			};
+
+			/** Status lines under one trim number row: minimum hint. */
+			const trimNumberLines = (spec) =>
 				numberInvalid[spec.field]
 					? [{ text: t('wmNumberInvalid', { min: spec.min }), invalid: true }]
 					: [];
@@ -6265,6 +6610,58 @@ window.__ModuleLoader__.load({
 							),
 						}),
 					),
+				h('h4', { style: STYLE.subheading }, t('trimSectionTitle')),
+				h(
+					'div',
+					{ style: STYLE.rows },
+					h(SettingsRow, {
+						key: 'trimMode',
+						id: `${trimId}-mode`,
+						label: t('trimModeLabel'),
+						help: t('trimModeHelp'),
+						control: h(
+							'select',
+							selectProps(`${trimId}-mode`, values.trimMode, (mode) => {
+								if (TRIM_MODES.includes(mode)) edit('trimMode', mode);
+							}),
+							...TRIM_MODES.map((mode) =>
+								h(
+									'option',
+									{ key: mode, value: mode },
+									t(`trimMode${mode[0].toUpperCase()}${mode.slice(1)}`),
+								),
+							),
+						),
+						lines: [],
+					}),
+					h(SettingsRow, {
+						key: 'trimEnabled',
+						id: `${trimId}-enabled`,
+						label: t('trimEnabledLabel'),
+						help: t('trimEnabledHelp'),
+						control: h('input', {
+							type: 'checkbox',
+							id: `${trimId}-enabled`,
+							checked: values.trimEnabled,
+							onChange: () => {
+								edit('trimEnabled', !values.trimEnabled);
+							},
+							disabled: !editable,
+							style: STYLE.checkbox,
+						}),
+						lines: [],
+					}),
+					...TRIM_NUMBER_FIELDS.map((spec) =>
+						h(SettingsRow, {
+							key: spec.field,
+							id: `${trimId}-${spec.field}`,
+							label: t(TRIM_ROW_KEYS[spec.field].label),
+							help: t(TRIM_ROW_KEYS[spec.field].help),
+							control: trimNumberControl(spec),
+							lines: trimNumberLines(spec),
+						}),
+					),
+				),
 					h('p', { style: STYLE.progress }, t('wmCommands')),
 				),
 				h(

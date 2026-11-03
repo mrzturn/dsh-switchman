@@ -168,6 +168,14 @@
         config:
           - id: compaction-basic
             name: '@deepseek-ai/dsh-compaction-basic'
+            # Compaction arbitration (option A): auto=false disables ONLY the
+            # engine's automatic triggers (pre-step pressure + overflow
+            # retry). The compaction service stays mounted, so manual /compact
+            # and the context-watch handover borrow keep working (compactNow
+            # never consults this flag). scripts/validate.mjs carries a drift
+            # guard for the shipped auto gate.
+            config:
+              auto: false
           - id: command-compact
             name: '@deepseek-ai/dsh-command-compact'
           - id: tool-result-pruner
@@ -298,6 +306,14 @@
         config:
           - id: compaction-basic
             name: '@deepseek-ai/dsh-compaction-basic'
+            # Compaction arbitration (option A): auto=false disables ONLY the
+            # engine's automatic triggers (pre-step pressure + overflow
+            # retry). The compaction service stays mounted, so manual /compact
+            # and the context-watch handover borrow keep working (compactNow
+            # never consults this flag). scripts/validate.mjs carries a drift
+            # guard for the shipped auto gate.
+            config:
+              auto: false
           - id: command-compact
             name: '@deepseek-ai/dsh-command-compact'
           - id: tool-result-pruner
@@ -399,6 +415,14 @@
         config:
           - id: compaction-basic
             name: '@deepseek-ai/dsh-compaction-basic'
+            # Compaction arbitration (option A): auto=false disables ONLY the
+            # engine's automatic triggers (pre-step pressure + overflow
+            # retry). The compaction service stays mounted, so manual /compact
+            # and the context-watch handover borrow keep working (compactNow
+            # never consults this flag). scripts/validate.mjs carries a drift
+            # guard for the shipped auto gate.
+            config:
+              auto: false
           - id: command-compact
             name: '@deepseek-ai/dsh-command-compact'
       - id: persistent-shell
@@ -520,6 +544,14 @@
         config:
           - id: compaction-basic
             name: '@deepseek-ai/dsh-compaction-basic'
+            # Compaction arbitration (option A): auto=false disables ONLY the
+            # engine's automatic triggers (pre-step pressure + overflow
+            # retry). The compaction service stays mounted, so manual /compact
+            # and the context-watch handover borrow keep working (compactNow
+            # never consults this flag). scripts/validate.mjs carries a drift
+            # guard for the shipped auto gate.
+            config:
+              auto: false
           - id: command-compact
             name: '@deepseek-ai/dsh-command-compact'
           - id: tool-result-pruner

@@ -22,6 +22,9 @@
 	},
 	"type": "module",
 	"main": "./index.js",
+	"scripts": {
+		"test": "node --test scripts/test/*.test.mjs"
+	},
 	"icon": "./icon.svg",
 	"engines": {
 		"node": ">=24",

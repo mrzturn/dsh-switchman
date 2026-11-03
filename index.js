@@ -69,6 +69,9 @@ import { applySubagentModel } from "./host/subagent-model.js";
 
 // Context-watermark layer (banner + read budget + handover + /ctx-* commands).
 import { applyContextWatch } from "./host/context-watch.js";
+// Context-trim layer (deterministic outbound-view folding + idle-boundary
+// automatic folds + ctx_trim_fold/ctx_trim_status advisory tools).
+import { applyContextTrim } from "./host/context-trim/index.js";
 // Vision dispatch gate (/vision command + vision-state route for the
 // composer-dock hint): unlocks image sending on text-only models.
 import { applyVision } from "./host/vision.js";
@@ -100,7 +103,17 @@ const name = "dsh-switchman";
  * only inside each preset's per-agent isolated group (isolate: { compaction:
  * true }), never at this root — host/context-watch.js reaches it by borrowing
  * the session's own per-agent /compact handler through
- * ctx.commands.find(agent, "compact"). */
+ * ctx.commands.find(agent, "compact").
+ *
+ * The context-trim layer (host/context-trim/) adds fully-automatic context
+ * compression: an llm/stream listener rebuilds a deterministic outbound
+ * view (folded ranges replaced by ONE synthetic summary message each,
+ * per-session ledger) in place before every agent-loop model call, an
+ * agent/status idle hook runs the fold decisions (growth gate / pressure /
+ * emergency tiers; side-model summaries with mechanical emergency
+ * fallback), and the ctx_trim_fold / ctx_trim_status tools expose the
+ * advisory surface. Fail-open throughout: the listener always calls
+ * next(), and trimming degrades to a no-op on any internal failure. */
 const inject = ["skills", "systemPrompt", "settings", "tokenMeter", "commands", "tools", "agents", "webServer", "subagents", "sessions", "pluginManager", "sessionQuery"];
 
 /** Must equal `BUNDLED_SKILL_RANK` of @deepseek-ai/dsh-skill (packaged skill
@@ -193,6 +206,7 @@ function apply(ctx, config) {
 	applyDispatch(ctx, config);
 	applyTeams(ctx, config);
 	applyContextWatch(ctx, config);
+	applyContextTrim(ctx, config);
 	applyVision(ctx, config);
 	applyIntent(ctx, config);
 	applySubagentModel(ctx);

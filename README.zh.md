@@ -102,7 +102,43 @@ bash <安装目录>/skills/db-query/scripts/setup.sh
 
 **意图识别**（默认不可用，需配置分类器 + 至少一个候选 + 打开主开关）：`intentEnabled` = 关（关闭时 Auto 入口隐藏，已选 Auto 的会话走兜底链）；分类器路由未设置；分类器类型 `chat`；候选列表空（预置分类需填模型才参与路由）；缓存窗口 `300` 秒 / 切换置信度 `80` / 分类超时 `60000` ms；历史 `6` 条 / `2400` 字符；`intentContextWindow` = `200000`。
 
+**上下文裁剪**：`trimEnabled` = 开；`trimMode` = `auto`（全自动）；增长闸门 `22500` token + 增量 `50000` token；压力 `75%` / 紧急 `95%`；保护尾部 `6` 条；折叠节奏上限每小时 `6` 次；side model 未设置（继承会话模型）——详见下文「自动上下文裁剪」一节。
+
 **开箱要点**：① 意图识别开箱不可用是有意设计，三步开启（分类器、候选、开关）；② Auto 有效窗口开箱即为 200000——护栏保证 0.8×窗口 ≥ force 档（150000），核心压缩线（160000）永远在平滑交接线（150000）之后；③ 开箱最有感的是水位三件套：80k 提醒委派 / 120k 收敛读取 / 150k 自动备份交接，无需任何设置。
+
+## 自动上下文裁剪
+
+长会话也能保持便宜：已被消化掉的对话区间会被折叠成紧凑的确定性摘要——全自动完成，且不破坏服务商提示词缓存。在空闲边界上，裁剪引擎（`host/context-trim/`）挑出值得折叠的区间，由 side model 写出摘要（仅在紧急压力下才改走无 side model 调用的机械折叠），并把 fold 提交进该会话的折叠状态。此后每个出站请求都从该状态重建——摘要块顶替被折叠的区间，活动尾部原样保留。存储的会话从不被改写，也绝不在流式过程中动手。
+
+自动化层级（`trimMode`）：
+
+- **`off`**——只测量：用量与缓存命中采样照常运行；无横幅、无折叠。
+- **`advisory`**——会话模型自己折叠：向其暴露 `ctx_trim_fold` 与 `ctx_trim_status` 工具和协议头。
+- **`auto`**（默认）——以上全部，外加空闲边界上的自动折叠，分三档：增长闸门（view 增长 ≥ `trimGrowthTokens` 且连续可压缩增量 ≥ `trimIncrementTokens`）、压力档（上下文窗口的 `trimPressurePercent`）、紧急档（`trimEmergencyPercent`——带独立冷却的机械折叠）。
+
+所有键位于 设置 → dsh-switchman；默认值出自 `host/config.js`：
+
+| 键 | 默认值 | 含义 |
+| --- | --- | --- |
+| `trimEnabled` | `true` | 总开关。关闭后折叠与度量全部停用（监听器退化为纯透传）。 |
+| `trimMode` | `auto` | `off` 只测量 / `advisory` 模型自折 / `auto` 系统自动折。 |
+| `trimGrowthTokens` | `22500` | 增长闸门：出站 view 自上次 fold 以来增长到该值即触发折叠。 |
+| `trimIncrementTokens` | `50000` | 闸门搭档：连续可压缩增量也须达到该规模。 |
+| `trimPressurePercent` | `75` | 压力档：view 用量达到上下文窗口该百分比即折叠。 |
+| `trimEmergencyPercent` | `95` | 紧急档：到该百分比强制机械折叠（无 side model 调用）。 |
+| `trimWindowTokens` | `0` | 窗口上限：压力与紧急档按 min(模型窗口, 上限) 计算。`0` = 跟随 `wmForceTokens`。 |
+| `trimProtectedTail` | `6` | 最后 N 条消息永不折叠。 |
+| `trimMaxFoldsPerHour` | `6` | 每滚动小时 side model 折叠的节奏上限（紧急档豁免）。 |
+| `trimSideModel` | 未设置 | 写摘要的 side model 路由。留空 = 继承会话当前模型。 |
+| `trimStateDir` | 未设置 | 折叠状态目录覆盖。留空 = `<dshHome>/.dsh-switchman/state/trim/`。 |
+
+**fold 如何保住缓存命中。** 每次 fold 都要为前缀重付一次；目标是摊销成本，不是满分命中率。引擎守住缓存契约：fold 只追加——frontier 只前进，冻结区永不再改；view 由（历史, 折叠状态）确定性重建，因此两次 fold 之间序列化前缀字节不变，服务商缓存持续命中；fold 边界绝不把 assistant 的 tool-call 与其 tool 结果拆开；最后 `trimProtectedTail` 条消息豁免；一切皆 fail-open——内部出错退化为透传，绝不产生坏请求。
+
+**压缩仲裁。** 两个自动裁剪器抢同一份历史会互相重复摘要、互相摧毁 frontier，因此 `cordis.patch.yml` 给宿主的 `dsh-compaction-basic` 行设了 `auto: false`：context-trim 成为唯一语义裁剪器。手动 `/compact` 照常可用，force 档交接（借用的正是这条手动路径）不受影响。溢出恢复改由裁剪承担：超窗的那次尝试失败一次，随后紧急档折好 view，下一次尝试就能装下。
+
+**fork 继承。** 被 fork 的会话（子代理 fork 或交接备份）按 copy-on-fork 继承父会话的折叠状态——但仅当父状态存在且子会话历史确实能解析到父 frontier；否则子会话从干净状态起步。每个子会话只继承一次，跨重启幂等。
+
+**水位读的是 view。** 水位横幅报的是出站 view 的 token 数（折叠后模型真正看到的部分），不再是存储侧计数，重度折叠的会话因此不会再把水位钉死在 hard 档。
 
 ## 工作原理
 
@@ -113,7 +149,7 @@ bash <安装目录>/skills/db-query/scripts/setup.sh
 
 ## 维护注意
 
-- DSH 升级后若出厂预设插件列表有变，从新的 `presets/*.patch.yml` 重新同步 `cordis.patch.yml`（保留 doctrine suffix），然后重装。
+- DSH 升级后若出厂预设插件列表有变，从新的 `presets/*.patch.yml` 重新同步 `cordis.patch.yml`（保留 doctrine suffix 与压缩仲裁——`compaction-basic` 行上的 `auto: false`），然后重装。
 - 协议行（`[SWITCHMAN:LANG|POOLS|WATERMARK|TEAMS]`）刻意保持英文且字节稳定——不要本地化。
 - `npm pack --dry-run` 应保持审计过的 50 文件 / ~205 kB 形态（`docs/` 截图不进包）。
 - **零运行时依赖——硬性不变量。** 宿主侧包（`@deepseek-ai/schemastery`、cordis 等）只允许声明为 `peerDependencies`，由运行中的 DSH 用它自己的副本满足。普通 `dependencies` 会被物理安装进 profile 工作区（`<profile>/node_modules/…`），从而对同处 profile 的其他插件遮蔽宿主副本——1.7.0 把 schemastery 声明为普通依赖时，正是这个机制让 dshmarket 插件市场崩溃（一个进程里出现两份 schemastery，市场产生的 schema 与宿主不再同类）。`scripts/validate.mjs` 会在 `dependencies` 再次出现时直接失败；因此安装、升级、卸载 dsh-switchman 都不会再影响 dshmarket 或任何其他社区包在运行时解析到的模块。

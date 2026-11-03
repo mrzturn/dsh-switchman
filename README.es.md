@@ -102,7 +102,43 @@ Esto es todo el conjunto de valores tras una instalación nueva (fuente autorita
 
 **Enrutado por intención** (no disponible de fábrica; hacen falta clasificador + al menos un candidato + encender el interruptor maestro): `intentEnabled` = apagado (apagado, la entrada Auto queda oculta y las sesiones que ya la tenían elegida caen en la cadena de respaldo); ruta del clasificador sin configurar; tipo de clasificador `chat`; lista de candidatos vacía (las categorías preinstaladas solo entran en el enrutado cuando se les asigna un modelo); ventana de caché `300` s / umbral de confianza para el cambio `80` / timeout de clasificación `60000` ms; historial de `6` mensajes / `2400` caracteres; `intentContextWindow` = `200000`.
 
+**Recorte de contexto**: `trimEnabled` = encendido; `trimMode` = `auto` (totalmente automático); compuerta de crecimiento `22500` + incremento `50000` tokens; presión `75%` / emergencia `95%`; cola protegida `6` mensajes; tope de cadencia de folds `6` por hora; modelo secundario sin definir (hereda el modelo de la sesión) — detalles en la sección «Recorte automático del contexto» más abajo.
+
 **Notas de serie**: ① que el enrutado por intención no venga disponible de serie es intencionado: tres pasos para activarlo (clasificador, candidatos, interruptor); ② la ventana efectiva de Auto vale 200000 de serie — la barrera de seguridad garantiza 0.8×ventana ≥ force (150000), así que la línea de compactación del núcleo (160000) queda siempre por detrás de la línea de entrega suave (150000); ③ lo más perceptible de serie es el trío de niveles: 80k avisa de delegar / 120k aprieta la lectura / 150k respalda y entrega automáticamente — sin tocar ningún ajuste.
+
+## Recorte automático del contexto
+
+Las sesiones largas salen baratas: los tramos de conversación ya consumidos se pliegan en resúmenes deterministas compactos — de forma totalmente automática y sin romper la caché de prompts del proveedor. En un límite de inactividad, el motor de trim (`host/context-trim/`) elige los tramos que vale la pena plegar, un modelo secundario escribe el resumen (solo bajo presión de emergencia se recurre a un fold mecánico sin llamada al modelo secundario) y el fold se confirma en el estado de folds de la sesión. A partir de ahí, cada petición saliente se reconstruye desde ese estado — los bloques de resumen sustituyen a los tramos plegados y la cola viva queda intacta. La sesión almacenada jamás se reescribe, y nada ocurre en mitad de un stream.
+
+Niveles de automatización (`trimMode`):
+
+- **`off`** — solo medir: el muestreo de uso y de aciertos de caché sigue funcionando; sin banner ni folds.
+- **`advisory`** — el modelo de la sesión se pliega a sí mismo: se exponen las herramientas `ctx_trim_fold` y `ctx_trim_status` más la cabecera de protocolo.
+- **`auto`** (predeterminado) — todo lo anterior más folds automáticos en el límite de inactividad, en tres escalones: una compuerta de crecimiento (la view creció ≥ `trimGrowthTokens` Y un incremento comprimible contiguo ≥ `trimIncrementTokens`), un escalón de presión (`trimPressurePercent` de la ventana de contexto) y un escalón de emergencia (`trimEmergencyPercent` — un fold mecánico con su propio enfriamiento).
+
+Todas las claves viven en Ajustes → dsh-switchman; los valores por defecto salen de `host/config.js`:
+
+| Clave | Por defecto | Significado |
+| --- | --- | --- |
+| `trimEnabled` | `true` | Interruptor maestro. Apagado desactiva folds y métricas por completo (el listener degenera en puro paso a través). |
+| `trimMode` | `auto` | `off` solo medir / `advisory` folds dictados por el modelo / `auto` folds dictados por el sistema. |
+| `trimGrowthTokens` | `22500` | Compuerta de crecimiento: pliega cuando la view saliente crezca esto desde el último fold. |
+| `trimIncrementTokens` | `50000` | Compañera de la compuerta: el incremento comprimible contiguo también debe alcanzar este tamaño. |
+| `trimPressurePercent` | `75` | Escalón de presión: pliega cuando el uso de la view alcance este porcentaje de la ventana de contexto. |
+| `trimEmergencyPercent` | `95` | Escalón de emergencia: fold mecánico forzado (sin llamada al modelo secundario) a este porcentaje. |
+| `trimWindowTokens` | `0` | Límite de ventana efectivo para el cálculo de niveles: se calcula sobre min(ventana del modelo, límite). `0` = sigue a `wmForceTokens`. |
+| `trimProtectedTail` | `6` | Los últimos N mensajes nunca se pliegan. |
+| `trimMaxFoldsPerHour` | `6` | Tope de cadencia de folds por hora móvil para el modelo secundario (los de emergencia quedan exentos). |
+| `trimSideModel` | sin definir | Ruta del modelo secundario que escribe los resúmenes. Vacía = heredar el modelo actual de la sesión. |
+| `trimStateDir` | sin definir | Anula el directorio del estado de folds. Vacía = `<dshHome>/.dsh-switchman/state/trim/`. |
+
+**Cómo los folds conservan los aciertos de caché.** Cada fold repaga el prefijo una vez; el objetivo es el coste amortizado, no una tasa de aciertos perfecta. El motor hace cumplir el contrato de caché: los folds son de solo añadir — la frontier solo avanza y la zona congelada no se vuelve a editar; la view se reconstruye de forma determinista a partir de (historial, estado de folds), de modo que el prefijo serializado queda idéntico byte a byte entre folds y la caché del proveedor sigue acertando; los límites de fold jamás separan una tool-call del assistant de su resultado; los últimos `trimProtectedTail` mensajes quedan exentos; y todo falla abierto — un error interno degenera en paso a través, nunca en una petición rota.
+
+**Arbitraje de compactación.** Dos recortadores automáticos sobre un mismo historial se resumirían dos veces y destruirían la frontier mutuamente, así que `cordis.patch.yml` pone `auto: false` en las filas de `dsh-compaction-basic` del host: context-trim pasa a ser el único recortador semántico. El `/compact` manual sigue funcionando, y la entrega del escalón force (que toma prestado justamente ese camino manual) queda intacta. La recuperación de desbordamiento pasa al trim: el intento que excede la ventana falla una vez, luego el escalón de emergencia pliega la view para que el siguiente intento quepa.
+
+**Herencia en forks.** Una sesión forkeada (fork de subagente o respaldo de entrega) hereda el estado de folds del padre por copia al forkear — pero solo si el estado del padre existe y el historial del hijo realmente resuelve la frontier del padre; si no, el hijo arranca limpio. Una herencia por hijo, idempotente entre reinicios.
+
+**El banner de niveles lee la view.** El banner de niveles informa del recuento de tokens de la view saliente (lo que el modelo ve de verdad tras el plegado) en lugar del recuento almacenado, así una sesión muy plegada ya no clava el nivel de agua en el escalón hard.
 
 ## Cómo funciona
 
@@ -113,7 +149,7 @@ Esto es todo el conjunto de valores tras una instalación nueva (fuente autorita
 
 ## Mantenimiento
 
-- Si tras una actualización de DSH cambia la lista de plugins de los presets de fábrica, resincroniza `cordis.patch.yml` desde los nuevos `presets/*.patch.yml` (conserva el doctrine suffix) y reinstala.
+- Si tras una actualización de DSH cambia la lista de plugins de los presets de fábrica, resincroniza `cordis.patch.yml` desde los nuevos `presets/*.patch.yml` (conserva el doctrine suffix y el arbitraje de compactación — `auto: false` en las filas de `compaction-basic`) y reinstala.
 - Las líneas de protocolo (`[SWITCHMAN:LANG|POOLS|WATERMARK|TEAMS]`) están deliberadamente en inglés y son estables byte a byte — no las localices.
 - `npm pack --dry-run` debe mantenerse en la forma auditada de 50 archivos / ~205 kB (las capturas de `docs/` no entran en el paquete).
 

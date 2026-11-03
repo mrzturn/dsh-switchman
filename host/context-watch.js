@@ -53,6 +53,8 @@ import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { clearHandover, handoverOf, recordHandover } from "./handover-state.js";
 import { enumerateLiveSubagents, sessionRecordPath, sessionRecordsDir } from "./subagents.js";
+import { recentTrimViewTokensOf } from "./context-trim/index.js";
+import { recordForkLink, trimStateDirOf } from "./context-trim/fork.js";
 
 /** Tools whose result text is accounted against the per-turn read budget. */
 const ACCOUNT_TOOLS = new Set(["read", "glob", "grep", "bash"]);
@@ -146,11 +148,23 @@ function readThresholds(config) {
 }
 
 /** Measure one agent's session now; null when the meter is missing/failing. */
-function measureNow(ctx, agent) {
+export function measureNow(ctx, agent) {
 	try {
 		const measurement = agent?.session ? ctx.tokenMeter?.measure?.(agent.session) : undefined;
 		const used = Number.isFinite(measurement?.totalTokens) ? measurement.totalTokens : null;
-		return used === null ? null : used;
+		// Meter duality (design §8): prefer the trim layer's fresh outbound-view
+		// estimate when present — billion-context can fold far more away than the
+		// meter's stored tally admits, and the watermark must track what the
+		// model actually sees. Strictly additive + fail-open: any trim failure
+		// falls back to the stored measure.
+		try {
+			const sessionId = agent?.session?.id ?? (typeof agent?.id === "string" ? agent.id : null);
+			const viewTokens = sessionId === null ? null : recentTrimViewTokensOf(sessionId);
+			if (viewTokens !== null) return viewTokens;
+		} catch {
+			// fall through to the stored measure
+		}
+		return used;
 	} catch {
 		return null;
 	}
@@ -443,6 +457,12 @@ function applyContextWatch(ctx, config) {
 				);
 				return { childId: null, reason };
 			}
+			// Copy-on-fork: the backup child inherits this session's trim fold
+			// ledger at its first model call (host/context-trim/fork.js). The
+			// link is best-effort bookkeeping on an already-successful fork —
+			// recordForkLink never throws; a lost link only downgrades the
+			// child to a clean ledger.
+			recordForkLink(sessionId, started.childId, { stateDir: trimStateDirOf(config), warn });
 			return { childId: started.childId, reason: null };
 		} catch (error) {
 			const reason = error?.message ?? String(error);

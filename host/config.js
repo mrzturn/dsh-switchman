@@ -221,6 +221,46 @@ export const Config = z.object({
 	/** Optional last-resort route when the classifier fails and no previous
 	 *  routed model exists; empty = the first candidate. */
 	intentFallbackRoute: IntentRouteSchema.default({ provider: "", model: "" }).volatile(),
+
+	// --- Context trim: fully-automatic conversation compression ------------
+	/** Master switch for the context-trim layer (design:
+	 *  .dsh-switchman/analysis/context-trim-port-design.md). OFF disables
+	 *  view folding AND metrics sampling entirely; the llm/stream listener
+	 *  degrades to a pure pass-through. */
+	trimEnabled: z.boolean().default(true).volatile(),
+	/** Automation level: "off" = measure only (no banner, no folds),
+	 *  "advisory" = expose ctx_trim_fold/ctx_trim_status + the protocol head
+	 *  so the session model can fold itself, "auto" = everything plus
+	 *  idle-boundary automatic folds (growth gate / pressure / emergency). */
+	trimMode: z.union(["off", "advisory", "auto"]).default("auto").volatile(),
+	/** Growth gate (tier a): fold when the outbound-view estimate grew this
+	 *  much since the last fold. */
+	trimGrowthTokens: z.number().min(1000).default(22500).volatile(),
+	/** Growth gate companion: the contiguous compressible increment must
+	 *  also reach this many estimated tokens (chars/4 heuristic). */
+	trimIncrementTokens: z.number().min(1000).default(50000).volatile(),
+	/** Pressure tier (tier b): fold when view usage reaches this percent of
+	 *  the context window (requires a resolvable window; otherwise skipped). */
+	trimPressurePercent: z.number().min(1).max(100).default(75).volatile(),
+	/** Emergency tier (tier c): forced MECHANICAL fold (no side-model call)
+	 *  at this percent of the window; cooldown-gated. */
+	trimEmergencyPercent: z.number().min(1).max(100).default(95).volatile(),
+	/** Effective-window cap for the tier math: tier points are computed
+	 *  against min(model-resolved window, cap). 0 = auto (cap follows
+	 *  wmForceTokens, so folds always fire ahead of the handover tier). */
+	trimWindowTokens: z.number().min(0).default(0).volatile(),
+	/** Last N messages of a history are never folded (the live tail the
+	 *  next model call reasons over). */
+	trimProtectedTail: z.number().min(0).max(100).default(6).volatile(),
+	/** Side-model fold cadence cap per rolling hour (emergency mechanical
+	 *  folds are exempt; they have their own cooldown). */
+	trimMaxFoldsPerHour: z.number().min(1).max(60).default(6).volatile(),
+	/** Route for the side-model summarizer (L3). Empty = inherit the
+	 *  session's current model. */
+	trimSideModel: IntentRouteSchema.default({ provider: "", model: "" }).volatile(),
+	/** Explicit ledger state directory. Empty = <dshHome>/.dsh-switchman/
+	 *  state/trim/. */
+	trimStateDir: z.string().default("").volatile(),
 });
 
 /** The six dispatch lanes, in display order. */

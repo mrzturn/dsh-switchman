@@ -1,0 +1,167 @@
+/** dsh-switchman context-trim summarizer.
+ *
+ * Produces the summary text for one fold block, two ways:
+ *
+ * - summarizeWithModel — the L3 path (design §5): a side-model call via
+ *   llm.prepareCall + call.stream (receiver-bound on the llm service, the
+ *   same waterfall pattern intent classification uses). Guarded by a hard
+ *   deadline (AbortController); ANY failure (timeout, error chunk, empty
+ *   output) returns null and the caller skips the fold cycle — fail-open.
+ * - mechanicalSummary — the deterministic fallback used by the emergency
+ *   tier: structural heads of each message, no model round trip.
+ *
+ * The summary prompt carries the bili compression rules: message refs and
+ * file paths verbatim, decisions WITH rationale, exact values, open
+ * objectives carry forward, verbose logs drop.
+ */
+
+import { randomUUID } from "node:crypto";
+
+/** Default side-model summary deadline. Large increments legitimately
+ * take a while; the emergency tier does not wait on this path at all. */
+export const SUMMARY_TIMEOUT_MS = 120_000;
+
+/** Material cap: beyond this the render keeps head+tail and marks the cut
+ * (a 1M-token material would burn the side-model call for no fidelity). */
+export const MAX_MATERIAL_CHARS = 400_000;
+
+/** System prompt for the side-model summarizer. English per repo docs
+ * style; the OUTPUT language follows the summarized material. */
+export const SUMMARY_SYSTEM_PROMPT = [
+	"You compress one contiguous range of a coding-agent conversation into ONE self-contained plain-text summary that will replace that range permanently.",
+	"",
+	"KEEP VERBATIM:",
+	"- Full file paths with line numbers (lib/hooks.ts:347) — never bare filenames.",
+	"- Function/class/type signatures and the critical code line that encodes a finding.",
+	"- Error messages and stack-trace key lines (exact text).",
+	"- Exact values: versions, config keys, thresholds, magic numbers.",
+	"- Decisions WITH their rationale (the because is load-bearing).",
+	"- Open objectives, unresolved TODOs, and open questions, each tagged with its message ref.",
+	"",
+	"DROP (keep one line of lesson for failures): verbose logs once the error line is captured, repeated file reads, dead-end exploration details, back-and-forth discussion once the outcome is recorded.",
+	"",
+	"FORMAT:",
+	"- Dense bullets, short thematic headers; no narrative prose.",
+	"- Reference messages as [m<ref>] using the refs in the material.",
+	"- Write the summary in the same language as the material.",
+	"- Output ONLY the summary text.",
+].join("\n");
+
+/** Render the fold material for one message range: labeled, ref-stamped
+ * blocks. Deterministic (same slice, same bytes) — refs come from refOf so
+ * id-less messages stay stable across re-sends. */
+export function renderMaterial(messages, startIdx, endIdx, refOf) {
+	const parts = [];
+	let chars = 0;
+	let truncated = false;
+	for (let i = startIdx; i <= endIdx; i++) {
+		const message = messages[i];
+		const ref = refOf(message, i);
+		const role = typeof message?.role === "string" ? message.role : "unknown";
+		let text;
+		const content = message?.content;
+		if (typeof content === "string") text = content;
+		else if (Array.isArray(content)) {
+			const chunks = [];
+			for (const block of content) {
+				if (block !== null && typeof block === "object" && typeof block.text === "string") chunks.push(block.text);
+				else {
+					try {
+						chunks.push(JSON.stringify(block ?? null));
+					} catch {
+						chunks.push("[unserializable]");
+					}
+				}
+			}
+			text = chunks.join("\n");
+		} else {
+			try {
+				text = JSON.stringify(message ?? null);
+			} catch {
+				text = "[unserializable]";
+			}
+		}
+		if (Array.isArray(message?.tool_calls) && message.tool_calls.length > 0) {
+			try {
+				text += `\n[tool_calls] ${JSON.stringify(message.tool_calls)}`;
+			} catch {
+				/* keep the base text */
+			}
+		}
+		const head = `--- [m${ref}] (${role}) ---\n`;
+		const body = `${text}\n\n`;
+		if (chars + head.length + body.length > MAX_MATERIAL_CHARS) {
+			truncated = true;
+			break;
+		}
+		parts.push(head + body);
+		chars += head.length + body.length;
+	}
+	if (truncated) parts.push(`--- [...material truncated after ${chars} chars; ${endIdx - startIdx + 1 - (parts.length - 1)} messages dropped from this render...] ---\n`);
+	return parts.join("");
+}
+
+/** Emergency-tier mechanical summary: deterministic structural heads (no
+ * model call). One line per message: ref, role, first line (capped). */
+export function mechanicalSummary(messages, startIdx, endIdx, refOf) {
+	const lines = [`Mechanical fold of ${endIdx - startIdx + 1} messages (emergency tier; no model summary available).`, ""];
+	for (let i = startIdx; i <= endIdx; i++) {
+		const message = messages[i];
+		const ref = refOf(message, i);
+		const role = typeof message?.role === "string" ? message.role : "unknown";
+		const content = message?.content;
+		let firstLine = "";
+		if (typeof content === "string") firstLine = content;
+		else if (Array.isArray(content)) {
+			for (const block of content) {
+				if (block !== null && typeof block === "object" && typeof block.text === "string" && block.text.trim() !== "") {
+					firstLine = block.text;
+					break;
+				}
+			}
+		}
+		const line = firstLine.replace(/\s+/gu, " ").trim().slice(0, 160);
+		lines.push(`- [m${ref}] (${role}) ${line === "" ? "(no text content)" : line}`);
+	}
+	lines.push("", "Open objectives and exact details are NOT preserved by this mechanical fold; the next model-driven fold will supersede it.");
+	return lines.join("\n");
+}
+
+/** Side-model summary. llm: the dsh llm service (receiver-bound methods);
+ * route: { provider, model } | null (null → caller skips); materialText:
+ * renderMaterial output; deadlineMs: hard budget. Returns the summary
+ * text, or null on ANY failure (caller skips the fold cycle). */
+export async function summarizeWithModel(llm, route, materialText, options = {}) {
+	if (route === null || route === undefined) return null;
+	if (typeof llm?.prepareCall !== "function") return null;
+	const deadlineMs = Number.isFinite(options.deadlineMs) && options.deadlineMs > 0 ? options.deadlineMs : SUMMARY_TIMEOUT_MS;
+	const maxTokens = Number.isFinite(options.maxTokens) && options.maxTokens > 0 ? options.maxTokens : 8_192;
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(new Error("trim summary deadline")), deadlineMs);
+	try {
+		const call = await llm.prepareCall(
+			{ provider: route.provider, model: route.model, maxTokens },
+			controller.signal,
+			() => ({}),
+		);
+		let text = "";
+		const streamOptions = {
+			messages: [
+				{ id: randomUUID(), role: "system", content: SUMMARY_SYSTEM_PROMPT },
+				{ id: randomUUID(), role: "user", content: [{ type: "text", text: materialText }] },
+			],
+		};
+		for await (const chunk of call.stream(streamOptions)) {
+			if (chunk?.type === "text-delta" && typeof chunk.text === "string") text += chunk.text;
+			else if (chunk?.type === "finish") {
+				if (chunk.kind === "error" || chunk.kind === "aborted") return null;
+			}
+		}
+		const summary = text.trim();
+		return summary === "" ? null : summary;
+	} catch {
+		return null;
+	} finally {
+		clearTimeout(timer);
+	}
+}

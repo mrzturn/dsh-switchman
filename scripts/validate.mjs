@@ -7,7 +7,9 @@
  *    plus exactly 1 insert row (this bundle's own Host-half plugin row).
  * 2. Every preset's config matches the shipped preset file verbatim, except
  *    the persona suffix, which must extend the shipped suffix with the
- *    dsh-switchman doctrine.
+ *    dsh-switchman doctrine, and one deliberate diff: every compaction-basic
+ *    row carries exactly { auto: false } (compaction arbitration — see
+ *    neutralizeAutoOff and the shipped-engine drift guard).
  * 3. All four persona suffixes resolve to the same string (shared anchor).
  * 4. package.json keeps the client-half discovery surface intact: the
  *    "./client" and "./package.json" exports and the dsh.client declaration
@@ -93,6 +95,13 @@ function readShippedPatch(pid) {
 	return readAsarFile(`${APP_ROOT}.asar`, `dsh/node_modules/@deepseek-ai/dsh-web-app/presets/${pid}.patch.yml`);
 }
 
+/** One shipped module's source text: legacy app tree first, then the asar. */
+function readShippedModuleSource(moduleRelPath) {
+	const plain = `${APP_ROOT}/node_modules/${moduleRelPath}`;
+	if (existsSync(plain)) return readFileSync(plain, "utf8");
+	return readAsarFile(`${APP_ROOT}.asar`, `dsh/node_modules/${moduleRelPath}`);
+}
+
 const load = (path) =>
 	YAML.parse(path, {
 		customTags: [
@@ -116,6 +125,30 @@ const stripSuffix = (plugins) =>
 			? { ...row, config: Object.fromEntries(Object.entries(row.config ?? {}).filter(([k]) => k !== "suffix")) }
 			: row,
 	);
+
+// Compaction arbitration (option A): the compaction-basic rows intentionally
+// deviate from the shipped presets by exactly { auto: false }. That flag
+// silences ONLY the engine's automatic triggers (agent/pre-step pressure and
+// the agent/request-error overflow retry, both registered in
+// _registerAutomaticCompaction when auto is true); the compaction service and
+// manual /compact (compactNow) are unaffected. This helper asserts the
+// deviation stays exactly that — any extra key or a truthy auto fails loudly —
+// and strips it before the verbatim shipped comparison.
+const neutralizeAutoOff = (plugins) =>
+	plugins.map((row) => {
+		// Group rows carry child rows in `config`; recurse one level — the
+		// compaction-basic row lives INSIDE the `compaction` cordis:group row.
+		const children = Array.isArray(row?.config) ? neutralizeAutoOff(row.config) : undefined;
+		if (row?.name !== "@deepseek-ai/dsh-compaction-basic") {
+			return children === undefined ? row : { ...row, config: children };
+		}
+		assert.deepEqual(
+			row.config,
+			{ auto: false },
+			`${row.id}: compaction arbitration config must be exactly { auto: false }`,
+		);
+		return { id: row.id, name: row.name };
+	});
 
 const mine = load(readFileSync(MINE, "utf8"));
 assert.ok(Array.isArray(mine), "patch must be a YAML array");
@@ -170,7 +203,7 @@ for (const pid of PRESETS) {
 	assert.ok(suffix.startsWith((shippedSuffix ?? "").replace(/\n+$/, "")), `${pid}: shipped suffix prefix lost`);
 	suffixes.push(suffix);
 
-	const a = stripSuffix(cfg.plugins);
+	const a = neutralizeAutoOff(stripSuffix(cfg.plugins));
 	const b = stripSuffix(shipped.plugins);
 	try {
 		assert.deepEqual(a, b, `${pid}: plugins differ from shipped`);
@@ -184,6 +217,26 @@ for (const pid of PRESETS) {
 }
 
 assert.equal(new Set(suffixes).size, 1, "persona suffixes are not identical across presets");
+
+// DSH-update drift guard: `auto` must remain the gate that registers the
+// automatic compaction triggers and must keep defaulting to true. If a DSH
+// upgrade renames or re-shapes it, the arbitration config above silently
+// stops disabling anything (unknown config keys are ignored; the default
+// re-enables the triggers) — this guard turns that silent regression into a
+// loud failure here instead of a surprise in live sessions.
+const engineSource = readShippedModuleSource("@deepseek-ai/dsh-compaction-basic/lib/index.js");
+assert.ok(
+	engineSource !== undefined,
+	"cannot read the shipped dsh-compaction-basic source (wrong DSH_APP_ROOT?)",
+);
+assert.ok(
+	engineSource.includes("if (this.config.auto)"),
+	"shipped compaction-basic no longer gates automatic triggers on this.config.auto — re-review the compaction arbitration config",
+);
+assert.ok(
+	engineSource.includes("auto: config.auto ?? true"),
+	"shipped compaction-basic no longer defaults auto to true — re-review the compaction arbitration config",
+);
 }
 
 // --- package.json: client-half discovery surface (regression guard) ---

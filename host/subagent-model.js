@@ -149,4 +149,4 @@ function applySubagentModel(ctx) {
 	});
 }
 
-export { applySubagentModel, sessionModelSelectionOf };
+export { applySubagentModel, childSessionIdOf, sessionModelSelectionOf };

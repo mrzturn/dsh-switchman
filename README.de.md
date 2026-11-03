@@ -102,7 +102,43 @@ Alles Folgende sind die vollständigen Werte direkt nach der Neuinstallation (ma
 
 **Intent-Routing** (ab Werk unbrauchbar; nötig sind Klassifikator + mindestens ein Kandidat + der Hauptschalter): `intentEnabled` = aus (ist er aus, bleibt der Auto-Eintrag verborgen, und Sessions, die bereits Auto gewählt hatten, laufen über die Fallback-Kette); Klassifikator-Route nicht gesetzt; Klassifikatortyp `chat`; Kandidatenliste leer (die mitgelieferten Kategorien nehmen erst mit eingetragenem Modell am Routing teil); Cache-Fenster `300` s / Umschalt-Vertrauensschwelle `80` / Klassifikations-Timeout `60000` ms; Verlauf `6` Nachrichten / `2400` Zeichen; `intentContextWindow` = `200000`.
 
+**Kontext-Trimming**: `trimEnabled` = an; `trimMode` = `auto` (vollautomatisch); Wachstumsschwelle `22500` + Zuwachs `50000` Tokens; Druck `75%` / Notfall `95%`; geschütztes Ende `6` Nachrichten; Fold-Takt-Obergrenze `6` pro Stunde; Nebenmodell nicht gesetzt (erbt das Session-Modell) — Details im Abschnitt „Automatisches Kontext-Trimming“ unten.
+
 **Out-of-the-Box-Anmerkungen**: ① dass Intent-Routing ab Werk unbrauchbar ist, ist Absicht — drei Schritte zum Einschalten (Klassifikator, Kandidaten, Schalter); ② das wirksame Auto-Fenster steht ab Werk auf 200000 — die Leitplanke garantiert 0.8×Fenster ≥ force (150000), die Kern-Komprimierlinie (160000) liegt also stets hinter der Linie der weichen Übergabe (150000); ③ am spürbarsten ab Werk ist das Wasserstands-Trio: 80k mahnt zur Delegation / 120k strafft das Lesen / 150k sichert automatisch ab und übergibt — ganz ohne Einstellungen.
+
+## Automatisches Kontext-Trimming
+
+Lange Sessions bleiben günstig: verarbeitete Gesprächsbereiche werden zu kompakten deterministischen Zusammenfassungen gefaltet — vollautomatisch und ohne den Prompt-Cache des Anbieters zu brechen. An einer Leerlauf-Grenze wählt die Trim-Engine (`host/context-trim/`) die faltenswerten Bereiche, ein Nebenmodell schreibt die Zusammenfassung (nur unter Notfall-Druck greift stattdessen ein mechanischer Fold ohne Nebenmodell-Aufruf), und der Fold wird in den Fold-Zustand der Session committet. Von da an wird jede ausgehende Anfrage aus diesem Zustand neu aufgebaut — Zusammenfassungsblöcke ersetzen die gefalteten Bereiche, der lebende Tail bleibt unangetastet. Die gespeicherte Session wird nie umgeschrieben, und mitten im Stream passiert niemals etwas.
+
+Automatisierungsstufen (`trimMode`):
+
+- **`off`** — nur messen: Usage- und Cache-Hit-Sampling läuft weiter; kein Banner, keine Folds.
+- **`advisory`** — das Session-Modell faltet selbst: die Tools `ctx_trim_fold` und `ctx_trim_status` plus der Protokollkopf werden dafür freigegeben.
+- **`auto`** (Standard) — alles darüber hinaus plus automatische Folds an der Leerlauf-Grenze, in drei Stufen: eine Wachstumsschwelle (die View wuchs ≥ `trimGrowthTokens` UND ein zusammenhängender komprimierbarer Zuwachs ≥ `trimIncrementTokens`), eine Druckstufe (`trimPressurePercent` des Kontextfensters) und eine Notfallstufe (`trimEmergencyPercent` — ein mechanischer Fold mit eigener Abklingzeit).
+
+Alle Schlüssel liegen unter Einstellungen → dsh-switchman; Defaults aus `host/config.js`:
+
+| Schlüssel | Standard | Bedeutung |
+| --- | --- | --- |
+| `trimEnabled` | `true` | Hauptschalter. AUS deaktiviert Folds und Metriken komplett (der Listener wird zum reinen Durchreichen). |
+| `trimMode` | `auto` | `off` nur messen / `advisory` modellgetriebene Folds / `auto` systemgetriebene Folds. |
+| `trimGrowthTokens` | `22500` | Wachstumsschwelle: falte, wenn die ausgehende View seit dem letzten Fold so viel gewachsen ist. |
+| `trimIncrementTokens` | `50000` | Schwellen-Begleiter: der zusammenhängende komprimierbare Zuwachs muss ebenfalls diese Größe erreichen. |
+| `trimPressurePercent` | `75` | Druckstufe: falte, wenn die View-Nutzung diesen Prozentsatz des Kontextfensters erreicht. |
+| `trimEmergencyPercent` | `95` | Notfallstufe: erzwungener mechanischer Fold (kein Nebenmodell-Aufruf) bei diesem Prozentsatz. |
+| `trimWindowTokens` | `0` | Effektives Fensterlimit für die Stufenberechnung: gerechnet gegen min(Modellfenster, Limit). `0` = folgt `wmForceTokens`. |
+| `trimProtectedTail` | `6` | Die letzten N Nachrichten werden nie gefaltet. |
+| `trimMaxFoldsPerHour` | `6` | Fold-Takt-Obergrenze pro rollierender Stunde für Nebenmodell-Folds (Notfall-Folds ausgenommen). |
+| `trimSideModel` | nicht gesetzt | Route des zusammenfassenden Nebenmodells. Leer = das aktuelle Session-Modell erben. |
+| `trimStateDir` | nicht gesetzt | Überschreibt das Fold-Zustandsverzeichnis. Leer = `<dshHome>/.dsh-switchman/state/trim/`. |
+
+**Wie Folds Cache-Hits bewahren.** Jeder Fold zahlt das Präfix einmal zurück; das Ziel sind amortisierte Kosten, keine perfekte Hit-Rate. Die Engine erzwingt den Cache-Vertrag: Folds sind append-only — die Frontier bewegt sich nur vorwärts, die eingefrorene Zone wird nie wieder angetastet; die View wird deterministisch aus (Historie, Fold-Zustand) neu aufgebaut, sodass das serialisierte Präfix zwischen Folds byte-identisch bleibt und der Anbieter-Cache weiter trifft; Fold-Grenzen trennen nie einen Assistant-Tool-Call von seinem Tool-Ergebnis; die letzten `trimProtectedTail` Nachrichten sind ausgenommen; und alles failt offen — ein interner Fehler wird zum Durchreichen, nie zur kaputten Anfrage.
+
+**Komprimierungs-Arbitrage.** Zwei automatische Trimmer über einer Historie würden doppelt zusammenfassen und einander die Frontier zerstören, deshalb setzt `cordis.patch.yml` bei den `dsh-compaction-basic`-Zeilen des Hosts `auto: false`: context-trim wird zum einzigen semantischen Trimmer. Manuelles `/compact` funktioniert weiter, und die Force-Stufen-Übergabe (sie leiht sich genau diesen manuellen Pfad) bleibt unberührt. Overflow-Recovery wandert zum Trim: Der Versuch über dem Fenster scheitert einmal, dann faltet die Notfallstufe die View, sodass der nächste Versuch passt.
+
+**Fork-Vererbung.** Eine geforkte Session (Subagent-Fork oder Übergabe-Backup) erbt den Fold-Zustand des Elternteils per Copy-on-Fork — aber nur, wenn der Elter-Zustand existiert und die Historie des Kindes die Frontier des Elternteils tatsächlich auflöst; andernfalls startet das Kind sauber. Eine Vererbung pro Kind, idempotent über Neustarts.
+
+**Der Wasserstand liest die View.** Das Wasserstand-Banner meldet die Token-Zahl der ausgehenden View (das, was das Modell nach dem Falten tatsächlich sieht) statt der gespeicherten Zählung — eine stark gefaltete Session pinnt den Wasserstand damit nicht mehr auf der harten Stufe fest.
 
 ## Funktionsweise
 
@@ -113,7 +149,7 @@ Alles Folgende sind die vollständigen Werte direkt nach der Neuinstallation (ma
 
 ## Hinweise zur Wartung
 
-- Ändert ein DSH-Upgrade die Werks-Preset-Pluginliste, `cordis.patch.yml` aus dem neuen `presets/*.patch.yml` neu synchronisieren (Doctrine-Suffix behalten) und neu installieren.
+- Ändert ein DSH-Upgrade die Werks-Preset-Pluginliste, `cordis.patch.yml` aus dem neuen `presets/*.patch.yml` neu synchronisieren (Doctrine-Suffix und die Komprimierungs-Arbitrage — `auto: false` auf den `compaction-basic`-Zeilen — behalten) und neu installieren.
 - Die Protokollzeilen (`[SWITCHMAN:LANG|POOLS|WATERMARK|TEAMS]`) sind bewusst englisch und byte-stabil — nicht lokalisieren.
 - `npm pack --dry-run` muss die auditierte Form mit 50 Dateien / ~205 kB behalten (`docs/`-Screenshots kommen nicht ins Paket).
 

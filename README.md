@@ -102,7 +102,43 @@ Everything below is the full set of defaults after a fresh install (authoritativ
 
 **Intent routing** (unavailable by default; needs a classifier + at least one candidate + the master switch on): `intentEnabled` = off (while off, the Auto entry stays hidden and sessions already on Auto fall through the fallback chain); the classifier route is unset; the classifier type is `chat`; the candidate list is empty (the preset categories join routing only once given a model); cache window `300` s / switch confidence threshold `80` / classification timeout `60000` ms; history `6` messages / `2400` characters; `intentContextWindow` = `200000`.
 
+**Context trim**: `trimEnabled` = on; `trimMode` = `auto` (fully automatic); growth gate `22500` tokens + increment `50000` tokens; pressure `75%` / emergency `95%`; protected tail `6` messages; fold cadence cap `6` per hour; side model unset (inherits the session model) — details in the "Automatic context trim" section below.
+
 **Out-of-the-box notes**: ① intent routing being unavailable out of the box is by design — three steps to switch it on (classifier, candidates, the master switch); ② Auto's effective window is 200000 out of the box — the guardrail guarantees 0.8×window ≥ force (150000), so the core compaction line (160000) always sits after the smooth-handover line (150000); ③ the most tangible out-of-the-box effect is the watermark trio: 80k nudges delegation / 120k tightens reading / 150k backs up and hands over automatically — no configuration needed.
+
+## Automatic context trim
+
+Long sessions stay cheap: consumed conversation ranges are folded into compact deterministic summaries — fully automatically, without breaking the provider prompt cache. At an idle boundary the trim engine (`host/context-trim/`) picks the ranges worth folding, a side model writes the summary (only under emergency pressure does a mechanical fold run instead — no side-model call), and the fold is committed to the session's fold state. From then on every outbound request is rebuilt from that state — summary blocks replace the folded ranges, the live tail stays untouched. The stored session is never rewritten, and nothing ever happens mid-stream.
+
+Automation levels (`trimMode`):
+
+- **`off`** — measure only: usage and cache-hit sampling still runs; no banner, no folds.
+- **`advisory`** — the session model folds itself: the `ctx_trim_fold` and `ctx_trim_status` tools plus the protocol head are exposed for it.
+- **`auto`** (default) — everything above plus automatic folds at the idle boundary, in three tiers: a growth gate (the view grew ≥ `trimGrowthTokens` AND a contiguous compressible increment ≥ `trimIncrementTokens`), a pressure tier (`trimPressurePercent` of the context window), and an emergency tier (`trimEmergencyPercent` — a mechanical fold with its own cooldown).
+
+All keys live in Settings → dsh-switchman; defaults from `host/config.js`:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `trimEnabled` | `true` | Master switch. OFF disables folding and metrics entirely (the listener degrades to a pure pass-through). |
+| `trimMode` | `auto` | `off` measure only / `advisory` model-driven folds / `auto` system-driven folds. |
+| `trimGrowthTokens` | `22500` | Growth gate: fold when the outbound view grew this much since the last fold. |
+| `trimIncrementTokens` | `50000` | Gate companion: the contiguous compressible increment must also reach this size. |
+| `trimPressurePercent` | `75` | Pressure tier: fold when view usage reaches this percent of the context window. |
+| `trimEmergencyPercent` | `95` | Emergency tier: forced mechanical fold (no side-model call) at this percent. |
+| `trimWindowTokens` | `0` | Effective-window cap for tier math: tiers are computed against min(model window, cap). `0` = follow `wmForceTokens`. |
+| `trimProtectedTail` | `6` | The last N messages are never folded. |
+| `trimMaxFoldsPerHour` | `6` | Side-model fold cadence cap per rolling hour (emergency folds are exempt). |
+| `trimSideModel` | unset | Route for the summary side model. Empty = inherit the session's current model. |
+| `trimStateDir` | unset | Fold-state directory override. Empty = `<dshHome>/.dsh-switchman/state/trim/`. |
+
+**How folds preserve cache hits.** Every fold re-pays the prefix once; the goal is amortized cost, not a perfect hit rate. The engine enforces the cache contract: folds are append-only — the frontier only moves forward and the frozen zone is never edited again; the view is rebuilt deterministically from (history, fold state), so the serialized prefix stays byte-identical between folds and the provider cache keeps hitting; fold boundaries never split an assistant tool-call from its tool result; the last `trimProtectedTail` messages are exempt; and everything fails open — an internal error degrades to a pass-through, never a broken request.
+
+**Compaction arbitration.** Two automatic trimmers over one history would double-summarize and destroy each other's frontier, so `cordis.patch.yml` sets `auto: false` on the host's `dsh-compaction-basic` rows: context-trim becomes the single semantic trimmer. Manual `/compact` keeps working, and the force-tier handover (which borrows that same manual path) is untouched. Overflow recovery moves to trim: an over-window attempt fails once, then the emergency tier folds the view so the next attempt fits.
+
+**Fork inheritance.** A forked session (a subagent fork or the handover backup) inherits the parent's fold state copy-on-fork — but only when the parent state exists and the child's history actually resolves the parent's frontier; otherwise the child starts clean. One inheritance per child, idempotent across restarts.
+
+**The watermark reads the view.** The watermark banner reports the outbound view's token count (what the model actually sees after folding) instead of the stored tally, so a heavily folded session no longer pins the watermark at the hard tier.
 
 ## How it works
 
@@ -113,7 +149,7 @@ Everything below is the full set of defaults after a fresh install (authoritativ
 
 ## Maintenance notes
 
-- After a DSH upgrade, if the factory preset plugin list changed, re-sync `cordis.patch.yml` from the new `presets/*.patch.yml` (keeping the doctrine suffix), then reinstall.
+- After a DSH upgrade, if the factory preset plugin list changed, re-sync `cordis.patch.yml` from the new `presets/*.patch.yml` (keeping the doctrine suffix and the compaction arbitration — `auto: false` on the `compaction-basic` rows), then reinstall.
 - Protocol lines (`[SWITCHMAN:LANG|POOLS|WATERMARK|TEAMS]`) are deliberately English and byte-stable — don't localize them.
 - `npm pack --dry-run` should keep the audited 50-file / ~205 kB shape (`docs/` screenshots stay out of the package).
 - **Zero runtime dependencies — a hard invariant.** Host-plane packages (`@deepseek-ai/schemastery`, cordis, …) are declared as `peerDependencies` only, and the running DSH satisfies them from its own copy. An ordinary `dependencies` entry is physically installed into the profile workspace (`<profile>/node_modules/…`), where it shadows the host's copy for every other profile-resident plugin — this is exactly what crashed the dshmarket plugin market while 1.7.0 carried schemastery as a dependency (two schemastery instances in one process; the market's schemas no longer matched the host's). `scripts/validate.mjs` fails if a `dependencies` entry ever reappears, so installing, updating, or removing dsh-switchman can never touch what dshmarket or any other community bundle resolves at runtime.
