@@ -146,24 +146,29 @@ export async function summarizeWithModel(llm, route, materialText, options = {})
 			(controls) => controls,
 		);
 		let text = "";
+			let finishKind = null;
 		// stream options MUST carry the prepared call config — the adapter
 		// dispatch binds credentials/routing from it (same waterfall shape as
 		// the intent classifier; dropping it fails prepare-time integrity).
+		// system rides as a top-level option and the user message carries a
+		// source tag, exactly like the intent classifier's proven shape.
 		const streamOptions = {
 			...call.config,
+			system: SUMMARY_SYSTEM_PROMPT,
 			messages: [
-				{ id: randomUUID(), role: "system", content: SUMMARY_SYSTEM_PROMPT },
-				{ id: randomUUID(), role: "user", content: [{ type: "text", text: materialText }] },
+				{ id: randomUUID(), role: "user", content: [{ type: "text", text: materialText }], source: { kind: "dsh-switchman-trim-summary" } },
 			],
+			signal: controller.signal,
 		};
 		for await (const chunk of call.stream(streamOptions)) {
 			if (chunk?.type === "text-delta" && typeof chunk.text === "string") text += chunk.text;
 			else if (chunk?.type === "finish") {
+				finishKind = chunk.kind ?? null;
 				if (chunk.kind === "error" || chunk.kind === "aborted") { fail?.(`stream-${chunk.kind}`); return null; }
 			}
 		}
 		const summary = text.trim();
-		if (summary === "") { fail?.("empty-output"); return null; }
+		if (summary === "") { fail?.(`empty-output finish=${finishKind ?? "none"}`); return null; }
 		return summary;
 	} catch (error) {
 		fail?.(`error: ${error?.message ?? error}`);
