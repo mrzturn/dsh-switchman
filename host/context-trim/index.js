@@ -409,7 +409,9 @@ export function applyContextTrim(ctx, config) {
 		// pre-epoch baseline across the boundary produced misleading negative
 		// growth and a growth gate armed against vanished messages. The flag
 		// clears when a fold applies again (fresh epoch folds locate).
-		if (ledgerIsStale(view, ledger)) {
+		// Skipped while a fold cycle is in flight: the cycle's own span dispatch presents a
+		// subset array where refs cannot locate — not epoch evidence, just self-noise.
+		if (!inFlight.has(sessionId) && ledgerIsStale(view, ledger)) {
 			if (!epochResetDoneBySession.has(sessionId)) {
 				epochResetDoneBySession.set(sessionId, true);
 				if (epochResetDoneBySession.size > 200) epochResetDoneBySession.delete(epochResetDoneBySession.keys().next().value); // bounded like captures/trimViewBySession
@@ -824,5 +826,5 @@ return renderTrimContextLine(label, {
 		warn(`[context-trim] ctx.inject(llm) failed: ${error?.message ?? error}`);
 	}
 
-	return { store, metrics, captures, maybeFold, maybeInherit, applyViewToOptions, renderTrimContextLine: (agent) => renderTrimContextLine(agent, { enabled: enabledNow(), mode: modeNow(), viewTokens: null, windowTokens: null, folds: 0, growthTokens: null, lastModel: null }) };
+	return { store, metrics, captures, inFlight, maybeFold, maybeInherit, applyViewToOptions, renderTrimContextLine: (agent) => renderTrimContextLine(agent, { enabled: enabledNow(), mode: modeNow(), viewTokens: null, windowTokens: null, folds: 0, growthTokens: null, lastModel: null }) };
 }

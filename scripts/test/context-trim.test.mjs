@@ -763,6 +763,54 @@ describe("assembly: applyContextTrim with a mock ctx", () => {
 		ledger.blocks.push({ refRange: { firstId: refOf(cap[0], 0), lastId: refOf(cap[1], 1) }, count: 2, approxTokens: 4, summary: "bad", kind: "summary", tier: "model" });
 		assert.equal(buildView(cap, ledger, { protectedTail: 0 }).applied, 0);
 	});
+	test("host-compaction epoch boundary re-anchors the growth baseline once per epoch", async () => {
+		let listener = null;
+		const fiber = { on: (e, fn) => { listener = fn; }, off: () => {}, effect: () => {} };
+		const { ctx } = mockCtx({ llmFiber: fiber });
+		const handle = applyContextTrim(ctx, config);
+		const finish = async function* () { yield { type: "finish", usage: { input_tokens: 10 } }; };
+		const r1 = listener({ sessionId: "sess-epoch", messages: makeMessages(20), provider: "p", model: "m" }, finish);
+		for await (const c of r1) void c;
+		const capture = handle.captures.get("sess-epoch");
+		assert.equal(handle.store.commitFold("sess-epoch", blockFor(capture.messages, 0, 9, "epoch fold"), refPositions(capture.messages)).ok, true);
+		handle.store.recordFoldBaseline("sess-epoch", 91_500, 9_136);
+		// Host compaction replaced history: every block fails to locate → reset once.
+		const r2 = listener({ sessionId: "sess-epoch", messages: makeMessages(20, 7), provider: "p", model: "m" }, finish);
+		for await (const c of r2) void c;
+		const ledger = handle.store.ledgerOf("sess-epoch");
+		assert.notEqual(ledger.lastFoldViewTokens, 91_500);
+		assert.equal(ledger.lastFoldLowTokens, ledger.lastFoldViewTokens);
+		// Flag consumed: a second stale dispatch in the same epoch does NOT reset again.
+		const r3 = listener({ sessionId: "sess-epoch", messages: makeMessages(20, 11), provider: "p", model: "m" }, finish);
+		for await (const c of r3) void c;
+		assert.equal(handle.store.ledgerOf("sess-epoch").lastFoldViewTokens, ledger.lastFoldViewTokens);
+	});
+
+	test("epoch reset is suppressed while a fold cycle is in flight (span self-dispatch)", async () => {
+		let listener = null;
+		const fiber = { on: (e, fn) => { listener = fn; }, off: () => {}, effect: () => {} };
+		const { ctx } = mockCtx({ llmFiber: fiber });
+		const handle = applyContextTrim(ctx, config);
+		const finish = async function* () { yield { type: "finish", usage: { input_tokens: 10 } }; };
+		const r1 = listener({ sessionId: "sess-flight", messages: makeMessages(20), provider: "p", model: "m" }, finish);
+		for await (const c of r1) void c;
+		const capture = handle.captures.get("sess-flight");
+		assert.equal(handle.store.commitFold("sess-flight", blockFor(capture.messages, 0, 9, "flight fold"), refPositions(capture.messages)).ok, true);
+		handle.store.recordFoldBaseline("sess-flight", 91_500, 9_136);
+		// The cycle's own span dispatch presents a subset array — refs all fail.
+		handle.inFlight.add("sess-flight");
+		const r2 = listener({ sessionId: "sess-flight", messages: makeMessages(20, 7), provider: "p", model: "m" }, finish);
+		for await (const c of r2) void c;
+		assert.equal(handle.store.ledgerOf("sess-flight").lastFoldViewTokens, 91_500);
+		assert.equal(handle.store.ledgerOf("sess-flight").lastFoldLowTokens, 9_136);
+		// Suppression must not consume the epoch flag: a real epoch still resets.
+		handle.inFlight.delete("sess-flight");
+		const r3 = listener({ sessionId: "sess-flight", messages: makeMessages(20, 7), provider: "p", model: "m" }, finish);
+		for await (const c of r3) void c;
+		const ledger = handle.store.ledgerOf("sess-flight");
+		assert.notEqual(ledger.lastFoldViewTokens, 91_500);
+		assert.equal(ledger.lastFoldLowTokens, ledger.lastFoldViewTokens);
+	});
 });
 
 describe("regression: duplicate refs (identical content)", () => {
