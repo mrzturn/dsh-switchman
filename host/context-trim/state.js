@@ -42,6 +42,8 @@ export function emptyLedger(sessionId) {
 		blocks: [],
 		frontier: null,
 		lastFoldViewTokens: 0,
+		lastFoldViewTokens: 0,
+		lastFoldLowTokens: 0,
 		lastFoldAt: 0,
 		foldsThisHour: [],
 		// Fork-state inheritance marker (fork.js): set only when this ledger
@@ -105,6 +107,8 @@ export function createStore(options = {}) {
 						blocks: parsed.blocks,
 						frontier: typeof parsed.frontier === "string" ? parsed.frontier : null,
 						lastFoldViewTokens: Number.isFinite(parsed.lastFoldViewTokens) ? parsed.lastFoldViewTokens : 0,
+						lastFoldViewTokens: Number.isFinite(parsed.lastFoldViewTokens) ? parsed.lastFoldViewTokens : 0,
+						lastFoldLowTokens: Number.isFinite(parsed.lastFoldLowTokens) ? parsed.lastFoldLowTokens : 0,
 						lastFoldAt: Number.isFinite(parsed.lastFoldAt) ? parsed.lastFoldAt : 0,
 						foldsThisHour: Array.isArray(parsed.foldsThisHour) ? parsed.foldsThisHour.filter((ts) => Number.isFinite(ts)) : [],
 						inheritedFrom: typeof parsed.inheritedFrom === "string" ? parsed.inheritedFrom : null,

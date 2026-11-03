@@ -309,7 +309,7 @@ describe("state: ledger store", () => {
 
 	test("emptyLedger shape", () => {
 		const ledger = emptyLedger("sx");
-		assert.deepEqual(ledger, { version: 1, sessionId: "sx", blocks: [], frontier: null, lastFoldViewTokens: 0, lastFoldAt: 0, foldsThisHour: [], inheritedFrom: null, inheritedAt: 0 });
+		assert.deepEqual(ledger, { version: 1, sessionId: "sx", blocks: [], frontier: null, lastFoldViewTokens: 0, lastFoldLowTokens: 0, lastFoldAt: 0, foldsThisHour: [], inheritedFrom: null, inheritedAt: 0 });
 	});
 });
 
@@ -784,4 +784,13 @@ describe("regression: duplicate refs (identical content)", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+});
+
+test('ledger round-trip preserves lastFoldLowTokens across reload', () => {
+	const dir = mkdtempSync(join(tmpdir(), 'trim-test-'));
+	const store = createStore({ stateDir: join(dir, 'trim') });
+	store.recordFoldBaseline('sess-rt', 91557, 9136);
+	const reloaded = createStore({ stateDir: join(dir, 'trim') }).ledgerOf('sess-rt');
+	assert.equal(reloaded.lastFoldLowTokens, 9136);
+	assert.equal(reloaded.lastFoldViewTokens, 91557);
 });
