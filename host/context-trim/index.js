@@ -210,6 +210,7 @@ export function applyContextTrim(ctx, config) {
 	const lastEmergencyAtBySession = new Map(); // sessionId -> epoch ms of last emergency fold (per-session cooldown)
 	const lastStreamCheckAt = new Map(); // sessionId -> epoch ms of last stream-path fold check (throttle)
 	const epochResetDoneBySession = new Map(); // sessionId -> ledger-stale baseline reset already done for this host epoch (cleared when a fold applies again)
+	let streamEnterDiagLogs = 0; // TEMP diag: log the first N llm/stream entries (attach/lifecycle debugging)
 
 	/** Append one fold-decision line to <stateDir>/decisions.log (fail-open,
 	 * best-effort observability — console warn stays reserved for outcomes). */
@@ -727,6 +728,14 @@ export function applyContextTrim(ctx, config) {
 	// ---- llm/stream listener (mounted when the llm fiber exists) ---------------
 
 	function streamListener(options, next) {
+		try {
+			if (streamEnterDiagLogs < 30) {
+				streamEnterDiagLogs += 1;
+				let initiator = "null";
+				try { initiator = ctx.agents?.currentInitiator?.()?.session?.id ?? "null"; } catch { initiator = "throw"; }
+				decisionLog(`stream-enter n=${streamEnterDiagLogs} sid=${typeof options?.sessionId === "string" ? options.sessionId : "(none)"} initiator=${initiator} enabled=${enabledNow()}`);
+			}
+		} catch { /* diag must never break the stream */ }
 		let viewTokens = null;
 		try {
 			if (enabledNow()) {
@@ -768,11 +777,13 @@ export function applyContextTrim(ctx, config) {
 		}
 	}
 
+	decisionLog(`trim-mounted pid=${process.pid} build=e9d6821-diag1 enabled=${enabledNow()} mode=${modeNow()}`);
 	try {
 		ctx.inject(["llm"], (llmCtx) => {
 			const attach = () => {
 				try {
 					llmCtx.on?.("llm/stream", streamListener);
+					decisionLog(`llm-attached hasOn=${typeof llmCtx.on} hasOff=${typeof llmCtx.off} hasEffect=${typeof llmCtx.effect} pid=${process.pid}`);
 				} catch (error) {
 					warn(`[context-trim] llm/stream attach failed: ${error?.message ?? error}`);
 				}
