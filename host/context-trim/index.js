@@ -374,9 +374,9 @@ export function applyContextTrim(ctx, config) {
 	/** The outbound view for one request: fold blocks spliced in place. */
 	function applyViewToOptions(options) {
 		const messages = options?.messages;
-		if (!Array.isArray(messages) || messages.length === 0) return null;
+		if (!Array.isArray(messages) || messages.length === 0) { decisionLog("view-skip reason=empty-messages"); return null; }
 		const sessionId = sessionIdOf(options);
-		if (sessionId === null) return null;
+		if (sessionId === null) { decisionLog("view-skip reason=no-session"); return null; }
 		maybeInherit(sessionId, messages); // copy-on-fork: inherit BEFORE the first view build
 		const { protectedTail } = thresholdsNow();
 		const ledger = store.ledgerOf(sessionId);
@@ -743,6 +743,7 @@ export function applyContextTrim(ctx, config) {
 				if (applied !== null) viewTokens = applied.viewTokens;
 			}
 		} catch (error) {
+			decisionLog(`view-build-failed why=${error?.message ?? error}`);
 			warn(`[context-trim] view build failed: ${error?.message ?? error}`);
 		}
 		const result = next();
