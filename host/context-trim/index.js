@@ -782,7 +782,13 @@ export function applyContextTrim(ctx, config) {
 		ctx.inject(["llm"], (llmCtx) => {
 			const attach = () => {
 				try {
-					llmCtx.on?.("llm/stream", streamListener);
+					// Global + prepend: the cordis dispatch filter silently drops NON-global
+					// llm/stream listeners when the dispatching llm runtime lives outside
+					// this fiber's isolate (resumed sessions dispatch through their own
+					// subtree) — that silenced the whole stream path for a resumed session
+					// while fresh sessions kept logging. Stock consumers (dsh-session-title)
+					// register exactly this way.
+					llmCtx.on?.("llm/stream", streamListener, { global: true, prepend: true });
 					decisionLog(`llm-attached hasOn=${typeof llmCtx.on} hasOff=${typeof llmCtx.off} hasEffect=${typeof llmCtx.effect} pid=${process.pid}`);
 				} catch (error) {
 					warn(`[context-trim] llm/stream attach failed: ${error?.message ?? error}`);
