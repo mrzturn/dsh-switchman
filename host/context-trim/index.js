@@ -24,7 +24,7 @@
  * trimMaxFoldsPerHour, trimSideModel, trimStateDir.
  */
 
-import { statSync } from "node:fs";
+import { appendFileSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { buildView, estimateTokensOf, rangeIsSegmentAligned, refOf, refPositions, replaceInPlace } from "./view.js";
 import { computeFoldableRange, evaluateTrigger, EMERGENCY_COOLDOWN_MS } from "./trigger.js";
@@ -208,6 +208,20 @@ export function applyContextTrim(ctx, config) {
 	const inFlight = new Set(); // sessionIds with a fold running
 	const windowCache = new Map(); // "provider/model" -> { windowTokens, at }
 	const lastEmergencyAtBySession = new Map(); // sessionId -> epoch ms of last emergency fold (per-session cooldown)
+	const lastStreamCheckAt = new Map(); // sessionId -> epoch ms of last stream-path fold check (throttle)
+
+	/** Append one fold-decision line to <stateDir>/decisions.log (fail-open,
+	 * best-effort observability — console warn stays reserved for outcomes). */
+	function decisionLog(entry) {
+		try {
+			const dir = store.stateDir;
+			if (typeof dir !== "string" || dir === "") return;
+			mkdirSync(dir, { recursive: true });
+			appendFileSync(join(dir, "decisions.log"), `${new Date().toISOString()} ${entry}\n`);
+		} catch {
+			/* observability must never throw */
+		}
+	}
 
 	// ---- fork-state inheritance (copy-on-fork; design in fork.js header) ------
 	const linksCache = { mtime: -1, map: null }; // mtime-gated fork-links map
@@ -430,8 +444,9 @@ export function applyContextTrim(ctx, config) {
 		return `folded:${decision.tier}:${count} msgs (~${approxTokens} tokens)`;
 	}
 
-	/** Idle-boundary hook: decide + run the fold. All failures contained. */
-	async function maybeFold(agent) {
+	/** Idle-boundary hook (also re-used by the stream-path fallback): decide
+	 * and run the fold. All failures contained. */
+	async function maybeFold(agent, via = "idle") {
 		const sessionId = agent;
 		if (sessionId === null || sessionId === undefined || sessionId === "") return;
 		if (!enabledNow() || modeNow() !== "auto") return;
@@ -456,6 +471,7 @@ export function applyContextTrim(ctx, config) {
 				lastEmergencyAt: lastEmergencyAtBySession.get(sessionId) ?? 0,
 				ledger,
 			});
+			decisionLog(`session=${sessionId} via=${via} action=${decision.action} tier=${decision.tier ?? "-"} reason=${decision.reason || "-"} view=${Math.round(capture.viewTokens)} window=${windowTokens ?? "null"}`);
 			if (decision.action === "none") return;
 			const outcome = await runFoldCycle(sessionId, decision);
 			warn(`[context-trim] ${sessionId}: ${outcome} (${decision.reason})`);
@@ -684,17 +700,34 @@ export function applyContextTrim(ctx, config) {
 			warn(`[context-trim] view build failed: ${error?.message ?? error}`);
 		}
 		const result = next();
+		let wrappedSession = null;
 		try {
 			if (!enabledNow()) return result;
-			const sessionId = sessionIdOf(options);
-			if (sessionId === null) return result;
+			wrappedSession = sessionIdOf(options);
+			if (wrappedSession === null) return result;
 			return wrapStreamForMetrics(result, (chunk) => {
 				const usage = extractUsage(chunk);
-				if (usage !== null) metrics.recordUsage(sessionId, usage);
+				if (usage !== null) metrics.recordUsage(wrappedSession, usage);
 			});
 		} catch (error) {
 			warn(`[context-trim] stream wrap failed: ${error?.message ?? error}`);
 			return result;
+		} finally {
+			// Fallback fold check on the stream path: the agent/status idle event
+			// may not reach a globally-registered listener on every host topology,
+			// so each stream end also runs a throttled (60 s/session) check. The
+			// trigger's own cadence gates still guard over-folding.
+			try {
+				if (enabledNow() && modeNow() === "auto" && wrappedSession !== null) {
+					const nowMs = Date.now();
+					if (nowMs - (lastStreamCheckAt.get(wrappedSession) ?? 0) >= 60_000) {
+						lastStreamCheckAt.set(wrappedSession, nowMs);
+						void maybeFold(wrappedSession, "stream");
+					}
+				}
+			} catch {
+				/* fallback must never break the stream */
+			}
 		}
 	}
 

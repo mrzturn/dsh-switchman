@@ -591,8 +591,11 @@ describe("assembly: applyContextTrim with a mock ctx", () => {
 		const heavy = makeMessages(60, 11);
 		for (const m of heavy) m.content[0].text = "H".repeat(4_000); // chars/4 ≈ 1000 tokens each
 		listener({ sessionId: "sess-heavy", messages: heavy, provider: "p", model: "m" }, () => null);
+		// The stream path now fires its own throttled fallback check — drain it.
+		await new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
 
-		// Fire the idle hook (same entry the agent/status listener uses).
+		// Fire the idle hook (same entry the agent/status listener uses). The
+		// fold already committed on the stream path; this run hits the cooldown.
 		await handle.maybeFold("sess-heavy");
 		const ledger = handle.store.ledgerOf("sess-heavy");
 		assert.equal(ledger.blocks.length, 1);
