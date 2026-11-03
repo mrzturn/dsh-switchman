@@ -26,7 +26,7 @@
 
 import { appendFileSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { buildView, estimateTokensOf, ledgerIsStale, rangeIsSegmentAligned, refOf, refPositions, replaceInPlace } from "./view.js";
+import { buildView, estimateTokensOf, injectView, ledgerIsStale, rangeIsSegmentAligned, refOf, refPositions } from "./view.js";
 import { computeFoldableRange, evaluateTrigger, EMERGENCY_COOLDOWN_MS } from "./trigger.js";
 import { mechanicalSummary, renderMaterial, summarizeWithModel } from "./summarizer.js";
 import { createStore } from "./state.js";
@@ -210,7 +210,6 @@ export function applyContextTrim(ctx, config) {
 	const lastEmergencyAtBySession = new Map(); // sessionId -> epoch ms of last emergency fold (per-session cooldown)
 	const lastStreamCheckAt = new Map(); // sessionId -> epoch ms of last stream-path fold check (throttle)
 	const epochResetDoneBySession = new Map(); // sessionId -> ledger-stale baseline reset already done for this host epoch (cleared when a fold applies again)
-	let streamEnterDiagLogs = 0; // TEMP diag: log the first N llm/stream entries (attach/lifecycle debugging)
 
 	/** Append one fold-decision line to <stateDir>/decisions.log (fail-open,
 	 * best-effort observability — console warn stays reserved for outcomes). */
@@ -374,9 +373,9 @@ export function applyContextTrim(ctx, config) {
 	/** The outbound view for one request: fold blocks spliced in place. */
 	function applyViewToOptions(options) {
 		const messages = options?.messages;
-		if (!Array.isArray(messages) || messages.length === 0) { decisionLog("view-skip reason=empty-messages"); return null; }
+		if (!Array.isArray(messages) || messages.length === 0) return null;
 		const sessionId = sessionIdOf(options);
-		if (sessionId === null) { decisionLog("view-skip reason=no-session"); return null; }
+		if (sessionId === null) return null;
 		maybeInherit(sessionId, messages); // copy-on-fork: inherit BEFORE the first view build
 		const { protectedTail } = thresholdsNow();
 		const ledger = store.ledgerOf(sessionId);
@@ -386,24 +385,18 @@ export function applyContextTrim(ctx, config) {
 		// resolved against raw history (with a folded capture, fold #2+ refs
 		// would never resolve and the frontier would silently reset).
 		const rawSnapshot = messages.slice();
-		if (view.applied > 0) {
-			try {
-				replaceInPlace(messages, view.messages);
-			} catch {
-				// Resumed sessions re-send a FROZEN host-assembled history (compacted
-				// records) — splice cannot delete its indices. Swap the reference
-				// instead: the waterfall continuation reads options.messages only
-				// after listeners run, and prepend:true keeps us ahead of every
-				// other listener, so downstream sees the rebuilt view either way.
-				options.messages = view.messages;
-			}
-		}
+		// Dispatch immutability varies: probe/fresh re-sends hand out mutable
+		// arrays, resumed sessions re-send frozen host-assembled history, and
+		// some dispatch options are frozen on top of that. injectView picks the
+		// best strategy per dispatch and fails open; the view-applied line
+		// records which strategy was used.
+		const injected = injectView(options, messages, view);
 		const viewTokens = estimateTokensOf(view.messages);
 		const blocksCount = Array.isArray(ledger.blocks) ? ledger.blocks.length : 0;
 		// Per-request application evidence: whether the ledger's blocks actually
 		// locate inside THIS re-send (the host may compact/replace history, in
 		// which case applied=0 explains a stuck-high view without any failure).
-		decisionLog(`session=${sessionId} view-applied applied=${view.applied} foldedMsgs=${view.foldedMessages} view=${Math.round(viewTokens)} blocks=${blocksCount}`);
+		decisionLog(`session=${sessionId} view-applied applied=${view.applied} foldedMsgs=${view.foldedMessages} view=${Math.round(viewTokens)} blocks=${blocksCount} injected=${injected}`);
 		// Host-compaction epoch boundary: every block failed to LOCATE inside
 		// this re-send, so the ledger aged out as a whole. Re-anchor the growth
 		// baseline at the true post-epoch view once per epoch — carrying the
@@ -413,6 +406,7 @@ export function applyContextTrim(ctx, config) {
 		if (ledgerIsStale(view, ledger)) {
 			if (!epochResetDoneBySession.has(sessionId)) {
 				epochResetDoneBySession.set(sessionId, true);
+				if (epochResetDoneBySession.size > 200) epochResetDoneBySession.delete(epochResetDoneBySession.keys().next().value); // bounded like captures/trimViewBySession
 				store.recordFoldBaseline(sessionId, viewTokens, viewTokens);
 				decisionLog(`session=${sessionId} ledger-stale blocks=${blocksCount} view=${Math.round(viewTokens)} growth-baseline-reset`);
 			}
@@ -739,14 +733,6 @@ export function applyContextTrim(ctx, config) {
 	// ---- llm/stream listener (mounted when the llm fiber exists) ---------------
 
 	function streamListener(options, next) {
-		try {
-			if (streamEnterDiagLogs < 30) {
-				streamEnterDiagLogs += 1;
-				let initiator = "null";
-				try { initiator = ctx.agents?.currentInitiator?.()?.session?.id ?? "null"; } catch { initiator = "throw"; }
-				decisionLog(`stream-enter n=${streamEnterDiagLogs} sid=${typeof options?.sessionId === "string" ? options.sessionId : "(none)"} initiator=${initiator} enabled=${enabledNow()}`);
-			}
-		} catch { /* diag must never break the stream */ }
 		let viewTokens = null;
 		try {
 			if (enabledNow()) {
@@ -789,7 +775,6 @@ export function applyContextTrim(ctx, config) {
 		}
 	}
 
-	decisionLog(`trim-mounted pid=${process.pid} build=e9d6821-diag1 enabled=${enabledNow()} mode=${modeNow()}`);
 	try {
 		ctx.inject(["llm"], (llmCtx) => {
 			const attach = () => {

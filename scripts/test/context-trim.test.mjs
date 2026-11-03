@@ -8,7 +8,7 @@ import { test, describe } from "node:test";
 import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { refOf, buildView, ledgerIsStale, segmentBounds, rangeIsSegmentAligned, estimateTokensOf, replaceInPlace, summaryMessageOf, renderSummaryText, refPositions } from "../../host/context-trim/view.js";
+import { refOf, buildView, injectView, ledgerIsStale, segmentBounds, rangeIsSegmentAligned, estimateTokensOf, replaceInPlace, summaryMessageOf, renderSummaryText, refPositions } from "../../host/context-trim/view.js";
 import { createStore, emptyLedger, normalizeBlock } from "../../host/context-trim/state.js";
 import { computeFoldableRange, evaluateTrigger, FOLD_MIN_INTERVAL_MS, EMERGENCY_COOLDOWN_MS } from "../../host/context-trim/trigger.js";
 import { mechanicalSummary, renderMaterial, SUMMARY_SYSTEM_PROMPT, MAX_MATERIAL_CHARS } from "../../host/context-trim/summarizer.js";
@@ -123,6 +123,32 @@ describe("view: buildView determinism (golden)", () => {
 		assert.equal(view.applied, 1);
 		assert.equal(view.unlocated, 1);
 		assert.equal(ledgerIsStale(view, ledger), false);
+	});
+
+	test("injectView: in-place on mutable arrays, reference swap on frozen arrays, none on frozen options", () => {
+		const messages = makeMessages(12);
+		const ledger = emptyLedger("s-inject");
+		ledger.blocks.push(blockFor(messages, 0, 5, "head"));
+		const view = buildView(messages, ledger, { protectedTail: 6 });
+		assert.equal(view.applied, 1);
+		// mutable dispatch: splice in place, identity preserved
+		const mutableOptions = { messages };
+		assert.equal(injectView(mutableOptions, messages, view), "in-place");
+		assert.equal(mutableOptions.messages, messages);
+		assert.equal(mutableOptions.messages.length, view.messages.length);
+		// frozen array (resumed-session re-send): swap the reference
+		const frozenMessages = Object.freeze(makeMessages(12));
+		const frozenLedger = emptyLedger("s-inject2");
+		frozenLedger.blocks.push(blockFor(frozenMessages, 0, 5, "head"));
+		const frozenView = buildView(frozenMessages, frozenLedger, { protectedTail: 6 });
+		assert.equal(frozenView.applied, 1);
+		const swapOptions = { messages: frozenMessages };
+		assert.equal(injectView(swapOptions, frozenMessages, frozenView), "swapped");
+		assert.notEqual(swapOptions.messages, frozenMessages);
+		assert.equal(swapOptions.messages.length, frozenView.messages.length);
+		// frozen options on top (fully immutable dispatch): fail open
+		const sealedOptions = Object.freeze({ messages: frozenMessages });
+		assert.equal(injectView(sealedOptions, frozenMessages, frozenView), "none");
 	});
 
 	test("count mismatch guard: located span must equal stored count", () => {

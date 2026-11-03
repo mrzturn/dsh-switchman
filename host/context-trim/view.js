@@ -282,6 +282,30 @@ export function ledgerIsStale(view, ledger) {
 	return blocksCount > 0 && view.applied === 0 && view.unlocated === blocksCount;
 }
 
+/** Install the built view for one dispatch. Host immutability varies: probe
+ * and fresh re-sends hand out mutable arrays (splice in place — cheapest,
+ * identity-preserving), resumed sessions re-send FROZEN host-assembled
+ * history (splice throws on its internal index deletes), and some dispatch
+ * options are frozen objects on top of that. Returns the strategy used so
+ * the caller can log it: "in-place" | "swapped" | "none". */
+export function injectView(options, messages, view) {
+	if (view.applied > 0) {
+		try {
+			replaceInPlace(messages, view.messages);
+			return "in-place";
+		} catch {
+			/* frozen array — fall through to the reference swap */
+		}
+		try {
+			options.messages = view.messages;
+			return "swapped";
+		} catch {
+			/* frozen options — this dispatch cannot carry the view; fail open */
+		}
+	}
+	return "none";
+}
+
 /** Replace an array's CONTENT in place (identity preserved — the llm/stream
  * contract mutates the live request array). Chunked pushes keep huge
  * histories clear of the argument-count limit. */
