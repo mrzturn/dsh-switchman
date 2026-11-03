@@ -9,9 +9,11 @@
  *                Forced MECHANICAL fold (no side-model round trip — at 95%
  *                the session cannot afford the latency or the failure).
  * - pressure   : view usage >= trimPressurePercent. Side-model fold.
- * - growth     : growth since the last fold > trimGrowthTokens AND the
- *                contiguous compressible increment >= trimIncrementTokens.
- *                The primary, cache-friendly gate (the bili heuristic).
+ * - growth     : growth since the last fold's post-fold low (the anchor
+ *                that keeps the gate armed after folds committing at high
+ *                view points) > trimGrowthTokens AND the contiguous
+ *                compressible increment >= trimIncrementTokens. The
+ *                primary, cache-friendly gate (the bili heuristic).
  *
  * Side-model folds are additionally throttled by trimMaxFoldsPerHour and a
  * hard minimum interval between folds; emergency folds have their own
@@ -94,7 +96,7 @@ export function evaluateTrigger(input) {
 	if (now - lastFoldAt < FOLD_MIN_INTERVAL_MS) return { ...none, reason: "min-interval" };
 
 	// Tier b — pressure: soft window threshold, side-model.
-	const pressurePercent = Number.isFinite(thresholds.pressurePercent) && thresholds.pressurePercent > 0 ? thresholds.pressurePercent : 75;
+	const pressurePercent = Number.isFinite(thresholds.pressurePercent) && thresholds.pressurePercent > 0 ? thresholds.pressurePercent : 60;
 	if (windowTokens !== null) {
 		const usagePct = (input.viewTokens / windowTokens) * 100;
 		if (usagePct >= pressurePercent) {
@@ -105,7 +107,13 @@ export function evaluateTrigger(input) {
 	// Tier a — growth gate: the primary cache-friendly heuristic.
 	const growthTokens = Number.isFinite(thresholds.growthTokens) && thresholds.growthTokens > 0 ? thresholds.growthTokens : 22_500;
 	const incrementGate = Number.isFinite(thresholds.incrementTokens) && thresholds.incrementTokens > 0 ? thresholds.incrementTokens : 50_000;
-	const growth = input.viewTokens - (Number.isFinite(input?.ledger?.lastFoldViewTokens) ? input.ledger.lastFoldViewTokens : 0);
+	// Growth anchor: the post-fold low when known (keeps the gate armed
+	// after folds that commit at high view points), else the pre-fold
+	// view for ledgers written before lastFoldLowTokens existed.
+	const anchor = Number.isFinite(input?.ledger?.lastFoldLowTokens) && input.ledger.lastFoldLowTokens > 0
+		? input.ledger.lastFoldLowTokens
+		: Number.isFinite(input?.ledger?.lastFoldViewTokens) ? input.ledger.lastFoldViewTokens : 0;
+	const growth = input.viewTokens - anchor;
 	if (growth > growthTokens && incrementTokens >= incrementGate) {
 		return { action: "fold", tier: "growth", reason: `growth ~${Math.round(growth)} > ${growthTokens} and increment ~${incrementTokens} >= ${incrementGate}`, startIdx, endIdx, incrementTokens };
 	}

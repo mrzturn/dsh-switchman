@@ -102,7 +102,7 @@ Voici l'ensemble complet des valeurs juste après une installation neuve (source
 
 **Routage par intention** (indisponible par défaut ; il exige un classifieur + au moins un candidat + l'interrupteur général) : `intentEnabled` = désactivé (désactivé, l'entrée Auto reste cachée et les sessions déjà passées en Auto empruntent la chaîne de repli) ; route du classifieur non définie ; type de classifieur `chat` ; liste de candidats vide (les catégories préinstallées ne participent au routage qu'une fois un modèle renseigné) ; fenêtre de cache `300` s / seuil de confiance du basculement `80` / timeout de classification `60000` ms ; historique de `6` messages / `2400` caractères ; `intentContextWindow` = `200000`.
 
-**Trim de contexte** : `trimEnabled` = activé ; `trimMode` = `auto` (entièrement automatique) ; porte de croissance `22500` + incrément `50000` tokens ; pression `75%` / urgence `95%` ; queue protégée `6` messages ; plafond de cadence des folds `6` par heure ; modèle annexe non défini (hérite du modèle de la session) — détails dans la section « Trim automatique du contexte » ci-dessous.
+**Trim de contexte** : `trimEnabled` = activé ; `trimMode` = `auto` (entièrement automatique) ; porte de croissance `22500` + incrément `50000` tokens ; pression `60%` / urgence `95%` ; queue protégée `6` messages ; plafond de cadence des folds `6` par heure ; modèle annexe non défini (hérite du modèle de la session) — détails dans la section « Trim automatique du contexte » ci-dessous.
 
 **À savoir dès l'installation** : ① l'indisponibilité du routage par intention en sortie d'usine est un choix délibéré — trois étapes pour l'activer (classifieur, candidats, interrupteur) ; ② la fenêtre effective d'Auto vaut 200000 dès l'usine — le garde-fou garantit 0.8×fenêtre ≥ force (150000), si bien que la ligne de compactage cœur (160000) se situe toujours après la ligne de remise en douceur (150000) ; ③ l'effet le plus tangible dès l'usine est le trio de niveaux : 80k rappelle de déléguer / 120k resserre la lecture / 150k sauvegarde et remet automatiquement — sans aucun réglage.
 
@@ -114,7 +114,7 @@ Niveaux d'automatisation (`trimMode`) :
 
 - **`off`** — mesure seule : l'échantillonnage de l'usage et des hits de cache tourne toujours ; pas de bannière, pas de folds.
 - **`advisory`** — le modèle de session se replie lui-même : les outils `ctx_trim_fold` et `ctx_trim_status` plus l'en-tête de protocole sont exposés.
-- **`auto`** (par défaut) — tout ce qui précède, plus des folds automatiques à la frontière d'inactivité, en trois paliers : une porte de croissance (la view a grandi ≥ `trimGrowthTokens` ET un incrément compressible contigu ≥ `trimIncrementTokens`), un palier de pression (`trimPressurePercent` de la fenêtre de contexte) et un palier d'urgence (`trimEmergencyPercent` — un fold mécanique avec son propre refroidissement).
+- **`auto`** (par défaut) — tout ce qui précède, plus des folds automatiques à la frontière d'inactivité, en trois paliers : une porte de croissance (croissance ≥ `trimGrowthTokens` mesurée depuis le point bas après le dernier pli — l'ancre qui garde la porte armée après des plis confirmés à des points hauts de la view — ET un incrément compressible contigu ≥ `trimIncrementTokens`), un palier de pression (`trimPressurePercent` de la fenêtre de contexte) et un palier d'urgence (`trimEmergencyPercent` — un fold mécanique avec son propre refroidissement).
 
 Toutes les clés vivent dans Réglages → dsh-switchman ; les valeurs par défaut viennent de `host/config.js` :
 
@@ -124,7 +124,7 @@ Toutes les clés vivent dans Réglages → dsh-switchman ; les valeurs par défa
 | `trimMode` | `auto` | `off` mesure seule / `advisory` folds pilotés par le modèle / `auto` folds pilotés par le système. |
 | `trimGrowthTokens` | `22500` | Porte de croissance : on plie quand la view sortante a grandi d'autant depuis le dernier fold. |
 | `trimIncrementTokens` | `50000` | Compagnon de la porte : l'incrément compressible contigu doit aussi atteindre cette taille. |
-| `trimPressurePercent` | `75` | Palier de pression : on plie quand l'usage de la view atteint ce pourcentage de la fenêtre de contexte. |
+| `trimPressurePercent` | `60` | Palier de pression : on plie quand l'usage de la view atteint ce pourcentage de la fenêtre de contexte. |
 | `trimEmergencyPercent` | `95` | Palier d'urgence : fold mécanique forcé (sans appel de modèle annexe) à ce pourcentage. |
 | `trimWindowTokens` | `0` | Plafond de fenêtre effectif pour le calcul des paliers : calculé sur min(fenêtre du modèle, plafond). `0` = suit `wmForceTokens`. |
 | `trimProtectedTail` | `6` | Les N derniers messages ne sont jamais repliés. |

@@ -306,7 +306,7 @@ export function applyContextTrim(ctx, config) {
 	const thresholdsNow = () => ({
 		growthTokens: readNumber(config, "trimGrowthTokens", 22_500),
 		incrementTokens: readNumber(config, "trimIncrementTokens", 50_000),
-		pressurePercent: readNumber(config, "trimPressurePercent", 75),
+		pressurePercent: readNumber(config, "trimPressurePercent", 60),
 		emergencyPercent: readNumber(config, "trimEmergencyPercent", 95),
 		protectedTail: Math.max(0, Math.round(readNumber(config, "trimProtectedTail", 6))),
 		maxFoldsPerHour: readNumber(config, "trimMaxFoldsPerHour", 6),
@@ -439,7 +439,12 @@ export function applyContextTrim(ctx, config) {
 			positions,
 		);
 		if (!result.ok) return `commit-rejected:${result.reason}`;
-		store.recordFoldBaseline(sessionId, capture.viewTokens);
+		// Growth-gate baseline pair: pre-fold view (banner display) plus the
+		// post-fold low (tier-a anchor — keeps the gate armed after folds
+		// that commit at high view points).
+		const lowLedger = store.ledgerOf(sessionId);
+		const lowView = estimateTokensOf(buildView(capture.messages, lowLedger, { protectedTail: thresholdsNow().protectedTail }).messages);
+		store.recordFoldBaseline(sessionId, capture.viewTokens, lowView);
 		if (decision.action === "emergency") lastEmergencyAtBySession.set(sessionId, Date.now());
 		return `folded:${decision.tier}:${count} msgs (~${approxTokens} tokens)`;
 	}
@@ -679,7 +684,12 @@ export function applyContextTrim(ctx, config) {
 					positions,
 				);
 				if (!result.ok) return `Fold rejected: ${result.reason}.`;
-				store.recordFoldBaseline(sessionId, capture.viewTokens);
+				// Growth-gate baseline pair: pre-fold view (banner display) plus the
+				// post-fold low (tier-a anchor — keeps the gate armed after folds
+				// that commit at high view points).
+				const lowLedger = store.ledgerOf(sessionId);
+				const lowView = estimateTokensOf(buildView(capture.messages, lowLedger, { protectedTail: thresholdsNow().protectedTail }).messages);
+				store.recordFoldBaseline(sessionId, capture.viewTokens, lowView);
 				return `Folded ${count} messages into block ${result.block.id}. The view applies on the next model call.`;
 			},
 		});

@@ -304,6 +304,20 @@ describe("trigger: tiers and gates", () => {
 		assert.equal(tiny.action, "none");
 	});
 
+	test("growth tier stays armed after a high fold (post-fold low anchor)", () => {
+		// Emergency-style fold at 140k: the pre-fold baseline is useless, the
+		// post-fold low keeps the gate measuring fresh accumulation.
+		const ledger = { lastFoldViewTokens: 140_000, lastFoldLowTokens: 40_000 };
+		const fire = evaluateTrigger({ ...base, viewTokens: 92_000, ledger, foldable: foldable() });
+		assert.equal(fire.action, "fold");
+		assert.equal(fire.tier, "growth");
+		// Legacy ledger without the low field: falls back to the pre-fold
+		// view — the gate stays quiet and pressure picks it up instead.
+		const legacy = evaluateTrigger({ ...base, viewTokens: 92_000, ledger: { lastFoldViewTokens: 140_000 }, foldable: foldable() });
+		assert.equal(legacy.action, "none");
+		assert.equal(legacy.reason, "below-thresholds");
+	});
+
 	test("pressure tier fires at 75% and outranks growth", () => {
 		const fire = evaluateTrigger({ ...base, viewTokens: 160_000, foldable: foldable() }); // 80%
 		assert.equal(fire.action, "fold");

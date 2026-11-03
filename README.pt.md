@@ -102,7 +102,7 @@ Estes são todos os valores logo depois de uma instalação nova (fonte autorita
 
 **Roteamento por intenção** (indisponível por padrão; são precisos classificador + pelo menos um candidato + ligar a chave mestra): `intentEnabled` = desligado (desligado, a entrada Auto fica oculta e as sessões que já a tinham escolhido caem na cadeia de fallback); rota do classificador sem definir; tipo de classificador `chat`; lista de candidatos vazia (as categorias pré-instaladas só entram no roteamento com um modelo preenchido); janela de cache `300` s / limiar de confiança da troca `80` / timeout de classificação `60000` ms; histórico de `6` mensagens / `2400` caracteres; `intentContextWindow` = `200000`.
 
-**Trim de contexto**: `trimEnabled` = ligado; `trimMode` = `auto` (totalmente automático); portão de crescimento `22500` + incremento `50000` tokens; pressão `75%` / emergência `95%`; cauda protegida `6` mensagens; teto de cadência de folds `6` por hora; modelo secundário não definido (herda o modelo da sessão) — detalhes na seção «Trim automático do contexto» abaixo.
+**Trim de contexto**: `trimEnabled` = ligado; `trimMode` = `auto` (totalmente automático); portão de crescimento `22500` + incremento `50000` tokens; pressão `60%` / emergência `95%`; cauda protegida `6` mensagens; teto de cadência de folds `6` por hora; modelo secundário não definido (herda o modelo da sessão) — detalhes na seção «Trim automático do contexto» abaixo.
 
 **Observações de fábrica**: ① o roteamento por intenção vir indisponível de fábrica é proposital — três passos para ligar (classificador, candidatos, chave); ② a janela efetiva do Auto já nasce em 200000 — o guard-rail garante 0.8×janela ≥ force (150000), então a linha de compactação do núcleo (160000) fica sempre depois da linha de entrega suave (150000); ③ o que mais se sente de fábrica é o trio de níveis: 80k lembra de delegar / 120k aperta a leitura / 150k faz backup e entrega sozinho — sem nenhuma configuração.
 
@@ -114,7 +114,7 @@ Níveis de automação (`trimMode`):
 
 - **`off`** — só medição: a amostragem de uso e de acertos de cache continua rodando; sem banner, sem folds.
 - **`advisory`** — o modelo da sessão dobra sozinho: as ferramentas `ctx_trim_fold` e `ctx_trim_status` mais o cabeçalho de protocolo ficam expostas.
-- **`auto`** (padrão) — tudo isso mais folds automáticos na fronteira de ociosidade, em três degraus: um portão de crescimento (a view cresceu ≥ `trimGrowthTokens` E um incremento comprimível contíguo ≥ `trimIncrementTokens`), um degrau de pressão (`trimPressurePercent` da janela de contexto) e um degrau de emergência (`trimEmergencyPercent` — um fold mecânico com cooldown próprio).
+- **`auto`** (padrão) — tudo isso mais folds automáticos na fronteira de ociosidade, em três degraus: um portão de crescimento (crescimento ≥ `trimGrowthTokens` medido a partir da mínima pós-dobra do último fold — a âncora que mantém o portão armado após dobras confirmadas em pontos altos da view — E um incremento comprimível contíguo ≥ `trimIncrementTokens`), um degrau de pressão (`trimPressurePercent` da janela de contexto) e um degrau de emergência (`trimEmergencyPercent` — um fold mecânico com cooldown próprio).
 
 Todas as chaves ficam em Configurações → dsh-switchman; os padrões vêm de `host/config.js`:
 
@@ -124,7 +124,7 @@ Todas as chaves ficam em Configurações → dsh-switchman; os padrões vêm de 
 | `trimMode` | `auto` | `off` só medição / `advisory` folds conduzidos pelo modelo / `auto` folds conduzidos pelo sistema. |
 | `trimGrowthTokens` | `22500` | Portão de crescimento: dobra quando a view de saída crescer isso desde o último fold. |
 | `trimIncrementTokens` | `50000` | Companheiro do portão: o incremento comprimível contíguo também precisa alcançar esse tamanho. |
-| `trimPressurePercent` | `75` | Degrau de pressão: dobra quando o uso da view alcança essa porcentagem da janela de contexto. |
+| `trimPressurePercent` | `60` | Degrau de pressão: dobra quando o uso da view alcança essa porcentagem da janela de contexto. |
 | `trimEmergencyPercent` | `95` | Degrau de emergência: fold mecânico forçado (sem chamada ao modelo secundário) nessa porcentagem. |
 | `trimWindowTokens` | `0` | Limite de janela efetivo para o cálculo dos níveis: calculado sobre min(janela do modelo, limite). `0` = segue `wmForceTokens`. |
 | `trimProtectedTail` | `6` | As últimas N mensagens nunca são dobradas. |

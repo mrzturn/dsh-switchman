@@ -241,7 +241,7 @@ export const Config = z.object({
 	trimIncrementTokens: z.number().min(1000).default(50000).volatile(),
 	/** Pressure tier (tier b): fold when view usage reaches this percent of
 	 *  the context window (requires a resolvable window; otherwise skipped). */
-	trimPressurePercent: z.number().min(1).max(100).default(75).volatile(),
+	trimPressurePercent: z.number().min(1).max(100).default(60).volatile(),
 	/** Emergency tier (tier c): forced MECHANICAL fold (no side-model call)
 	 *  at this percent of the window; cooldown-gated. */
 	trimEmergencyPercent: z.number().min(1).max(100).default(95).volatile(),

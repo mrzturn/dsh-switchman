@@ -269,7 +269,7 @@ window.__ModuleLoader__.load({
 		const TRIM_NUMBER_FIELDS = [
 			{ field: 'trimGrowthTokens', min: 1000, def: 22500 },
 			{ field: 'trimIncrementTokens', min: 1000, def: 50000 },
-			{ field: 'trimPressurePercent', min: 5, max: 100, def: 75 },
+			{ field: 'trimPressurePercent', min: 5, max: 100, def: 60 },
 			{ field: 'trimEmergencyPercent', min: 5, max: 100, def: 95 },
 			{ field: 'trimWindowTokens', min: 0, def: 0 },
 		];

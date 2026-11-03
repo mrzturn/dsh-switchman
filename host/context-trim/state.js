@@ -214,9 +214,10 @@ export function createStore(options = {}) {
 
 	/** Record the view-token estimate captured at the last fold (growth-gate
 	 * baseline) and persist. */
-	function recordFoldBaseline(sessionId, viewTokens) {
+	function recordFoldBaseline(sessionId, viewTokens, lowTokens) {
 		const ledger = ledgerOf(sessionId);
 		if (Number.isFinite(viewTokens) && viewTokens > 0) ledger.lastFoldViewTokens = Math.round(viewTokens);
+		if (Number.isFinite(lowTokens) && lowTokens > 0) ledger.lastFoldLowTokens = Math.round(lowTokens);
 		persist(ledger);
 		return ledger;
 	}

@@ -102,7 +102,7 @@ Everything below is the full set of defaults after a fresh install (authoritativ
 
 **Intent routing** (unavailable by default; needs a classifier + at least one candidate + the master switch on): `intentEnabled` = off (while off, the Auto entry stays hidden and sessions already on Auto fall through the fallback chain); the classifier route is unset; the classifier type is `chat`; the candidate list is empty (the preset categories join routing only once given a model); cache window `300` s / switch confidence threshold `80` / classification timeout `60000` ms; history `6` messages / `2400` characters; `intentContextWindow` = `200000`.
 
-**Context trim**: `trimEnabled` = on; `trimMode` = `auto` (fully automatic); growth gate `22500` tokens + increment `50000` tokens; pressure `75%` / emergency `95%`; protected tail `6` messages; fold cadence cap `6` per hour; side model unset (inherits the session model) — details in the "Automatic context trim" section below.
+**Context trim**: `trimEnabled` = on; `trimMode` = `auto` (fully automatic); growth gate `22500` tokens + increment `50000` tokens; pressure `60%` / emergency `95%`; protected tail `6` messages; fold cadence cap `6` per hour; side model unset (inherits the session model) — details in the "Automatic context trim" section below.
 
 **Out-of-the-box notes**: ① intent routing being unavailable out of the box is by design — three steps to switch it on (classifier, candidates, the master switch); ② Auto's effective window is 200000 out of the box — the guardrail guarantees 0.8×window ≥ force (150000), so the core compaction line (160000) always sits after the smooth-handover line (150000); ③ the most tangible out-of-the-box effect is the watermark trio: 80k nudges delegation / 120k tightens reading / 150k backs up and hands over automatically — no configuration needed.
 
@@ -114,7 +114,7 @@ Automation levels (`trimMode`):
 
 - **`off`** — measure only: usage and cache-hit sampling still runs; no banner, no folds.
 - **`advisory`** — the session model folds itself: the `ctx_trim_fold` and `ctx_trim_status` tools plus the protocol head are exposed for it.
-- **`auto`** (default) — everything above plus automatic folds at the idle boundary, in three tiers: a growth gate (the view grew ≥ `trimGrowthTokens` AND a contiguous compressible increment ≥ `trimIncrementTokens`), a pressure tier (`trimPressurePercent` of the context window), and an emergency tier (`trimEmergencyPercent` — a mechanical fold with its own cooldown).
+- **`auto`** (default) — everything above plus automatic folds at the idle boundary, in three tiers: a growth gate (growth ≥ `trimGrowthTokens` measured from the last fold's post-fold low — the anchor that keeps the gate armed after folds committing at high view points — AND a contiguous compressible increment ≥ `trimIncrementTokens`), a pressure tier (`trimPressurePercent` of the context window), and an emergency tier (`trimEmergencyPercent` — a mechanical fold with its own cooldown).
 
 All keys live in Settings → dsh-switchman; defaults from `host/config.js`:
 
@@ -124,7 +124,7 @@ All keys live in Settings → dsh-switchman; defaults from `host/config.js`:
 | `trimMode` | `auto` | `off` measure only / `advisory` model-driven folds / `auto` system-driven folds. |
 | `trimGrowthTokens` | `22500` | Growth gate: fold when the outbound view grew this much since the last fold. |
 | `trimIncrementTokens` | `50000` | Gate companion: the contiguous compressible increment must also reach this size. |
-| `trimPressurePercent` | `75` | Pressure tier: fold when view usage reaches this percent of the context window. |
+| `trimPressurePercent` | `60` | Pressure tier: fold when view usage reaches this percent of the context window. |
 | `trimEmergencyPercent` | `95` | Emergency tier: forced mechanical fold (no side-model call) at this percent. |
 | `trimWindowTokens` | `0` | Effective-window cap for tier math: tiers are computed against min(model window, cap). `0` = follow `wmForceTokens`. |
 | `trimProtectedTail` | `6` | The last N messages are never folded. |

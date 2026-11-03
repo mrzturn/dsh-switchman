@@ -102,7 +102,7 @@ bash <설치-디렉터리>/skills/db-query/scripts/setup.sh
 
 **의도 인식**(기본은 사용 불가. 분류기 + 후보 최소 1개 + 마스터 토글 켜기가 필요): `intentEnabled` = 끔(꺼져 있으면 Auto 항목은 숨겨지고, Auto를 선택해 둔 세션은 폴백 체인으로 흐른다). 분류기 라우트 미설정. 분류기 유형 `chat`. 후보 목록은 빈 상태(프리셋 분류는 모델을 채워야 라우팅에 참여). 캐시 창 `300`초 / 전환 신뢰도 `80` / 분류 타임아웃 `60000`ms. 히스토리 `6`건 / `2400`자. `intentContextWindow` = `200000`.
 
-**컨텍스트 트림**: `trimEnabled` = 켬; `trimMode` = `auto`(완전 자동); 성장 게이트 `22500` + 증분 `50000` 토큰; 압력 `75%` / 비상 `95%`; 보호 테일 `6`건; fold 케이던스 상한 시간당 `6`회; 사이드 모델 미설정(세션 모델 상속) — 자세한 내용은 아래 "자동 컨텍스트 트림" 절에서.
+**컨텍스트 트림**: `trimEnabled` = 켬; `trimMode` = `auto`(완전 자동); 성장 게이트 `22500` + 증분 `50000` 토큰; 압력 `60%` / 비상 `95%`; 보호 테일 `6`건; fold 케이던스 상한 시간당 `6`회; 사이드 모델 미설정(세션 모델 상속) — 자세한 내용은 아래 "자동 컨텍스트 트림" 절에서.
 
 **기본 상태에서 알아둘 점**: ① 의도 인식이 기본으로 불가능한 것은 의도된 설계고, 세 단계로 켠다(분류기, 후보, 토글). ② Auto의 실효 창은 기본값이 200000이다 — 가드레일이 0.8×창 ≥ force 단계(150000)를 보장하므로, 코어 압축선(160000)은 언제나 부드러운 인계선(150000)보다 뒤에 있다. ③ 기본 상태에서 가장 체감되는 건 수위 3종 세트다: 80k에 위임 알림 / 120k에 읽기 수렴 / 150k에 자동 백업 인계 — 설정은 아무것도 필요 없다.
 
@@ -114,7 +114,7 @@ bash <설치-디렉터리>/skills/db-query/scripts/setup.sh
 
 - **`off`** — 측정만: 사용량과 캐시 히트 샘플링은 계속 돌아간다; 배너 없음, fold 없음.
 - **`advisory`** — 세션 모델이 스스로 fold 한다: `ctx_trim_fold`와 `ctx_trim_status` 도구와 프로토콜 헤드를 노출.
-- **`auto`**(기본값) — 위의 모든 것에 더해 유휴 경계에서 자동 fold가 세 단계로 동작한다: 성장 게이트(view가 `trimGrowthTokens` 이상 증가 + 연속 압축 가능 증분이 `trimIncrementTokens` 이상), 압력 단계(컨텍스트 창의 `trimPressurePercent`), 비상 단계(`trimEmergencyPercent` — 독립 쿨다운을 가진 기계 fold).
+- **`auto`**(기본값) — 위의 모든 것에 더해 유휴 경계에서 자동 fold가 세 단계로 동작한다: 성장 게이트(지난 접기 후 저점부터 측정한 성장 ≥ `trimGrowthTokens` — 높은 지점에서 접은 후에도 게이트가 계속 작동하도록 유지하는 앵커 — + 연속 압축 가능 증분이 `trimIncrementTokens` 이상), 압력 단계(컨텍스트 창의 `trimPressurePercent`), 비상 단계(`trimEmergencyPercent` — 독립 쿨다운을 가진 기계 fold).
 
 모든 키는 설정 → dsh-switchman에 있고, 기본값은 `host/config.js` 기준이다:
 
@@ -124,7 +124,7 @@ bash <설치-디렉터리>/skills/db-query/scripts/setup.sh
 | `trimMode` | `auto` | `off` 측정만 / `advisory` 모델 주도 fold / `auto` 시스템 주도 fold. |
 | `trimGrowthTokens` | `22500` | 성장 게이트: 지난 fold 이후 아웃바운드 view가 이만큼 자라면 fold. |
 | `trimIncrementTokens` | `50000` | 게이트 동반 조건: 연속 압축 가능 증분도 이 규모에 달해야 한다. |
-| `trimPressurePercent` | `75` | 압력 단계: view 사용량이 컨텍스트 창의 이 백분율에 달하면 fold. |
+| `trimPressurePercent` | `60` | 압력 단계: view 사용량이 컨텍스트 창의 이 백분율에 달하면 fold. |
 | `trimEmergencyPercent` | `95` | 비상 단계: 이 백분율에서 기계 fold 강제(사이드 모델 호출 없음). |
 | `trimWindowTokens` | `0` | 티어 계산의 유효 윈도우 상한: min(모델 윈도우, 상한)으로 계산. `0` = `wmForceTokens`를 따름. |
 | `trimProtectedTail` | `6` | 마지막 N개 메시지는 절대 fold되지 않는다. |
