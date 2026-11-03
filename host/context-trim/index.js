@@ -386,7 +386,18 @@ export function applyContextTrim(ctx, config) {
 		// resolved against raw history (with a folded capture, fold #2+ refs
 		// would never resolve and the frontier would silently reset).
 		const rawSnapshot = messages.slice();
-		if (view.applied > 0) replaceInPlace(messages, view.messages);
+		if (view.applied > 0) {
+			try {
+				replaceInPlace(messages, view.messages);
+			} catch {
+				// Resumed sessions re-send a FROZEN host-assembled history (compacted
+				// records) — splice cannot delete its indices. Swap the reference
+				// instead: the waterfall continuation reads options.messages only
+				// after listeners run, and prepend:true keeps us ahead of every
+				// other listener, so downstream sees the rebuilt view either way.
+				options.messages = view.messages;
+			}
+		}
 		const viewTokens = estimateTokensOf(view.messages);
 		const blocksCount = Array.isArray(ledger.blocks) ? ledger.blocks.length : 0;
 		// Per-request application evidence: whether the ledger's blocks actually
