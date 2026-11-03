@@ -132,6 +132,8 @@ bash <安裝目錄>/skills/db-query/scripts/setup.sh
 | `trimSideModel` | 未設定 | 寫摘要的 side model 路由。留空 = 繼承對話目前模型。 |
 | `trimStateDir` | 未設定 | 折疊狀態目錄覆蓋。留空 = `<dshHome>/.dsh-switchman/state/trim/`。 |
 
+**觸發路徑。** 級別檢查在閒置邊界上執行；在閒置狀態事件不可達的宿主上，兜底改為在每次模型串流完成後也檢查一次（每個對話節流為每 60 秒至多評估一次）。每個決策——fold 與 no-op 皆然——都會作為一行 JSON 附加進裁剪狀態目錄（見 `trimStateDir`）下的 `decisions.log`，為 fold 留下離線稽核軌跡。
+
 **fold 如何保住快取命中。** 每次 fold 都要為前綴重付一次；目標是攤銷成本，不是滿分命中率。引擎守住快取契約：fold 只附加——frontier 只前進，凍結區永不再改；view 由（歷史, 折疊狀態）確定性重建，因此兩次 fold 之間序列化前綴位元組不變，服務商快取持續命中；fold 邊界絕不把 assistant 的 tool-call 與其 tool 結果拆開；最後 `trimProtectedTail` 則訊息豁免；一切皆 fail-open——內部出錯退化為透傳，絕不產生壞請求。
 
 **壓縮仲裁。** 兩個自動裁剪器搶同一份歷史會互相重複摘要、互相摧毀 frontier，因此 `cordis.patch.yml` 給宿主的 `dsh-compaction-basic` 行設了 `auto: false`：context-trim 成為唯一語義裁剪器。手動 `/compact` 照常可用，force 級交接（借用的正是這條手動路徑）不受影響。溢出恢復改由裁剪承擔：超視窗的那次嘗試失敗一次，隨後緊急級折好 view，下一次嘗試就能裝下。
