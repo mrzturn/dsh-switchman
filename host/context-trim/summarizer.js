@@ -143,10 +143,14 @@ export async function summarizeWithModel(llm, route, materialText, options = {})
 		const call = await llm.prepareCall(
 			{ provider: route.provider, model: route.model, maxTokens },
 			controller.signal,
-			() => ({}),
+			(controls) => controls,
 		);
 		let text = "";
+		// stream options MUST carry the prepared call config — the adapter
+		// dispatch binds credentials/routing from it (same waterfall shape as
+		// the intent classifier; dropping it fails prepare-time integrity).
 		const streamOptions = {
+			...call.config,
 			messages: [
 				{ id: randomUUID(), role: "system", content: SUMMARY_SYSTEM_PROMPT },
 				{ id: randomUUID(), role: "user", content: [{ type: "text", text: materialText }] },
