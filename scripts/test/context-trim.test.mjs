@@ -8,7 +8,7 @@ import { test, describe } from "node:test";
 import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { refOf, buildView, segmentBounds, rangeIsSegmentAligned, estimateTokensOf, replaceInPlace, summaryMessageOf, renderSummaryText, refPositions } from "../../host/context-trim/view.js";
+import { refOf, buildView, ledgerIsStale, segmentBounds, rangeIsSegmentAligned, estimateTokensOf, replaceInPlace, summaryMessageOf, renderSummaryText, refPositions } from "../../host/context-trim/view.js";
 import { createStore, emptyLedger, normalizeBlock } from "../../host/context-trim/state.js";
 import { computeFoldableRange, evaluateTrigger, FOLD_MIN_INTERVAL_MS, EMERGENCY_COOLDOWN_MS } from "../../host/context-trim/trigger.js";
 import { mechanicalSummary, renderMaterial, SUMMARY_SYSTEM_PROMPT, MAX_MATERIAL_CHARS } from "../../host/context-trim/summarizer.js";
@@ -100,6 +100,29 @@ describe("view: buildView determinism (golden)", () => {
 		const view = buildView(messages, ledger, { protectedTail: 6 });
 		assert.equal(view.applied, 0);
 		assert.equal(view.messages.length, 10);
+		assert.equal(view.unlocated, 1);
+		assert.equal(ledgerIsStale(view, ledger), true);
+	});
+
+	test("blocks that locate but are skipped (protected tail) are not unlocated", () => {
+		const messages = makeMessages(20);
+		const ledger = emptyLedger("s1");
+		ledger.blocks.push(blockFor(messages, 0, 19, "everything"));
+		const view = buildView(messages, ledger, { protectedTail: 6 });
+		assert.equal(view.applied, 0);
+		assert.equal(view.unlocated, 0);
+		assert.equal(ledgerIsStale(view, ledger), false);
+	});
+
+	test("ledgerIsStale requires every block to be unlocated", () => {
+		const messages = makeMessages(20);
+		const ledger = emptyLedger("s1");
+		ledger.blocks.push(blockFor(messages, 2, 5, "real"));
+		ledger.blocks.push({ refRange: { firstId: "ghost-first", lastId: "ghost-last" }, count: 5, approxTokens: 10, summary: "ghost", kind: "summary", tier: "growth", createdAt: 0 });
+		const view = buildView(messages, ledger, { protectedTail: 6 });
+		assert.equal(view.applied, 1);
+		assert.equal(view.unlocated, 1);
+		assert.equal(ledgerIsStale(view, ledger), false);
 	});
 
 	test("count mismatch guard: located span must equal stored count", () => {

@@ -134,6 +134,8 @@ bash <安装目录>/skills/db-query/scripts/setup.sh
 
 **触发路径。** 档位检查在空闲边界上运行；在空闲状态事件不可达的宿主上，兜底改为在每次模型流式完成后也检查一次（每个会话节流为每 60 秒至多评估一次）。每个决策——fold 与 no-op 皆然——都会作为一行 JSON 追加进裁剪状态目录（见 `trimStateDir`）下的 `decisions.log`，为 fold 留下离线审计轨迹。
 
+
+**宿主压缩纪元。** fold 引用锚定在消息 id 与内容哈希上，因此宿主自身的压缩一旦替换了重发历史，整本账就会同时老化：所有块都无法定位，view 静默回退为原始历史（fail-open——决策日志会记录 `view-applied applied=0`），插件在下一次请求时把增长基线重锚到压缩后的视图。宿主压缩因此是兜底的裁剪层，插件 fold 负责单个宿主纪元内的细粒度工作。
 **fold 如何保住缓存命中。** 每次 fold 都要为前缀重付一次；目标是摊销成本，不是满分命中率。引擎守住缓存契约：fold 只追加——frontier 只前进，冻结区永不再改；view 由（历史, 折叠状态）确定性重建，因此两次 fold 之间序列化前缀字节不变，服务商缓存持续命中；fold 边界绝不把 assistant 的 tool-call 与其 tool 结果拆开；最后 `trimProtectedTail` 条消息豁免；一切皆 fail-open——内部出错退化为透传，绝不产生坏请求。
 
 **压缩仲裁。** 两个自动裁剪器抢同一份历史会互相重复摘要、互相摧毁 frontier，因此 `cordis.patch.yml` 给宿主的 `dsh-compaction-basic` 行设了 `auto: false`：context-trim 成为唯一语义裁剪器。手动 `/compact` 照常可用，force 档交接（借用的正是这条手动路径）不受影响。溢出恢复改由裁剪承担：超窗的那次尝试失败一次，随后紧急档折好 view，下一次尝试就能装下。

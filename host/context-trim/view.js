@@ -247,9 +247,11 @@ export function buildView(messages, ledger, options = {}) {
 	const blocks = Array.isArray(ledger?.blocks) ? ledger.blocks : [];
 	const positions = refPositions(messages);
 	const located = [];
+	let unlocated = 0;
 	for (const block of blocks) {
 		const range = locateBlock(positions, block, -1);
 		if (range !== null) located.push({ block, firstIdx: range[0], lastIdx: range[1] });
+		else unlocated += 1;
 	}
 	located.sort((a, b) => a.firstIdx - b.firstIdx || b.lastIdx - a.lastIdx);
 	const out = [];
@@ -267,7 +269,17 @@ export function buildView(messages, ledger, options = {}) {
 		applied += 1;
 	}
 	for (let i = at; i < messages.length; i++) out.push(messages[i]);
-	return { messages: out, applied, foldedMessages };
+	return { messages: out, applied, foldedMessages, unlocated };
+}
+
+/** Epoch-boundary detection: every block failed to LOCATE inside the current
+ * re-send — the host replaced history (its own compaction) and the ledger
+ * aged out as a whole. The fail-open skip stays correct, but a growth
+ * baseline carried over from the previous epoch does not: the caller
+ * re-anchors it exactly once per epoch. */
+export function ledgerIsStale(view, ledger) {
+	const blocksCount = Array.isArray(ledger?.blocks) ? ledger.blocks.length : 0;
+	return blocksCount > 0 && view.applied === 0 && view.unlocated === blocksCount;
 }
 
 /** Replace an array's CONTENT in place (identity preserved — the llm/stream
