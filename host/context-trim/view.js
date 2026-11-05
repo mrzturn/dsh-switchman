@@ -302,6 +302,10 @@ export function buildView(messages, ledger, options = {}) {
 	for (const entry of located) {
 		if (entry.firstIdx < at) continue; // overlaps an applied block — skip
 		if (protectedTail > 0 && entry.lastIdx >= messages.length - protectedTail) continue;
+		// The system prompt at index 0 is never foldable: splicing it off the
+		// wire would drop the prompt itself. Plain skip (not unlocated) so
+		// the ledgerIsStale epoch semantics stay untouched.
+		if (entry.firstIdx === 0 && messages[0]?.role === "system") continue;
 		if (!rangeIsSegmentAligned(messages, entry.firstIdx, entry.lastIdx)) continue; // never split a tool pair (design §4)
 		for (let i = at; i < entry.firstIdx; i++) out.push(messages[i]);
 		out.push(summaryMessageOf(entry.block));

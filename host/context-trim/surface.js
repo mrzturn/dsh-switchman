@@ -390,6 +390,20 @@ export function createSurfaceFoldPass(deps = {}) {
 		const nodes = surface.nodes.slice();
 		const pairs = derivingPairsOf(session, nodes);
 		const liveGeneration = Number.isFinite(surface.contentGeneration) ? surface.contentGeneration : 0;
+		// The host rejects a replace op over node 0 only when node 0 actually
+		// carries the system prompt (assertSystemHeadRewrite). Resolve that
+		// head role once per sweep — sessions without a leading system
+		// message fold their head node like any other.
+		const headIsSystem = (() => {
+			if (nodes.length === 0) return false;
+			try {
+				const event = typeof session?.eventAt === "function" ? session.eventAt(nodes[0]) : undefined;
+				const message = event === undefined ? null : messageOfEvent(session, event);
+				return message !== null && message !== undefined && message.role === "system";
+			} catch {
+				return false;
+			}
+		})();
 		let shipped = 0;
 		for (const block of pending) {
 			// Resolve the shadow range: stored capture first (validated dense
@@ -415,6 +429,22 @@ export function createSurfaceFoldPass(deps = {}) {
 				startSeq = nodes[located[0]];
 				endSeq = nodes[located[1]];
 				seqs = nodes.slice(located[0], located[1] + 1);
+			}
+			// System head: when the first surface node carries the system
+			// prompt, the host rejects any replace op covering it outright
+			// (assertSystemHeadRewrite — node 0 may be rewritten only by a
+			// system/message over exactly that node). Tombstone like an append
+			// rejection instead of shipping an op that can never land; a
+			// surface content change re-opens the attempt via the generation.
+			if (headIsSystem && startSeq === nodes[0]) {
+				block.surfaceSkip = { reason: "system-head", contentGeneration: liveGeneration, at: Date.now() };
+				try {
+					store.persist(ledger);
+				} catch {
+					/* best effort */
+				}
+				skip(sessionId, "system-head", via, `block=${block.id}`);
+				continue;
 			}
 			const key = replacedKey(sessionId, startSeq, endSeq, liveGeneration);
 			if (wasReplaced(key)) continue; // belt over the durable marker

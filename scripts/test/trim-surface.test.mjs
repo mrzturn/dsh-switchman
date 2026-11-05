@@ -6,8 +6,8 @@
  * markers required on message events, replace ranges must live in the
  * surface, sourceEventSeqs must densely cover every shadowed node. Covers:
  * frozen-dispatch fold ships via turn-stopping, idempotence, the compaction
- * lock, the surfaceFold flag, the missing-service legacy fallback, and the
- * incomplete-seqs validation skip.
+ * lock, the surfaceFold flag, the missing-service legacy fallback, the
+ * incomplete-seqs validation skip, and the system-head skip.
  */
 
 import assert from "node:assert/strict";
@@ -439,4 +439,49 @@ test("count-less legacy block: not-located hard skip, never a guessed range", as
 	assert.equal(block.surfaceReplaced, undefined, "never shipped");
 	assert.equal(session.rawEvents.filter((event) => event.surfaceOp?.op === "replace").length, 0, "no replace events");
 	assert.equal(session.surface.nodes.length, nodesBefore, "surface untouched — no guessed range shadowed");
+});
+
+test("system head: a block over the first node is tombstoned, later blocks still ship", async (t) => {
+	let listener = null;
+	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
+	const { ctx, hooks, agentsById } = mockCtx({ llmFiber: fiber });
+	ctx.get = () => null;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-surface-s-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	// Session whose surface node 0 IS the system prompt (the real wire head
+	// shape that tripped the host's assertSystemHeadRewrite).
+	const session = mockSession("surf-sh");
+	session.append("system/message", { message: { id: "sys-0", role: "system", source: { kind: "system" }, content: [{ type: "text", text: "system prompt " + "S".repeat(2_000) }] } }, { surfaceOp: "append" });
+	for (let i = 1; i <= 4; i++) {
+		session.append("user/message", { id: `u${i}`, role: "user", source: { kind: "user" }, content: [{ type: "text", text: `u${i} ` + "F".repeat(4_000) }] }, { surfaceOp: "append" });
+		session.append("assistant/message", { message: { id: `a${i}`, role: "assistant", source: { kind: "model" }, content: [{ type: "text", text: `a${i} ` + "F".repeat(4_000) }] } }, { surfaceOp: "append" });
+	}
+	agentsById.set("surf-sh", { session });
+	assert.equal(session.surface.nodes[0], 0, "node 0 is the system head");
+	// Block 1: stored capture over the system head (the historical first-fold
+	// shape). Block 2: a later range without a capture (live-location path).
+	const headBlock = { id: "b-head", kind: "summary", tier: "model", refRange: { firstId: "sys-0", lastId: "a1" }, count: 3, approxTokens: 1_000, summary: "Head block." };
+	headBlock.surfaceSeqs = session.surface.nodes.slice(0, 3);
+	const tailBlock = { id: "b-tail", kind: "summary", tier: "model", refRange: { firstId: "u2", lastId: "a2" }, count: 2, approxTokens: 1_000, summary: "Tail block." };
+	handle.store.ledgerOf("surf-sh").blocks.push(headBlock, tailBlock);
+
+	hooks["agent/turn-stopping"]({ agent: { session }, turn: 1, signal: undefined });
+	assert.equal(await poll(() => tailBlock.surfaceReplaced !== undefined), true, "the later-range block still ships");
+	assert.equal(headBlock.surfaceReplaced, undefined, "the system-head block never ships");
+	assert.equal(headBlock.surfaceSkip?.reason, "system-head", "tombstone persisted");
+	const replaces = session.rawEvents.filter((event) => event.surfaceOp?.op === "replace");
+	assert.equal(replaces.length, 1, "exactly one replace event appended");
+	assert.notEqual(replaces[0].surfaceOp.startSeq, 0, "the shipped range never covers node 0");
+	const log = decisionsOf(stateDir);
+	assert.match(log, /session=surf-sh surface-replace skipped reason=system-head .*block=b-head/u);
+	assert.match(log, /session=surf-sh surface-replace startSeq=\d+ endSeq=\d+/u, "the ship row is logged");
+
+	// Second sweep after the content generation moved: the tombstone re-opens
+	// but the per-block row stays deduped to one, and nothing new appends.
+	hooks["agent/turn-stopping"]({ agent: { session }, turn: 2, signal: undefined });
+	await poll(() => false, 20);
+	const headRows = decisionsOf(stateDir).split("\n").filter((line) => line.includes("reason=system-head"));
+	assert.equal(headRows.length, 1, "exactly one system-head row across sweeps");
+	assert.equal(session.rawEvents.filter((event) => event.surfaceOp?.op === "replace").length, 1, "still exactly one replace");
 });

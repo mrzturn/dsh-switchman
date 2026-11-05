@@ -47,6 +47,13 @@ export function computeFoldableRange(messages, ledger, protectedTail) {
 		const list = positions.get(ledger.frontier);
 		if (list !== undefined && list.length > 0) startFrom = list[list.length - 1] + 1;
 	}
+	// A leading system message is the frozen head of the wire array: a fold
+	// anchored on it would put a surface replace op (and a view splice) over
+	// the system prompt, which the host rejects outright
+	// (assertSystemHeadRewrite — node 0 may be rewritten only by a
+	// system/message over exactly that node). Covers both the frontier-null
+	// first fold and any frontier-set fold that lands on the head.
+	if (messages[0]?.role === "system") startFrom = Math.max(startFrom, 1);
 	let best = null;
 	for (const [start, end] of segmentBounds(messages)) {
 		if (start < startFrom) continue; // behind the frontier

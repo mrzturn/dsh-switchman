@@ -186,6 +186,29 @@ describe("view: buildView determinism (golden)", () => {
 		assert.ok(bIdx > 0);
 		assert.equal(view.messages.length, 30 - 5 - 5 + 2);
 	});
+
+	test("system head: a block covering index 0 is skipped, not unlocated", () => {
+		const messages = [{ role: "system", content: [{ type: "text", text: "system prompt" }] }, ...makeMessages(19)];
+		const ledger = emptyLedger("s-sys");
+		ledger.blocks.push(blockFor(messages, 0, 9, "covers the head"));
+		const view = buildView(messages, ledger, { protectedTail: 6 });
+		assert.equal(view.applied, 0);
+		assert.equal(view.unlocated, 0); // epoch semantics untouched
+		assert.equal(view.foldedMessages, 0);
+		assert.equal(view.messages.length, 20);
+		assert.deepEqual(view.messages, messages); // nothing spliced off
+		assert.equal(ledgerIsStale(view, ledger), false);
+	});
+
+	test("system head: a block over a later range still applies", () => {
+		const messages = [{ role: "system", content: [{ type: "text", text: "system prompt" }] }, ...makeMessages(19)];
+		const ledger = emptyLedger("s-sys2");
+		ledger.blocks.push(blockFor(messages, 2, 9, "later range"));
+		const view = buildView(messages, ledger, { protectedTail: 6 });
+		assert.equal(view.applied, 1);
+		assert.equal(view.messages[0].role, "system"); // the head survives at index 0
+		assert.equal(view.messages.length, 20 - 8 + 1);
+	});
 });
 
 describe("view: tool-pair integrity", () => {
@@ -337,6 +360,22 @@ describe("trigger: tiers and gates", () => {
 		const frontierLedger = { frontier: refOf(messages[9], 9) };
 		assert.deepEqual(computeFoldableRange(messages, frontierLedger, 6), { startIdx: 10, endIdx: 13 });
 		assert.equal(computeFoldableRange(makeMessages(5), null, 6), null); // tail covers all
+	});
+
+	test("computeFoldableRange never starts at a leading system message", () => {
+		const messages = [{ role: "system", content: [{ type: "text", text: "system prompt" }] }, ...makeMessages(20)];
+		// frontier null (the first fold): the system head must stay out
+		const nullFrontier = computeFoldableRange(messages, null, 6);
+		assert.ok(nullFrontier !== null);
+		assert.ok(nullFrontier.startIdx >= 1, `startIdx ${nullFrontier.startIdx} covers the system head`);
+		// frontier ON the system head itself: still clamped past it
+		const headFrontier = computeFoldableRange(messages, { frontier: refOf(messages[0], 0) }, 6);
+		assert.ok(headFrontier === null || headFrontier.startIdx >= 1);
+		// a frontier already past the head is untouched by the clamp
+		const mid = computeFoldableRange(messages, { frontier: refOf(messages[4], 4) }, 6);
+		assert.deepEqual(mid, { startIdx: 5, endIdx: 14 });
+		// no leading system message keeps the old behavior
+		assert.deepEqual(computeFoldableRange(makeMessages(20), null, 6), { startIdx: 0, endIdx: 13 });
 	});
 
 	test("growth tier fires only above BOTH gates", () => {
