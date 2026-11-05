@@ -32,6 +32,7 @@ import { mechanicalSummary, renderMaterial, summarizeWithModel } from "./summari
 import { createStore } from "./state.js";
 import { createMetrics, extractUsage, wrapStreamForMetrics } from "./metrics.js";
 import { forkLinkOf, loadForkLinks, recordForkLink, resolveInheritance, INHERIT_WINDOW_MS } from "./fork.js";
+import { createSurfaceFoldPass } from "./surface.js";
 import { childSessionIdOf } from "../subagent-model.js";
 
 // ---- agent reference helpers --------------------------------------------------
@@ -252,6 +253,11 @@ export function applyContextTrim(ctx, config) {
 	// Per-process pipeline state (process-wide by design: ledgers persist on
 	// disk per session, metrics/captures live per session in memory).
 	const store = createStore({ stateDir: readString(config, "trimStateDir", null) ?? undefined, warn });
+	// Surface-replace pass (docs/surface-fold.md): ships committed fold blocks
+	// onto the session surface so folds reach the wire even for frozen
+	// dispatches. Registers its own agent/turn-stopping trigger; the idle
+	// sweep below runs after each fold cycle.
+	const surfacePass = createSurfaceFoldPass({ ctx, config, store, decisionLog, warn });
 	const metrics = createMetrics();
 	const captures = new Map(); // sessionId -> { messages, refs, viewTokens, model, at }
 	const inFlight = new Set(); // sessionIds with a fold running
@@ -547,6 +553,10 @@ export function applyContextTrim(ctx, config) {
 			positions,
 		);
 		if (!result.ok) return `commit-rejected:${result.reason}`;
+		// Commit-time surface capture (primary range-mapping strategy, see
+		// surface.js header): store the covered event seqs while the live
+		// surface still resolves the folded range.
+		surfacePass.captureFoldSeqs(sessionId, result.block);
 		// Growth-gate baseline pair: pre-fold view (banner display) plus the
 		// post-fold low (tier-a anchor — keeps the gate armed after folds
 		// that commit at high view points).
@@ -671,7 +681,16 @@ export function applyContextTrim(ctx, config) {
 				// agent }) — derive the session id per host/context-watch.js:122.
 				const sessionId = agentSessionIdOf(payload?.agent);
 				if (sessionId === null) return;
-				void maybeFold(sessionId);
+				// Fold first, then the surface-replace idle sweep (design
+				// docs/surface-fold.md): a block committed by this idle pass
+				// ships on the same boundary.
+				void maybeFold(sessionId).finally(() => {
+					try {
+						void surfacePass.sweep(sessionId, "idle");
+					} catch {
+						/* sweep must never break the idle hook */
+					}
+				});
 			} catch {
 				/* idle hook must never throw */
 			}
@@ -808,6 +827,7 @@ export function applyContextTrim(ctx, config) {
 					positions,
 				);
 				if (!result.ok) return `Fold rejected: ${result.reason}.`;
+				surfacePass.captureFoldSeqs(sessionId, result.block);
 				// Growth-gate baseline pair: pre-fold view (banner display) plus the
 				// post-fold low (tier-a anchor — keeps the gate armed after folds
 				// that commit at high view points).
@@ -907,5 +927,5 @@ export function applyContextTrim(ctx, config) {
 		warn(`[context-trim] ctx.inject(llm) failed: ${error?.message ?? error}`);
 	}
 
-	return { store, metrics, captures, inFlight, maybeFold, maybeInherit, applyViewToOptions, renderTrimContextLine: (agent) => renderTrimContextLine(agent, { enabled: enabledNow(), mode: modeNow(), viewTokens: null, windowTokens: null, folds: 0, growthTokens: null, lastModel: null }) };
+	return { store, metrics, captures, inFlight, maybeFold, maybeInherit, applyViewToOptions, surfacePass, renderTrimContextLine: (agent) => renderTrimContextLine(agent, { enabled: enabledNow(), mode: modeNow(), viewTokens: null, windowTokens: null, folds: 0, growthTokens: null, lastModel: null, wireRaw: false }) };
 }

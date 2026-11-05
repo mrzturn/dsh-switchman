@@ -261,6 +261,12 @@ export const Config = z.object({
 	/** Explicit ledger state directory. Empty = <dshHome>/.dsh-switchman/
 	 *  state/trim/. */
 	trimStateDir: z.string().default("").volatile(),
+	/** Ship committed folds onto the session surface: append the host-style
+	 *  shadow-price + surfaceOp replace event pair so folds reach the wire
+	 *  even while the host freezes assembled requests. OFF keeps the legacy
+	 *  splice-only view (wire=raw banner on frozen dispatches). Auto-noop
+	 *  on hosts without the surface mechanism. */
+	surfaceFold: z.boolean().default(true).volatile(),
 });
 
 /** The six dispatch lanes, in display order. */

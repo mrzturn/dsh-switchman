@@ -1,0 +1,485 @@
+/** dsh-switchman context-trim surface-replace pass (design:
+ *  docs/surface-fold.md, v1.10.0).
+ *
+ * The splice-level view (view.js injectView) cannot reach the wire while the
+ * host deep-freezes assembled requests — those sessions log wire=raw and the
+ * folds stay meter-only phantoms. The host's own compaction proves the escape
+ * hatch: history is a DERIVED projection of the append-only event log, and
+ * appending ONE event with surfaceOp {op:'replace', startSeq, endSeq} shadows
+ * a range in that projection (Session.deriveMessages walks surface.nodes,
+ * core/session/src/index.ts:999-1020). This pass clones that mechanism for
+ * fold blocks: at a serial boundary it appends a shadow-price metering event
+ * plus ONE replacement user/message whose body is the block's rendered text,
+ * so the fold reaches the wire from the source level — frozen dispatches
+ * included, because deriveMessages runs before every assembly.
+ *
+ * RANGE-MAPPING STRATEGY (design §2 / requirement 4): commit-time capture is
+ * PRIMARY — the moment a fold commits, captureFoldSeqs resolves the block's
+ * ref range against the LIVE session surface and stores the covered event
+ * seqs on the ledger block (block.surfaceSeqs). Event seqs are immutable log
+ * indexes, so the capture stays stable across later appends, and it is the
+ * cheapest truth at append time. REPLACE-TIME LIVE LOCATION is the fallback
+ * for blocks whose capture could not run (session unreachable at commit, or
+ * a ledger inherited/cloned without seqs): the block's firstId/lastId refs
+ * are re-located over surface.nodes with the same count-anchored resolution
+ * the view builder uses. A capture that EXISTS but no longer validates
+ * against the live surface (endpoints missing, span not densely covered —
+ * e.g. a host compaction already shadowed part of the range) is NEVER
+ * silently re-targeted: re-locating could shadow a DIFFERENT range than the
+ * one that was folded, so it is skipped as `incomplete-seqs` and logged.
+ *
+ * Protocol details mirrored from the host recon:
+ * - sourceEventSeqs must densely cover EVERY shadowed surface node
+ *   (core/session/src/surface.ts:329-363) — the span slice guarantees this.
+ * - The metering event precedes the replacement SYNCHRONOUSLY-adjacent
+ *   (shadow-price protocol; ToolResultPruner precedent,
+ *   compaction-tool-result-pruner/src/index.ts:159-172). 'compaction/prune'
+ *   is a core-known log-only type (core/session/src/known-event-types.ts:33)
+ *   whose data shape carries shadowedRange/shadowedSeqs/shadowedTokenCount.
+ * - The replacement message's source kind clones the host compaction
+ *   checkpoint marker {kind:'compact-checkpoint'} (compaction/src/checkpoint.ts)
+ *   so downstream consumers recognize it as a compression artifact.
+ * - Never append while a durable compaction/start..compaction/end lock pair
+ *   is open for the session (design constraint).
+ *
+ * Everything fails open: a missing agents service / session.append / surface
+ * support degrades to today's behavior (wire=raw banner + tally watermark),
+ * and every no-op with pending work is logged to decisions.log.
+ */
+
+import { refOf, summaryMessageOf } from "./view.js";
+
+/** Config field reader (fail-open default), same pattern as index.js. */
+function readBool(config, key, fallback) {
+	try {
+		const value = config?.[key];
+		if (typeof value === "boolean") return value;
+		if (value !== null && typeof value === "object" && typeof value.get === "function") {
+			const got = value.get();
+			if (typeof got === "boolean") return got;
+		}
+	} catch {
+		/* fall through */
+	}
+	return fallback;
+}
+
+/** Session id from an agent reference (object → agent.session.id, string →
+ * itself). Local twin of index.js agentSessionIdOf — kept here to avoid an
+ * import cycle (index.js already imports this module). */
+function sessionIdOfAgent(agent) {
+	if (typeof agent === "string") return agent !== "" ? agent : null;
+	if (agent !== null && typeof agent === "object") {
+		const id = agent.session?.id ?? agent.id;
+		return typeof id === "string" && id !== "" ? id : null;
+	}
+	return null;
+}
+
+/** The replacement message event body: the block's rendered summary text in
+ * a user message whose id carries the acp_summary_ prefix (downstream
+ * tooling skips it) and whose source clones the compaction checkpoint
+ * marker. Deterministic — no timestamps (replay determinism constraint). */
+function replacementMessageOf(block) {
+	return {
+		...summaryMessageOf(block),
+		source: { kind: "compact-checkpoint", compactionId: `switchman-trim:${block.id}` },
+	};
+}
+
+/** Derive the message of one session event without depending on host helper
+ * availability: session.deriveEventMessage when present, else the same
+ * projection rules inline (user/message IS the message; message events nest
+ * it under data.message; empty content derives null). Returns the message or
+ * null. */
+function messageOfEvent(session, event) {
+	try {
+		if (typeof session?.deriveEventMessage === "function") return session.deriveEventMessage(event);
+	} catch {
+		/* fall through to the inline projection */
+	}
+	const type = event?.type;
+	const data = event?.data;
+	if (type === "user/message") return data ?? null;
+	if (type === "system/message" || type === "developer/message" || type === "assistant/message" || type === "tool/result") {
+		const message = data?.message;
+		if (message === null || typeof message !== "object") return null;
+		if (Array.isArray(message.content) && message.content.length === 0) return null;
+		return message;
+	}
+	return null;
+}
+
+/** Full event snapshot of a session: snapshotEvents() when available (cached
+ * host side), else a walk over eventAt up to session.seq. Null when neither
+ * accessor exists (pre-surface host). Never throws. */
+function eventsOf(session) {
+	try {
+		if (typeof session?.snapshotEvents === "function") return session.snapshotEvents();
+		if (typeof session?.eventAt === "function" && Number.isFinite(session?.seq)) {
+			const events = [];
+			for (let seq = 0; seq < session.seq; seq++) {
+				const event = session.eventAt(seq);
+				if (event === undefined) break;
+				events.push(event);
+			}
+			return events;
+		}
+	} catch {
+		/* unreadable log → treat as no events (fail open) */
+	}
+	return null;
+}
+
+/** True while a durable compaction/start..compaction/end pair is open for
+ * the session (log-only marker scan; the surface never shows them). Fail-open
+ * false when the log is unreadable. */
+function compactionLockOpen(session) {
+	const events = eventsOf(session);
+	if (events === null) return false;
+	const open = new Set();
+	try {
+		for (const event of events) {
+			const id = event?.data?.compactionId;
+			if (typeof id !== "string" || id === "") continue;
+			if (event.type === "compaction/start") open.add(id);
+			else if (event.type === "compaction/end") open.delete(id);
+		}
+	} catch {
+		return false;
+	}
+	return open.size > 0;
+}
+
+/** (nodeIndex, message) pairs for the surface nodes that derive a message,
+ * in surface order — this subsequence corresponds 1:1 with deriveMessages
+ * (which skips null-deriving nodes like empty assistant steps), so count
+ * anchoring is valid in MESSAGE space while spans stay NODE space. */
+function derivingPairsOf(session, nodes) {
+	const pairs = [];
+	for (let i = 0; i < nodes.length; i++) {
+		const event = (() => {
+			try {
+				return typeof session?.eventAt === "function" ? session.eventAt(nodes[i]) : undefined;
+			} catch {
+				return undefined;
+			}
+		})();
+		const message = event === undefined ? null : messageOfEvent(session, event);
+		if (message !== null && message !== undefined) pairs.push({ nodeIndex: i, message });
+	}
+	return pairs;
+}
+
+/** Count-anchored ref resolution over the deriving pairs (same anchoring as
+ * view.js locateBlock / state.js commitFold: duplicate content collides on
+ * one content-addressed ref, so the pair is resolved anchored on block.count
+ * rather than on occurrence extremes). Returns [firstNodeIndex, lastNodeIndex]
+ * or null. */
+function locateOnSurface(pairs, block) {
+	const firstId = block?.refRange?.firstId;
+	const lastId = block?.refRange?.lastId;
+	if (typeof firstId !== "string" || typeof lastId !== "string") return null;
+	const firstList = [];
+	const lastList = [];
+	pairs.forEach((pair, messageIndex) => {
+		const ref = refOf(pair.message, messageIndex);
+		if (ref === firstId) firstList.push(messageIndex);
+		if (ref === lastId) lastList.push(messageIndex);
+	});
+	if (firstList.length === 0 || lastList.length === 0) return null;
+	const count = Number.isInteger(block.count) && block.count > 0 ? block.count : null;
+	for (const start of firstList) {
+		const end = count !== null ? start + count - 1 : lastList[lastList.length - 1];
+		if (end >= start && lastList.includes(end)) return [pairs[start].nodeIndex, pairs[end].nodeIndex];
+	}
+	return null;
+}
+
+/** Validate a stored capture against the live surface: seqs must be positive
+ * safe integers, ordered, both endpoints present in surface.nodes, the
+ * covered node span must be EXACTLY the stored array (dense coverage — this
+ * is what makes sourceEventSeqs complete, and what detects a surface that
+ * moved on), and the events AT the endpoint seqs must still derive messages
+ * whose refs equal the block's refRange endpoints (identity re-check: a
+ * host log migration that renumbered events while the plugin ledger
+ * survived would otherwise densely validate over UNRELATED events and
+ * shadow the wrong range). Returns { startSeq, endSeq, seqs } or null. */
+function validateStoredSeqs(session, nodes, stored, block) {
+	if (!Array.isArray(stored) || stored.length === 0) return null;
+	let prior = -1;
+	for (const seq of stored) {
+		if (!Number.isInteger(seq) || seq < 0 || seq <= prior) return null;
+		prior = seq;
+	}
+	const indexOfSeq = new Map(nodes.map((seq, index) => [seq, index]));
+	const startIdx = indexOfSeq.get(stored[0]);
+	const endIdx = indexOfSeq.get(stored[stored.length - 1]);
+	if (startIdx === undefined || endIdx === undefined || startIdx > endIdx) return null;
+	const span = nodes.slice(startIdx, endIdx + 1);
+	if (span.length !== stored.length) return null;
+	for (let i = 0; i < span.length; i++) if (span[i] !== stored[i]) return null;
+	// Endpoint identity re-check (see header): the anchored refs must still
+	// resolve at the stored endpoint seqs; any mismatch routes the block to
+	// the incomplete-seqs hard skip — never a silent re-target.
+	const firstId = block?.refRange?.firstId;
+	const lastId = block?.refRange?.lastId;
+	if (typeof firstId === "string" && typeof lastId === "string") {
+		for (const [seq, id] of [[stored[0], firstId], [stored[stored.length - 1], lastId]]) {
+			let event = undefined;
+			try {
+				event = typeof session?.eventAt === "function" ? session.eventAt(seq) : undefined;
+			} catch {
+				event = undefined;
+			}
+			const message = event === undefined ? null : messageOfEvent(session, event);
+			if (message === null || refOf(message, 0) !== id) return null;
+		}
+	}
+	return { startIdx, endIdx, startSeq: stored[0], endSeq: stored[stored.length - 1], seqs: stored.slice() };
+}
+
+/** Build the surface-replace pass. deps: { ctx, config, store, decisionLog,
+ * warn }. Returns { sweep, captureFoldSeqs, supported } — sweep is async and
+ * never rejects; all failures are contained and logged. Registers its own
+ * agent/turn-stopping listener (serial boundary, no request in flight). */
+export function createSurfaceFoldPass(deps = {}) {
+	const ctx = deps.ctx;
+	const config = deps.config;
+	const store = deps.store;
+	const decisionLog = typeof deps.decisionLog === "function" ? deps.decisionLog : () => {};
+	const warn = typeof deps.warn === "function" ? deps.warn : () => {};
+
+	/** Whole-pass gate: surfaceFold flag AND the trim master switch. */
+	const enabledNow = () => readBool(config, "surfaceFold", true) && readBool(config, "trimEnabled", true);
+
+	/** Live session object for a session id (agents registry lookup). */
+	function sessionOf(sessionId) {
+		try {
+			const session = ctx?.agents?.get?.(sessionId)?.session;
+			return session !== null && typeof session === "object" ? session : null;
+		} catch {
+			return null;
+		}
+	}
+
+	/** Feature detection (fail-open legacy when anything is missing): an
+	 * agents registry that resolves the session, session.append, and the
+	 * surface architecture (surface.nodes) whose presence implies surfaceOp
+	 * support — deriveMessages/surfaceOp landed as one mechanism. */
+	function surfaceCapable(session) {
+		try {
+			return session !== null
+				&& typeof session === "object"
+				&& typeof session.append === "function"
+				&& session.surface !== null
+				&& typeof session.surface === "object"
+				&& Array.isArray(session.surface.nodes);
+		} catch {
+			return false;
+		}
+	}
+
+	/** In-memory idempotence belt over the durable block marker: the same
+	 * (session, range, contentGeneration) is never replaced twice even if a
+	 * crash lost the ledger persist. Bounded like the other registries. */
+	const replacedKeys = new Map(); // key -> epoch ms
+	function replacedKey(sessionId, startSeq, endSeq, generation) {
+		return `${sessionId}:${startSeq}..${endSeq}:g${generation}`;
+	}
+	function rememberReplaced(key) {
+		replacedKeys.set(key, Date.now());
+		if (replacedKeys.size > 500) replacedKeys.delete(replacedKeys.keys().next().value);
+	}
+	function wasReplaced(key) {
+		const at = replacedKeys.get(key);
+		return at !== undefined && Date.now() - at < 3_600_000;
+	}
+
+	/** Commit-time capture (PRIMARY strategy): resolve the block's ref range
+	 * against the live surface and store the covered event seqs on the block.
+	 * Best-effort — a failed capture just leaves the fallback path. */
+	function captureFoldSeqs(sessionId, block) {
+		try {
+			if (block === null || typeof block !== "object") return false;
+			const session = sessionOf(sessionId);
+			if (!surfaceCapable(session)) return false;
+			const nodes = session.surface.nodes.slice();
+			const located = locateOnSurface(derivingPairsOf(session, nodes), block);
+			if (located === null) return false;
+			block.surfaceSeqs = nodes.slice(located[0], located[1] + 1);
+			try {
+				store.persist(store.ledgerOf(sessionId));
+			} catch {
+				/* persist is best-effort; the in-memory block carries the capture */
+			}
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	/** Per-block skip tombstone: contentGeneration-keyed, so a surface
+	 * rewrite re-opens the attempt while a stable surface stays quiet (no
+	 * per-turn spam for permanently unshippable blocks). */
+	function tombstoneOf(block) {
+		const mark = block?.surfaceSkip;
+		return mark !== null && typeof mark === "object" && typeof mark.reason === "string" && mark.reason !== "" ? mark : null;
+	}
+
+	/** One no-op row (only when the pass had pending work — a vacuous sweep
+	 * with nothing to ship stays silent, matching the early-return style of
+	 * the fold cycle's own action=none rows). */
+	const skip = (sessionId, reason, via, extra = "") => {
+		decisionLog(`session=${sessionId} surface-replace skipped reason=${reason} via=${via}${extra === "" ? "" : ` ${extra}`}`);
+	};
+
+	/** The replace pass for one session. Appends at most one metering +
+	 * replacement pair per pending block; returns the number shipped. */
+	async function sweep(sessionId, via = "idle", sessionHint = null) {
+		if (typeof sessionId !== "string" || sessionId === "") return 0;
+		const ledger = store.ledgerOf(sessionId);
+		const blocks = Array.isArray(ledger.blocks) ? ledger.blocks : [];
+		const generation = (() => {
+			try {
+				return Number.isFinite(sessionHint?.surface?.contentGeneration) ? sessionHint.surface.contentGeneration : null;
+			} catch {
+				return null;
+			}
+		})();
+		const pending = blocks.filter((block) => {
+			if (block?.surfaceReplaced !== null && block?.surfaceReplaced !== undefined) return false;
+			const tomb = tombstoneOf(block);
+			if (tomb === null) return true;
+			// Re-open only when the surface content changed since the skip.
+			return generation !== null && tomb.contentGeneration !== generation;
+		});
+		if (pending.length === 0) return 0;
+		if (!enabledNow()) {
+			skip(sessionId, "disabled", via, `blocks=${pending.length}`);
+			return 0;
+		}
+		const session = surfaceCapable(sessionHint) ? sessionHint : sessionOf(sessionId);
+		if (!surfaceCapable(session)) {
+			// Legacy hosts (or unregistered sessions): keep today's behavior —
+			// the wire=raw banner and the tally-driven watermark relief path.
+			skip(sessionId, "no-service", via, `blocks=${pending.length}`);
+			return 0;
+		}
+		const surface = session.surface;
+		if (compactionLockOpen(session)) {
+			skip(sessionId, "compaction-lock", via, `blocks=${pending.length}`);
+			return 0;
+		}
+		const nodes = surface.nodes.slice();
+		const pairs = derivingPairsOf(session, nodes);
+		const liveGeneration = Number.isFinite(surface.contentGeneration) ? surface.contentGeneration : 0;
+		let shipped = 0;
+		for (const block of pending) {
+			// Resolve the shadow range: stored capture first (validated dense
+			// against the LIVE surface — an incomplete/stale capture is a hard
+			// skip, never a silent re-target), live location as the fallback.
+			let startSeq = null;
+			let endSeq = null;
+			let seqs = null;
+			const stored = Array.isArray(block.surfaceSeqs) ? validateStoredSeqs(session, nodes, block.surfaceSeqs, block) : null;
+			if (stored !== null) {
+				({ startSeq, endSeq, seqs } = stored);
+			} else if (Array.isArray(block.surfaceSeqs)) {
+				block.surfaceSkip = { reason: "incomplete-seqs", contentGeneration: liveGeneration, at: Date.now() };
+				skip(sessionId, "incomplete-seqs", via, `block=${block.id}`);
+				continue;
+			} else {
+				const located = locateOnSurface(pairs, block);
+				if (located === null) {
+					block.surfaceSkip = { reason: "not-located", contentGeneration: liveGeneration, at: Date.now() };
+					skip(sessionId, "not-located", via, `block=${block.id}`);
+					continue;
+				}
+				startSeq = nodes[located[0]];
+				endSeq = nodes[located[1]];
+				seqs = nodes.slice(located[0], located[1] + 1);
+			}
+			const key = replacedKey(sessionId, startSeq, endSeq, liveGeneration);
+			if (wasReplaced(key)) continue; // belt over the durable marker
+			try {
+				// Shadow-price protocol: the metering event and its replacement
+				// are appended synchronously adjacent (pruner precedent). If the
+				// replacement append throws after the metering event landed, the
+				// orphan metering row is log-only and harmless — a pure consumer
+				// pairs it with the replacement that never follows, pricing
+				// nothing. Everything is pre-validated above, so this is a
+				// host-drift backstop only.
+				session.append("compaction/prune", {
+					shadowedRange: { start: startSeq, end: endSeq },
+					shadowedSeqs: seqs,
+					shadowedTokenCount: Number.isFinite(block.approxTokens) && block.approxTokens > 0 ? Math.round(block.approxTokens) : seqs.length,
+				});
+				const event = session.append("user/message", replacementMessageOf(block), {
+					surfaceOp: { op: "replace", startSeq, endSeq },
+					sourceEventSeqs: seqs,
+				});
+				// Idempotence marker (durable, keyed by range + contentGeneration
+				// per the design): a second sweep filters the block out here.
+				block.surfaceReplaced = {
+					startSeq,
+					endSeq,
+					contentGeneration: liveGeneration,
+					atSeq: Number.isFinite(event?.seq) ? event.seq : null,
+					via,
+					at: Date.now(),
+				};
+				delete block.surfaceSkip;
+				rememberReplaced(key);
+				shipped += 1;
+				decisionLog(`session=${sessionId} surface-replace startSeq=${startSeq} endSeq=${endSeq} seqs=${seqs.length} tokens=${Number.isFinite(block.approxTokens) ? Math.round(block.approxTokens) : "?"} generation=${liveGeneration} via=${via}`);
+				try {
+					store.persist(ledger);
+				} catch {
+					/* the in-memory marker still guards this process */
+				}
+			} catch (error) {
+				const message = String(error?.message ?? error).replace(/\s+/g, " ").slice(0, 160);
+				// Tombstone like the resolution failures: a permanently
+				// rejecting block must not retry (and re-log a full lock
+				// scan) on every sweep; a surface content change re-opens it.
+				block.surfaceSkip = { reason: `append-rejected:${message}`, contentGeneration: liveGeneration, at: Date.now() };
+				try {
+					store.persist(ledger);
+				} catch {
+					/* best effort */
+				}
+				skip(sessionId, `append-rejected:${message}`, via, `block=${block.id}`);
+			}
+		}
+		if (shipped > 0) {
+			try {
+				store.persist(ledger);
+			} catch {
+				/* best effort */
+			}
+			warn(`[context-trim] ${sessionId}: surface-replace shipped ${shipped} fold block(s) via ${via}`);
+		}
+		return shipped;
+	}
+
+	// Trigger 1: agent/turn-stopping — serial, no request in flight, and the
+	// session object rides the payload (agent.session). Fail-open when the
+	// host does not dispatch the event.
+	try {
+		ctx?.on?.("agent/turn-stopping", (payload) => {
+			try {
+				const sessionId = sessionIdOfAgent(payload?.agent);
+				if (sessionId === null) return;
+				const hint = payload?.agent !== null && typeof payload?.agent === "object" ? payload.agent.session : null;
+				void sweep(sessionId, "turn-stopping", hint);
+			} catch {
+				/* listener must never throw */
+			}
+		});
+	} catch (error) {
+		warn(`[context-trim] agent/turn-stopping hook failed: ${error?.message ?? error}`);
+	}
+
+	return { sweep, captureFoldSeqs, enabledNow };
+}

@@ -150,11 +150,21 @@ export function resolveInheritance(parentLedger, parentId, childId, childMessage
 	const frontier = typeof parentLedger.frontier === "string" && parentLedger.frontier !== "" ? parentLedger.frontier : null;
 	if (frontier === null || !refPositions(childMessages).has(frontier)) return { ok: false, reason: "frontier-not-found" };
 	// Detached copy: blocks are shared CONTENT but the ledgers must never
-	// alias each other (two levels deep covers block + refRange).
+	// alias each other (two levels deep covers block + refRange). The
+	// parent's SURFACE bookkeeping (surfaceSeqs / surfaceReplaced /
+	// surfaceSkip) is stripped: those fields index the PARENT's event log —
+	// meaningless seqs in the child, and a parent-shipped range must re-ship
+	// (or re-locate) against the child's own surface (see surface.js).
 	const ledger = {
 		version: LEDGER_VERSION,
 		sessionId: childId,
-		blocks: blocks.map((block) => ({ ...block, refRange: { ...block.refRange } })),
+		blocks: blocks.map((block) => {
+			const clone = { ...block, refRange: { ...block.refRange } };
+			delete clone.surfaceSeqs;
+			delete clone.surfaceReplaced;
+			delete clone.surfaceSkip;
+			return clone;
+		}),
 		frontier,
 		lastFoldViewTokens: Number.isFinite(parentLedger.lastFoldViewTokens) && parentLedger.lastFoldViewTokens > 0 ? Math.round(parentLedger.lastFoldViewTokens) : 0,
 		lastFoldAt: Number.isFinite(parentLedger.lastFoldAt) ? parentLedger.lastFoldAt : 0,
