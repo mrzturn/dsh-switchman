@@ -133,10 +133,12 @@ bash <安裝目錄>/skills/db-query/scripts/setup.sh
 | `trimStateDir` | 未設定 | 折疊狀態目錄覆蓋。留空 = `<dshHome>/.dsh-switchman/state/trim/`。 |
 | `surfaceFold` | `true` | 把已提交的 fold 送上對話表面（shadow-price 計量事件 + `surfaceOp` replace 事件對）。關閉則維持僅拼接的 view。 |
 
-**觸發路徑。** 級別檢查在閒置邊界上執行；在閒置狀態事件不可達的宿主上，兜底改為在每次模型串流完成後也檢查一次（每個對話節流為每 60 秒至多評估一次）。每個決策——fold 與 no-op 皆然——都會作為一行帶時間戳的 `key=value` 附加進裁剪狀態目錄（見 `trimStateDir`）下的 `decisions.log`，為 fold 留下離線稽核軌跡。
+**觸發路徑。** 級別檢查在閒置邊界上執行；在閒置狀態事件不可達的宿主上，兜底改為在每次模型串流完成後也檢查一次（每個對話節流為每 60 秒至多評估一次）。每個決策——fold 與 no-op 皆然——都會作為一行帶時間戳的 `key=value` 附加進裁剪狀態目錄（見 `trimStateDir`）下的 `decisions.log`，為 fold 留下離線稽核軌跡；列詞彙（`view-applied`、fold 決策/結果列、`surface-replace`、`surface-replace skipped reason=…`）收錄於 [docs/context-trim.md](./docs/context-trim.md)。
 
+**線上真值與穩態。** 決策列攜帶 `view=<n>`，回應落地後還會帶上 `wire=<n>`——真實的廠商提示詞（未快取輸入 + 快取讀取 + 快取寫入，從串流的 usage 事件取樣得到）。view 估算只統計 messages 陣列，而且總是比線上讀數小一個固定額外開銷（實測 ≈ 17.3k：系統提示詞 + 工具 schema + persona），所以壓力級與緊急級按 `max(view, wire)` 評估，只有 `wire` 才是提示詞大小的讀數。150k 視窗下，健康的鋸齒波在每次 fold 剛結束時線上 ≈ 40k ↔ 下次 fold 時 88–90k（佔視窗的 ≈27%–60%），每 ~50k 原始增長折疊一次，上限由壓力級而非視窗釘在 90k 附近。若 `view` 持續攀升卻從不出現 `surface-replace` 列，就去讀跳過列（`incomplete-seqs`、`no-service`、`compaction-lock`）。
 
 **宿主壓縮紀元。** fold 引用錨定在訊息 id 與內容雜湊上，因此宿主自身的壓縮一旦替換了重發歷史，整本帳就會同時老化：所有塊都無法定位，view 靜默回退為原始歷史（fail-open——決策日誌會記錄 `view-applied applied=0`），外掛在下一次請求時把增長基線重錨到壓縮後的視圖。宿主壓縮因此是兜底的裁剪層，外掛 fold 負責單一宿主紀元內的細粒度工作。 部分派發改用完全凍結的請求陣列或選項物件（目前的 agent loop 會深凍結裝配好的請求）；對這類派發，`injectView` 會在決策日誌裡報告結果：`nothing-to-apply`（沒有定位到 fold 塊——原始歷史本身就是 view）、`in-place`/`swapped`（fold view 已隨請求送出）或 `none`（fold 存在但凍結的派發帶不動它——線上送出原始歷史）。**Surface replace 是可用時的發送路徑**（`surfaceFold`，預設開啟）：在序列的 `agent/turn-stopping` 邊界外加一次閒置清掃，外掛追加宿主風格的 shadow-price 計量事件與一條攜帶 `surfaceOp {op:'replace', startSeq, endSeq}` 的 `user/message` 替換事件，`sourceEventSeqs` 覆蓋被遮蔽的每個表面節點——與宿主自身壓縮用的是同一機制——已提交的 fold 由此從源頭直達線上，凍結派發也不例外。當某對話近期派發都記錄 `none` 時，外掛把 view 當作僅供計量：水位改用服務商上報的計數（force 檔與自動交接照常運作），fold 循環暫停、不再空燒 summarizer 呼叫，裁剪橫幅以 `wire=raw`（folds not shipping; watermark reads the tally）標記該行；沒有 surface 機制的宿主（或開關關閉時）保持的正是這套舊行為。
+
 **fold 如何保住快取命中。** 每次 fold 都要為前綴重付一次；目標是攤銷成本，不是滿分命中率。引擎守住快取契約：fold 只附加——frontier 只前進，凍結區永不再改；view 由（歷史, 折疊狀態）確定性重建，因此兩次 fold 之間序列化前綴位元組不變，服務商快取持續命中；fold 邊界絕不把 assistant 的 tool-call 與其 tool 結果拆開；最後 `trimProtectedTail` 則訊息豁免；一切皆 fail-open——內部出錯退化為透傳，絕不產生壞請求。
 
 **壓縮仲裁。** 兩個自動裁剪器搶同一份歷史會互相重複摘要、互相摧毀 frontier，因此 `cordis.patch.yml` 給宿主的 `dsh-compaction-basic` 行設了 `auto: false`：context-trim 成為唯一語義裁剪器。手動 `/compact` 照常可用，force 級交接（借用的正是這條手動路徑）不受影響。溢出恢復改由裁剪承擔：超視窗的那次嘗試失敗一次，隨後緊急級折好 view，下一次嘗試就能裝下。
