@@ -16,24 +16,26 @@
  *      -> that seq removed (and shadowedRange.start/end advanced off it)
  *
  * Validation is delegated to the REAL installed verifier (the same worker the
- * loader runs). The verifier is a bundled file that resolves ../package.json
- * relative to itself, so it must be staged in a directory that has that
- * sibling — staging is handled here (this was the trap that made hand-rolled
- * repair runs fail their verify step and silently skip the write).
+ * loader runs), and it validates the FINAL artifact (zstd frames included), not a
+ * plaintext preview — a whole-file single frame is rejected by the loader even when
+ * the events are valid, so the encoded bytes must be the thing under test.
+ *
+ * The verifier is a bundled file that resolves ../package.json relative to itself,
+ * so it is staged in a directory that has that sibling (the staging trap that made
+ * hand-rolled repair runs fail their verify step and silently skip the write).
  *
  * Usage:
  *   node scripts/repair-session-log.mjs <log.jsonl[.zstd] | session-dir | workspace-sessions-dir>...
  *        [--scan] [--write] [--verify-with <worker.cjs>] [--app-version <ver>] [--json]
  *
- *   default        dry run: report the planned fixes, verify a repaired temp copy, write nothing
+ *   default        dry run: report planned fixes and verify the encoded artifact, write nothing
  *   --scan         verify only: report which logs the loader would reject (no repair attempted)
- *   --write        repair in place: sibling .bak-<ts>, then atomic tmp+rename
+ *   --write        repair in place: sibling .bak-<ts>, fsync + mode-preserving atomic rename
  *   --verify-with  path to the installed verifier worker (default: discover under
- *                  ~/.dsh/.dsh-switchman/*\/worker.cjs, else fail closed for --write)
+ *                  ~/.dsh/.dsh-switchman/*\/worker.cjs, else fail closed)
  *   --app-version  version to stamp into the staged verifier's package.json
  *                  (default: CFBundleShortVersionString of the installed app)
  *
- * Zstd round-trip uses the system `zstd` CLI (same frame format as the reader).
  * Node builtins only: this file must never add runtime dependencies to the package.
  */
 import { execFileSync } from "node:child_process";
@@ -41,18 +43,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
+import { encodeFrames } from "./session-log-frames.mjs";
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(name);
 const value = (name) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : null);
-const targets = argv.slice(0, argv.findIndex((a) => a.startsWith("--")) === -1 ? argv.length : argv.findIndex((a) => a.startsWith("--")));
+const firstFlag = argv.findIndex((a) => a.startsWith("--"));
+const targets = argv.slice(0, firstFlag === -1 ? argv.length : firstFlag);
 const doWrite = flag("--write");
 const doScan = flag("--scan");
 const verifyWith = value("--verify-with");
 const appVersion = value("--app-version");
 const asJson = flag("--json");
 
-if (targets.length === 0 || targets.some((t) => t.startsWith("--"))) {
+if (targets.length === 0) {
   console.error("usage: node scripts/repair-session-log.mjs <log|dir>... [--scan] [--write] [--verify-with <worker.cjs>] [--app-version <ver>] [--json]");
   process.exit(2);
 }
@@ -94,19 +98,14 @@ function stageVerifier(workerPath, version) {
   const target = path.join(stage, "dist", "worker.cjs");
   fs.copyFileSync(workerPath, target);
   fs.writeFileSync(path.join(stage, "package.json"), JSON.stringify({ name: "dsh-app", version: version || "0.0.0" }) + "\n");
-  return target;
+  return { target, stage };
 }
 
-function decode(file) {
+function decodeThenCompress(file) {
+  // Keep original frame layout untouched; callers only need the plaintext.
   return file.endsWith(".zstd")
     ? execFileSync("zstd", ["-dc", file], { maxBuffer: 1 << 30 })
     : fs.readFileSync(file);
-}
-
-function encode(file, plainPath) {
-  return file.endsWith(".zstd")
-    ? execFileSync("zstd", ["-19", "-c", plainPath], { maxBuffer: 1 << 30 })
-    : fs.readFileSync(plainPath);
 }
 
 function collectLogs(targets) {
@@ -126,7 +125,7 @@ function collectLogs(targets) {
 }
 
 function planRepair(file) {
-  const lines = decode(file).toString("utf8").split("\n").filter(Boolean);
+  const lines = decodeThenCompress(file).toString("utf8").split("\n").filter(Boolean);
   if (lines.length < 2) throw new Error("log has no events");
   const header = JSON.parse(lines[0]);
   let headSystemSeq = null;
@@ -166,80 +165,95 @@ function planRepair(file) {
   return { header, eventCount: out.length - 1, sourceFixes, pruneFixes, droppedHead, repaired };
 }
 
-function verify(worker, plainPath, expectedId, expectedEventCount) {
+function verify(worker, target, compression, expectedId, expectedEventCount) {
   return new Promise((resolve) => {
-    const w = new Worker(worker, { workerData: { path: plainPath, compression: "none", expectedId, expectedEventCount } });
+    const w = new Worker(worker, { workerData: { path: target, compression, expectedId, expectedEventCount } });
     w.on("message", (m) => { resolve(m); w.terminate(); });
     w.on("error", (e) => resolve({ ok: false, message: "WORKER-ERROR: " + e.message }));
   });
 }
 
+function writeAtomically(file, bytes) {
+  const st = fs.statSync(file);
+  const tmp = file + ".tmp-" + Date.now();
+  const fd = fs.openSync(tmp, "w");
+  try {
+    fs.writeSync(fd, bytes);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  fs.chmodSync(tmp, st.mode & 0o777);
+  return tmp;
+}
+
 const verifierSrc = verifyWith || discoverVerifier();
 const staged = verifierSrc ? stageVerifier(verifierSrc, appVersion || installedAppVersion()) : null;
-const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-repair-"));
+const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-repair-work-"));
 const logs = collectLogs(targets);
 const report = [];
 let failed = 0;
 
 for (const log of logs) {
+  const compressed = log.endsWith(".zstd");
   const entry = { log, ok: true, action: "none" };
   try {
+    if (!staged && (doScan || doWrite)) {
+      entry.ok = false;
+      entry.error = "no verifier available (--verify-with <worker.cjs>); refusing to scan/write unverified";
+      report.push(entry);
+      failed++;
+      continue;
+    }
     const plan = planRepair(log);
     entry.id = plan.header.id;
     if (doScan) {
-      entries: {
-        const preview = path.join(tmpRoot, "scan-" + path.basename(path.dirname(log)) + ".jsonl");
-        fs.writeFileSync(preview, decode(log));
-        const r = staged ? await verify(staged, preview, plan.header.id, plan.eventCount) : null;
-        entry.action = "scan";
-        entry.ok = r ? r.ok : true;
-        if (r && !r.ok) entry.error = r.message;
-      }
+      // Verify the artifact exactly as the loader sees it (zstd frames included).
+      const r = staged ? await verify(staged.target, log, compressed ? "zstd" : "none", plan.header.id, plan.eventCount) : null;
+      entry.action = "scan";
+      entry.ok = r ? r.ok : true;
+      if (r && !r.ok) entry.error = r.message;
       report.push(entry);
       if (!entry.ok) failed++;
       continue;
     }
-    if (plan.sourceFixes === 0 && plan.pruneFixes === 0) {
+    const compression = compressed ? "zstd" : "none";
+    const artifactOk = staged ? await verify(staged.target, log, compression, plan.header.id, plan.eventCount) : null;
+    const fixes = plan.sourceFixes + plan.pruneFixes;
+    if (fixes === 0 && (!artifactOk || artifactOk.ok)) {
       entry.action = "clean";
       report.push(entry);
       continue;
     }
+    if (fixes === 0) entry.reframe = artifactOk.message;
     entry.fixes = { source: plan.sourceFixes, prune: plan.pruneFixes, droppedHead: plan.droppedHead };
-    const repairedPath = path.join(tmpRoot, "repaired-" + path.basename(path.dirname(log)) + ".jsonl");
-    fs.writeFileSync(repairedPath, plan.repaired);
-    if (staged) {
-      const r = await verify(staged, repairedPath, plan.header.id, plan.eventCount);
-      entry.verified = r.ok;
-      if (!r.ok) {
-        entry.ok = false;
-        entry.error = r.message;
-        failed++;
-        report.push(entry);
-        fs.rmSync(repairedPath, { force: true });
-        continue;
-      }
-    } else if (doWrite) {
+    const finalBytes = encodeFrames(compressed, plan.repaired);
+    const verified = path.join(tmpRoot, "artifact-" + path.basename(path.dirname(log)) + (compressed ? ".zstd" : ".jsonl"));
+    fs.writeFileSync(verified, finalBytes);
+    const r = staged ? await verify(staged.target, verified, compressed ? "zstd" : "none", plan.header.id, plan.eventCount) : null;
+    entry.verified = r ? r.ok : false;
+    if (staged && (!r || !r.ok)) {
       entry.ok = false;
-      entry.error = "no verifier available (--verify-with <worker.cjs>); refusing to write unverified repair";
+      entry.error = r ? r.message : "verification did not run";
       failed++;
       report.push(entry);
-      fs.rmSync(repairedPath, { force: true });
+      fs.rmSync(verified, { force: true });
       continue;
     }
     if (!doWrite) {
-      entry.action = "would-write";
+      entry.action = fixes > 0 ? "would-write" : "would-reframe";
       report.push(entry);
+      fs.rmSync(verified, { force: true });
       continue;
     }
     const bak = log + ".bak-" + Date.now();
     fs.copyFileSync(log, bak);
-    const finalBytes = encode(log, repairedPath);
-    const tmpFinal = log + ".tmp-" + Date.now();
-    fs.writeFileSync(tmpFinal, finalBytes);
+    const tmpFinal = writeAtomically(log, finalBytes);
     fs.renameSync(tmpFinal, log);
-    entry.action = "wrote";
+    entry.action = fixes > 0 ? "wrote" : "reframed";
     entry.backup = bak;
     report.push(entry);
+    fs.rmSync(verified, { force: true });
   } catch (err) {
     entry.ok = false;
     entry.error = String(err?.message ?? err);
@@ -249,7 +263,7 @@ for (const log of logs) {
 }
 
 if (asJson) {
-  console.log(JSON.stringify({ verifier: verifierSrc, staged, scanned: logs.length, failed, report }, null, 2));
+  console.log(JSON.stringify({ verifier: verifierSrc, scanned: logs.length, failed, report }, null, 2));
 } else {
   console.log(`logs=${logs.length} verifier=${verifierSrc ?? "(none)"} mode=${doScan ? "scan" : doWrite ? "write" : "dry-run"}`);
   for (const e of report) {
@@ -258,7 +272,7 @@ if (asJson) {
     console.log(`${e.ok ? "OK  " : "FAIL"} ${e.id ?? "?"} ${e.action}${fix}${ver}${e.error ? " — " + e.error : ""}`);
     if (e.backup) console.log(`     backup: ${e.backup}`);
   }
-  if (staged && !doScan) console.log(`staged verifier: ${staged}`);
 }
 fs.rmSync(tmpRoot, { recursive: true, force: true });
+if (staged) fs.rmSync(staged.stage, { recursive: true, force: true });
 process.exit(failed > 0 ? 1 : 0);
