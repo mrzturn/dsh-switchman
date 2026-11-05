@@ -75,6 +75,130 @@
 
 import { refOf, summaryMessageOf } from "./view.js";
 
+// ---- tool-pair closure ------------------------------------------------------
+
+/** Call ids OPENED by one message, across every wire shape the plugin can
+ *  see: the DSH-native content block {type:'tool-call', id} (the shape that
+ *  reaches real captures — packages/llm/llm/src/types.ts ToolCallBlock), the
+ *  provider-shaped {type:'tool_use', id} block, and the OpenAI
+ *  message.tool_calls array. Duplicate ids are kept — the caller only asks
+ *  "is this id answered somewhere in the span". */
+function toolCallIdsOf(message) {
+	const ids = [];
+	if (message === null || typeof message !== "object") return ids;
+	if (Array.isArray(message.tool_calls)) {
+		for (const call of message.tool_calls) {
+			if (typeof call?.id === "string" && call.id !== "") ids.push(call.id);
+		}
+	}
+	if (Array.isArray(message.content)) {
+		for (const block of message.content) {
+			if ((block?.type === "tool-call" || block?.type === "tool_use") && typeof block.id === "string" && block.id !== "") ids.push(block.id);
+		}
+	}
+	return ids;
+}
+
+/** Call ids ANSWERED by one message: the DSH-native role:'tool' message's
+ *  toolCallId, the provider-shaped tool_call_id field, and tool_result /
+ *  tool-result content blocks' tool_use_id. */
+function toolResultIdsOf(message) {
+	const ids = [];
+	if (message === null || typeof message !== "object") return ids;
+	if (typeof message.toolCallId === "string" && message.toolCallId !== "") ids.push(message.toolCallId);
+	if (typeof message.tool_call_id === "string" && message.tool_call_id !== "") ids.push(message.tool_call_id);
+	if (Array.isArray(message.content)) {
+		for (const block of message.content) {
+			if (block?.type !== "tool_result" && block?.type !== "tool-result") continue;
+			const id = block.tool_use_id ?? block.toolCallId ?? block.tool_call_id;
+			if (typeof id === "string" && id !== "") ids.push(id);
+		}
+	}
+	return ids;
+}
+
+/** Dense node-index-aligned message list built from derivingPairsOf: entry i
+ *  is the message surface node i derives, or null for a node that derives
+ *  none (empty assistant step, ...). closeToolPairSpan indexes this list by
+ *  SURFACE NODE INDEX while derivingPairsOf compacts that space — this is the
+ *  bridge, and it reuses the already-resolved messages. */
+function denseMessagesOf(pairs, nodeCount) {
+	const messages = new Array(nodeCount).fill(null);
+	for (const pair of pairs) messages[pair.nodeIndex] = pair.message;
+	return messages;
+}
+
+/** Close a surface span over complete tool pairs. A shipped fold must never
+ *  separate an assistant tool call from its tool results: the provider wire
+ *  serializers reject the orphan half ("DeepSeek Messages tool result has no
+ *  matching call", llm-deepseek/src/serialize.ts:130-150), and the host's own
+ *  compaction validates the same rule (dsh-compaction/lib/index.js:557).
+ *  view.js segments pairwise, but a fold block's range can still be captured
+ *  or resolved off a surface whose boundary sits between the two halves
+ *  (trigger.js computeFoldableRange stops at a segment end; a pre-fix capture,
+ *  a host compaction, or a later block all can leave the boundary there), so
+ *  this pass re-closes the span against the LIVE node list.
+ *
+ *  pairs: DENSE message list aligned to surface node indexes (null entries for
+ *  nodes that derive no message); nodeCount: surface node count (indices past
+ *  pairs.length are treated as absent). Returns { startIdx, endIdx } or null
+ *  when the span cannot be closed without leaving the surface.
+ *
+ *  FORWARD: every call opened INSIDE the span must be answered inside it;
+ *  otherwise the results directly following the span end are pulled in (one
+ *  node per iteration, so several consecutive role:'tool' nodes for one
+ *  assistant step all land). A call whose next surface node does not answer it
+ *  (the surface ends first, or a different message sits between) is
+ *  unclosable: null.
+ *
+ *  BACKWARD: a result at the span start whose call still lives earlier on the
+ *  surface pulls the start back over that assistant node (and the run of
+ *  results after it), so shipping the fold cannot orphan a result it leaves
+ *  behind. When that call node is already shadowed/absent, the leading result
+ *  is a PRE-EXISTING orphan: removing it is the healing direction and the
+ *  span stays as captured (the earlier fold's shadowed set already owns the
+ *  call). A node that both opens calls and carries results is handled by both
+ *  passes defensively. */
+function closeToolPairSpan(pairs, startIdx, endIdx, nodeCount) {
+	const count = Number.isInteger(nodeCount) ? nodeCount : pairs.length;
+	if (!Number.isInteger(startIdx) || !Number.isInteger(endIdx)) return null;
+	if (startIdx < 0 || endIdx < startIdx || endIdx >= count) return null;
+	const messageAt = (index) => (index >= 0 && index < count ? pairs[index] ?? null : null);
+	let start = startIdx;
+	let end = endIdx;
+
+	// Backward pass (bounded by count: every step moves start strictly earlier).
+	for (let guard = 0; guard <= count; guard++) {
+		const resultIds = toolResultIdsOf(messageAt(start));
+		if (resultIds.length === 0) break;
+		let owner = -1;
+		for (let i = start - 1; i >= 0; i--) {
+			const callIds = toolCallIdsOf(messageAt(i));
+			if (callIds.some((id) => resultIds.includes(id))) {
+				owner = i;
+				break;
+			}
+		}
+		if (owner < 0) break; // call already shadowed/absent: healing direction, span unchanged
+		start = owner;
+	}
+
+	// Forward pass: recompute the open calls over the current span each
+	// iteration, so a multi-result assistant step extends over all of them.
+	for (let guard = 0; guard <= count; guard++) {
+		const open = new Set();
+		for (let i = start; i <= end; i++) for (const id of toolCallIdsOf(messageAt(i))) open.add(id);
+		for (let i = start; i <= end; i++) for (const id of toolResultIdsOf(messageAt(i))) open.delete(id);
+		if (open.size === 0) return { startIdx: start, endIdx: end };
+		const next = end + 1;
+		if (next >= count) return null; // surface ends before the results: unclosable
+		const nextIds = toolResultIdsOf(messageAt(next));
+		if (!nextIds.some((id) => open.has(id))) return null; // next node answers a different call: unclosable
+		end = next;
+	}
+	return null;
+}
+
 /** Config field reader (fail-open default), same pattern as index.js. */
 function readBool(config, key, fallback) {
 	try {
@@ -429,10 +553,11 @@ export function createSurfaceFoldPass(deps = {}) {
 			const session = sessionOf(sessionId);
 			if (!surfaceCapable(session)) return false;
 			const nodes = session.surface.nodes.slice();
-			const located = locateOnSurface(derivingPairsOf(session, nodes), block);
+			const pairs = derivingPairsOf(session, nodes);
+			const located = locateOnSurface(pairs, block);
 			if (located === null) return false;
 			let startIdx = located[0];
-			const endIdx = located[1];
+			let endIdx = located[1];
 			// Head clamp at CAPTURE time: the stored range must never include
 			// the leading system message, so a block captured here stays clean
 			// even when it ships from a later process. surfaceHeadClamped tells
@@ -443,6 +568,13 @@ export function createSurfaceFoldPass(deps = {}) {
 				startIdx = 1;
 				block.surfaceHeadClamped = true;
 			}
+			// NOTE: the capture stores the LOCATED span only — it must not be
+			// pre-closed over tool pairs. The ship-time closure runs after
+			// validateStoredSeqs re-checks the stored endpoints against the
+			// block's refRange, so an extended capture (whose endpoints no
+			// longer derive the ref ids) would fail validation, fall back to
+			// live location and tombstone as a relocated range — a silently
+			// unshippable block. The sweep is the authoritative closure pass.
 			block.surfaceSeqs = nodes.slice(startIdx, endIdx + 1);
 			try {
 				store.persist(store.ledgerOf(sessionId));
@@ -517,14 +649,22 @@ export function createSurfaceFoldPass(deps = {}) {
 			skip(sessionId, "compaction-lock", via, `blocks=${pending.length}`);
 			return 0;
 		}
-		const nodes = surface.nodes.slice();
-		const pairs = derivingPairsOf(session, nodes);
-		const liveGeneration = Number.isFinite(surface.contentGeneration) ? surface.contentGeneration : 0;
+		// Live surface snapshot — REFRESHED after every successful ship: the
+		// shadowed seqs leave surface.nodes, so the next pending block must
+		// resolve/close against the new node list (a stale snapshot validated
+		// or closed a span that no longer exists).
+		let nodes = surface.nodes.slice();
+		let pairs = derivingPairsOf(session, nodes);
+		let nodeMessages = denseMessagesOf(pairs, nodes.length);
+		// A ship is a replace op, which bumps surface.contentGeneration: refresh
+		// it with the snapshot so a tombstone written later in this sweep keys
+		// on the post-ship generation instead of re-opening on the next sweep.
+		let liveGeneration = Number.isFinite(surface.contentGeneration) ? surface.contentGeneration : 0;
 		// The host rejects a replace op over node 0 only when node 0 actually
 		// carries the system prompt (assertSystemHeadRewrite). Resolve that
 		// head role once per sweep — sessions without a leading system
 		// message fold their head node like any other.
-		const headIsSystem = headNodeIsSystem(session, nodes);
+		let headIsSystem = headNodeIsSystem(session, nodes);
 		let shipped = 0;
 		for (const block of pending) {
 			// Resolve the shadow range: stored capture first (validated dense
@@ -536,10 +676,12 @@ export function createSurfaceFoldPass(deps = {}) {
 			// are simply gone): never a silent re-target onto a different range.
 			let startSeq = null;
 			let endSeq = null;
+			let startIdx = null;
+			let endIdx = null;
 			let seqs = null;
 			const stored = Array.isArray(block.surfaceSeqs) ? validateStoredSeqs(session, nodes, block.surfaceSeqs, block) : null;
 			if (stored !== null) {
-				({ startSeq, endSeq, seqs } = stored);
+				({ startIdx, endIdx, startSeq, endSeq, seqs } = stored);
 			} else {
 				const located = locateOnSurface(pairs, block);
 				if (located === null) {
@@ -578,9 +720,42 @@ export function createSurfaceFoldPass(deps = {}) {
 					skip(sessionId, "incomplete-seqs", via, `block=${block.id} overlap`, false);
 					continue;
 				}
-				startSeq = nodes[located[0]];
-				endSeq = nodes[located[1]];
+				startIdx = located[0];
+				endIdx = located[1];
+				startSeq = nodes[startIdx];
+				endSeq = nodes[endIdx];
 				seqs = locatedSeqs;
+			}
+			// Tool-pair closure over the LIVE surface (both resolution paths):
+			// a shipped range must never separate an assistant's tool call from
+			// its results — the provider wire serializers reject the orphan half
+			// ("DeepSeek Messages tool result has no matching call",
+			// llm-deepseek/src/serialize.ts:130-150). Extend forward over the
+			// results of calls opened inside the range, and backward over the
+			// live call of an orphan result at the range start. Unclosable (a
+			// call with no result on this surface, a range whose next node
+			// answers a different call) tombstones as tool-pair-unclosed — the
+			// same safe hard-skip family as incomplete-seqs: never ship a
+			// pair-splitting range. The block re-opens on the next surface
+			// content change (tool-pair-unclosed is generation-keyed like every
+			// other skip).
+			const closed = closeToolPairSpan(nodeMessages, startIdx, endIdx, nodes.length);
+			if (closed === null) {
+				block.surfaceSkip = { reason: "tool-pair-unclosed", contentGeneration: liveGeneration, at: Date.now() };
+				try {
+					store.persist(ledger);
+				} catch {
+					/* best effort */
+				}
+				skip(sessionId, "tool-pair-unclosed", via, `block=${block.id}`);
+				continue;
+			}
+			if (closed.startIdx !== startIdx || closed.endIdx !== endIdx) {
+				startIdx = closed.startIdx;
+				endIdx = closed.endIdx;
+				startSeq = nodes[startIdx];
+				endSeq = nodes[endIdx];
+				seqs = nodes.slice(startIdx, endIdx + 1);
 			}
 			// System head clamp (ship time, BOTH resolution paths): when the
 			// first surface node carries the system prompt, the v4 validator
@@ -658,6 +833,15 @@ export function createSurfaceFoldPass(deps = {}) {
 				delete block.surfaceSkip;
 				rememberReplaced(key);
 				shipped += 1;
+				// The shadowed seqs have just left surface.nodes: refresh the
+				// snapshot every later pending block resolves against, so its
+				// dense validation / re-location / pair closure reads the
+				// POST-ship surface instead of a range that no longer exists.
+				nodes = surface.nodes.slice();
+				pairs = derivingPairsOf(session, nodes);
+				nodeMessages = denseMessagesOf(pairs, nodes.length);
+				headIsSystem = headNodeIsSystem(session, nodes);
+				liveGeneration = Number.isFinite(surface.contentGeneration) ? surface.contentGeneration : 0;
 				decisionLog(`session=${sessionId} surface-replace startSeq=${startSeq} endSeq=${endSeq} seqs=${seqs.length} tokens=${Number.isFinite(block.approxTokens) ? Math.round(block.approxTokens) : "?"} generation=${liveGeneration} via=${via}`);
 				try {
 					store.persist(ledger);

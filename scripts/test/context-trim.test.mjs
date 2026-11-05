@@ -232,6 +232,27 @@ describe("view: tool-pair integrity", () => {
 		];
 		assert.deepEqual(segmentBounds(messages), [[0, 1]]);
 	});
+	test("dsh-native shape: tool-call blocks and role:'tool' results stay atomic", () => {
+		// The shape actually captured from the host (c74 session): assistant
+		// content block {type:'tool-call', id}, result is a role:'tool' message
+		// carrying toolCallId. Pre-fix the call read as a plain message and
+		// segmentBounds split it from its result.
+		const messages = [
+			{ id: "a1", role: "assistant", content: [{ type: "text", text: "calling" }, { type: "tool-call", id: "c1" }] },
+			{ id: "t1", role: "tool", toolCallId: "c1", content: [{ type: "text", text: "result" }] },
+			{ id: "u1", role: "user", content: "next" },
+		];
+		assert.deepEqual(segmentBounds(messages), [[0, 1], [2, 2]]);
+		assert.equal(rangeIsSegmentAligned(messages, 0, 0), false, "a range ending on the assistant call cuts the pair");
+		assert.equal(rangeIsSegmentAligned(messages, 0, 1), true);
+		// A multi-call step with several consecutive results is ONE segment.
+		const multi = [
+			{ id: "a2", role: "assistant", content: [{ type: "tool-call", id: "c1" }, { type: "tool-call", id: "c2" }] },
+			{ id: "t2", role: "tool", toolCallId: "c1", content: [{ type: "text", text: "r1" }] },
+			{ id: "t3", role: "tool", toolCallId: "c2", content: [{ type: "text", text: "r2" }] },
+		];
+		assert.deepEqual(segmentBounds(multi), [[0, 2]]);
+	});
 	test("a fold range that would split a pair is rejected by alignment check", () => {
 		const messages = pairMessages();
 		assert.equal(rangeIsSegmentAligned(messages, 0, 2), false); // cuts between assistant and its 2nd tool result

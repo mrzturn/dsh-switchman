@@ -163,18 +163,26 @@ export function estimateTokensOf(messages, startIdx = 0, endIdx = messages.lengt
 
 // ---- tool-pair segmentation -------------------------------------------------
 
-/** True when the message OPENS tool calls (either wire shape). */
+/** True when the message OPENS tool calls. Covers the DSH-native shape
+ *  (assistant content block {type:'tool-call', id} — packages/llm/llm/src/
+ *  types.ts ToolCallBlock) plus the provider-shaped variants: the OpenAI
+ *  message.tool_calls array and the Anthropic {type:'tool_use'} block. The
+ *  DSH-native shape is what actually reaches this plugin's captures; missing
+ *  it made every native assistant tool call look like a plain message, so
+ *  segmentBounds below split the call from its results. */
 function opensToolCalls(message) {
 	if (message?.role !== "assistant") return false;
 	if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) return true;
-	if (Array.isArray(message.content)) return message.content.some((block) => block?.type === "tool_use");
+	if (Array.isArray(message.content)) return message.content.some((block) => block?.type === "tool_use" || block?.type === "tool-call");
 	return false;
 }
 
-/** True when the message CARRIES tool results (either wire shape). */
+/** True when the message CARRIES tool results. DSH-native results are
+ *  role:'tool' messages (with their call id on the message); provider-shaped
+ *  variants keep a tool_result/tool-result content block. */
 function carriesToolResults(message) {
 	if (message?.role === "tool") return true;
-	if (Array.isArray(message.content)) return message.content.some((block) => block?.type === "tool_result");
+	if (Array.isArray(message.content)) return message.content.some((block) => block?.type === "tool_result" || block?.type === "tool-result");
 	return false;
 }
 

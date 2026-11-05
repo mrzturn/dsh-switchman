@@ -583,6 +583,163 @@ test("capture roundtrip across a preceding replace pair: non-monotonic node orde
 	assert.deepEqual(session.deriveMessages().map((message) => message.id), ["u1", "a1", "acp_summary_b-second"], "the folded range left the projection");
 });
 
+/** Tool-pair fixtures: DSH-native message shapes (assistant content block
+ *  {type:'tool-call',id}; role:'tool' message carrying toolCallId) — exactly
+ *  what the c74 session logged. */
+function appendToolUser(session, id) {
+	return session.append("user/message", { id, role: "user", source: { kind: "user" }, content: [{ type: "text", text: `user ${"F".repeat(400)}` }] }, { surfaceOp: "append" });
+}
+function appendToolCalls(session, id, callIds) {
+	return session.append("assistant/message", { message: { id, role: "assistant", source: { kind: "model" }, content: [{ type: "text", text: `calling ${"F".repeat(400)}` }, ...callIds.map((callId) => ({ type: "tool-call", id: callId }))] } }, { surfaceOp: "append" });
+}
+function appendToolResult(session, id, callId) {
+	return session.append("tool/result", { message: { id, role: "tool", source: { kind: "tool" }, toolCallId: callId, content: [{ type: "text", text: `result ${"F".repeat(400)}` }] } }, { surfaceOp: "append" });
+}
+/** Tool-pair integrity of the LIVE surface projection: results whose call id
+ *  no longer appears (orphan results) and calls with no result (orphan calls).
+ *  The whole point of the closure pass is keeping both counters at zero. */
+function pairIntegrityOf(session) {
+	const messages = session.deriveMessages();
+	const callIds = new Set();
+	const resultIds = new Set();
+	for (const message of messages) {
+		for (const block of Array.isArray(message?.content) ? message.content : []) {
+			if (block?.type === "tool-call" && typeof block.id === "string") callIds.add(block.id);
+		}
+		if (message?.role === "tool" && typeof message.toolCallId === "string") resultIds.add(message.toolCallId);
+	}
+	let orphanCalls = 0;
+	let orphanResults = 0;
+	for (const id of callIds) if (!resultIds.has(id)) orphanCalls += 1;
+	for (const id of resultIds) if (!callIds.has(id)) orphanResults += 1;
+	return { orphanCalls, orphanResults };
+}
+
+test("tool-pair closure: a range ending inside a multi-result step extends over every result", async (t) => {
+	const { ctx, agentsById } = mockCtx({ withAgents: true });
+	ctx.get = () => null;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-surface-tpa-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	const session = mockSession("surf-tpa");
+	const u1 = appendToolUser(session, "u1"); // node 0
+	const a1 = appendToolCalls(session, "a1", ["c1", "c2"]); // node 1
+	const r1 = appendToolResult(session, "r1", "c1"); // node 2
+	const r2 = appendToolResult(session, "r2", "c2"); // node 3
+	appendToolUser(session, "u2"); // node 4
+	agentsById.set("surf-tpa", { session });
+	// The fold's ref range ends on the FIRST result of a two-call step, so the
+	// second call is inside the range with its result outside. This is the
+	// capture→ship roundtrip: the capture must store exactly the located span
+	// (a pre-closed capture breaks validateStoredSeqs endpoint identity and
+	// makes the block permanently unshippable), and the sweep closes it.
+	const block = { id: "b-tpa", kind: "summary", tier: "model", refRange: { firstId: "u1", lastId: "r1" }, count: 3, approxTokens: 900, summary: "Split step." };
+	assert.equal(handle.surfacePass.captureFoldSeqs("surf-tpa", block), true, "capture resolves");
+	assert.deepEqual(block.surfaceSeqs, [u1.seq, a1.seq, r1.seq], "capture stores the located span, never a pre-closed one");
+	handle.store.ledgerOf("surf-tpa").blocks.push(block);
+
+	assert.equal(await handle.surfacePass.sweep("surf-tpa", "test"), 1, "the block ships after closing");
+	const prune = session.rawEvents.find((event) => event.type === "compaction/prune");
+	const replace = session.rawEvents.find((event) => event.surfaceOp?.op === "replace");
+	assert.deepEqual(prune.data.shadowedRange, { start: u1.seq, end: r2.seq }, "shipped range closes forward over the second result");
+	assert.deepEqual(prune.data.shadowedSeqs, [u1.seq, a1.seq, r1.seq, r2.seq]);
+	assert.equal(replace.surfaceOp.endSeq, r2.seq, "surfaceOp.endSeq is the last result seq");
+	assert.deepEqual(replace.sourceEventSeqs, [u1.seq, a1.seq, r1.seq, r2.seq], "sourceEventSeqs densely cover the extended span");
+	assert.equal(block.surfaceSkip, undefined, "no tombstone for a closable range");
+	assert.deepEqual(pairIntegrityOf(session), { orphanCalls: 0, orphanResults: 0 }, "the wire shape has no split pair");
+});
+
+test("tool-pair closure: a leading legacy orphan result is absorbed (healing ship)", async (t) => {
+	const { ctx, agentsById } = mockCtx({ withAgents: true });
+	ctx.get = () => null;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-surface-tpb-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	const session = mockSession("surf-tpb");
+	const u1 = appendToolUser(session, "u1"); // node 0
+	const a1 = appendToolCalls(session, "a1", ["c1"]); // node 1
+	const r1 = appendToolResult(session, "r1", "c1"); // node 2
+	const u2 = appendToolUser(session, "u2"); // node 3
+	const a2 = appendToolCalls(session, "a2", []); // node 4 (call-less assistant text)
+	agentsById.set("surf-tpb", { session });
+	// Pre-fix damage: an earlier fold already replaced the assistant call node
+	// on its own, leaving the result as an orphan. Surface order: [u1, r1, u2,
+	// a2, replacement].
+	shipReplace(session, a1.seq, a1.seq, "b-prev");
+	assert.deepEqual(session.surface.nodes, [u1.seq, session.rawEvents[session.rawEvents.length - 1].seq, r1.seq, u2.seq, a2.seq]);
+	assert.deepEqual(pairIntegrityOf(session), { orphanCalls: 0, orphanResults: 1 }, "the legacy surface has one orphan result");
+	// The next fold's range starts AT the orphan result. Its call is already
+	// shadowed (absent from the live surface) → the span is kept as captured:
+	// shipping removes the orphan (the healing direction, design §2).
+	const block = { id: "b-tpb", kind: "summary", tier: "model", refRange: { firstId: "r1", lastId: "a2" }, count: 3, approxTokens: 900, summary: "Heal orphan." };
+	assert.equal(handle.surfacePass.captureFoldSeqs("surf-tpb", block), true, "capture keeps the healing span (consistent with the ship-time rule)");
+	assert.deepEqual(block.surfaceSeqs, [r1.seq, u2.seq, a2.seq], "the healing span is stored as located, not extended backwards");
+	handle.store.ledgerOf("surf-tpb").blocks.push(block);
+
+	assert.equal(await handle.surfacePass.sweep("surf-tpb", "test"), 1, "the leading orphan result does not block the ship");
+	const prune = session.rawEvents.filter((event) => event.type === "compaction/prune").at(-1); // the b-prev ship already logged one
+	assert.equal(prune.data.shadowedRange.start, r1.seq, "the shipped range starts at the orphan result seq");
+	assert.equal(prune.data.shadowedSeqs.includes(r1.seq), true, "the prune's shadowedSeqs contain the orphan result seq");
+	assert.equal(block.surfaceSkip, undefined, "no tool-pair-unclosed tombstone");
+	assert.deepEqual(pairIntegrityOf(session), { orphanCalls: 0, orphanResults: 0 }, "shipping the span absorbed the orphan result");
+});
+
+test("tool-pair closure: a call with no result on the surface tombstones tool-pair-unclosed", async (t) => {
+	const { ctx, agentsById } = mockCtx({ withAgents: true });
+	ctx.get = () => null;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-surface-tpc-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	const session = mockSession("surf-tpc");
+	const u1 = appendToolUser(session, "u1"); // node 0
+	const a1 = appendToolCalls(session, "a1", ["c-lost"]); // node 1: no result anywhere
+	const u2 = appendToolUser(session, "u2"); // node 2
+	agentsById.set("surf-tpc", { session });
+	const block = { id: "b-tpc", kind: "summary", tier: "model", refRange: { firstId: "a1", lastId: "u2" }, count: 2, approxTokens: 900, summary: "Lost result." };
+	assert.equal(handle.surfacePass.captureFoldSeqs("surf-tpc", block), true, "capture stores the located span (closure is the sweep's job)");
+	assert.deepEqual(block.surfaceSeqs, [a1.seq, u2.seq]);
+	handle.store.ledgerOf("surf-tpc").blocks.push(block);
+	const eventsBefore = session.rawEvents.length;
+
+	assert.equal(await handle.surfacePass.sweep("surf-tpc", "test"), 0, "an unclosable range never ships");
+	assert.equal(session.rawEvents.length, eventsBefore, "nothing appended");
+	assert.equal(block.surfaceReplaced, undefined);
+	assert.equal(block.surfaceSkip?.reason, "tool-pair-unclosed", "tombstone reason persisted");
+	assert.match(decisionsOf(stateDir), /session=surf-tpc surface-replace skipped reason=tool-pair-unclosed .*block=b-tpc/u);
+});
+
+test("tool-pair closure: a leading result pulls its live call back into the span", async (t) => {
+	const { ctx, agentsById } = mockCtx({ withAgents: true });
+	ctx.get = () => null;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-surface-tpd-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	const session = mockSession("surf-tpd");
+	const u1 = appendToolUser(session, "u1"); // node 0
+	const a1 = appendToolCalls(session, "a1", ["c1"]); // node 1: live call
+	const r1 = appendToolResult(session, "r1", "c1"); // node 2
+	const u2 = appendToolUser(session, "u2"); // node 3
+	agentsById.set("surf-tpd", { session });
+	// The fold range starts at the RESULT of a step whose call node is still
+	// live just before it. Shipping [r1..u2] as captured would leave the call
+	// unclosed (orphan call on the wire); the sweep must move the start back
+	// onto the owning assistant node. Pre-fix there is no closure at all, so
+	// this assertion is what discriminates the backward pass.
+	const block = { id: "b-tpd", kind: "summary", tier: "model", refRange: { firstId: "r1", lastId: "u2" }, count: 2, approxTokens: 900, summary: "Split backwards." };
+	assert.equal(handle.surfacePass.captureFoldSeqs("surf-tpd", block), true, "capture resolves the located span");
+	assert.deepEqual(block.surfaceSeqs, [r1.seq, u2.seq], "capture stores the located span, not a pre-closed one");
+	handle.store.ledgerOf("surf-tpd").blocks.push(block);
+
+	assert.equal(await handle.surfacePass.sweep("surf-tpd", "test"), 1, "the block ships after closing backwards");
+	const prune = session.rawEvents.find((event) => event.type === "compaction/prune");
+	assert.deepEqual(prune.data.shadowedRange, { start: a1.seq, end: u2.seq }, "shipped range starts on the owning assistant call");
+	assert.deepEqual(prune.data.shadowedSeqs, [a1.seq, r1.seq, u2.seq], "the call node is pulled into the shadowed span");
+	const replace = session.rawEvents.find((event) => event.surfaceOp?.op === "replace");
+	assert.equal(replace.surfaceOp.startSeq, a1.seq, "surfaceOp.startSeq is the owning assistant call seq");
+	assert.equal(block.surfaceSkip, undefined, "no tombstone for a closable range");
+	assert.deepEqual(pairIntegrityOf(session), { orphanCalls: 0, orphanResults: 0 }, "the wire shape has no split pair");
+});
+
 test("stale capture re-locating into an already-replaced range: tombstoned", async (t) => {
 	const { ctx, agentsById } = mockCtx({ withAgents: true });
 	ctx.get = () => null;
