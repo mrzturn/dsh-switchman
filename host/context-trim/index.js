@@ -30,7 +30,7 @@ import { buildView, estimateTokensOf, injectView, ledgerIsStale, rangeIsSegmentA
 import { computeFoldableRange, evaluateTrigger, EMERGENCY_COOLDOWN_MS } from "./trigger.js";
 import { mechanicalSummary, renderMaterial, summarizeWithModel } from "./summarizer.js";
 import { createStore } from "./state.js";
-import { createMetrics, extractUsage, wrapStreamForMetrics } from "./metrics.js";
+import { createMetrics, extractUsage, promptTokensOf, wrapStreamForMetrics } from "./metrics.js";
 import { forkLinkOf, loadForkLinks, recordForkLink, resolveInheritance, INHERIT_WINDOW_MS } from "./fork.js";
 import { createSurfaceFoldPass } from "./surface.js";
 import { childSessionIdOf } from "../subagent-model.js";
@@ -49,6 +49,10 @@ import { childSessionIdOf } from "../subagent-model.js";
 // actually sees after billion-context folding instead of over-triggering
 // handovers off a stale stored measure.
 const trimViewBySession = new Map(); // sessionId -> { viewTokens, at, inject, lastNoneAt }
+/** Freshness TTL for the in-memory view/injection registry (watermark and
+ *  banner display only). NEVER a fold gate: gating folds on "did the surface
+ *  channel ship recently" deadlocks resumed sessions (2026-11-05). The fold
+ *  gate asks surfacePass.supported() — a durable capability question. */
 const TRIM_VIEW_MAX_AGE_MS = 600_000; // 10 minutes
 
 /** Dispatches below this message count are never treated as the session's
@@ -254,31 +258,55 @@ export function applyContextTrim(ctx, config) {
 	// disk per session, metrics/captures live per session in memory).
 	const store = createStore({ stateDir: readString(config, "trimStateDir", null) ?? undefined, warn });
 
-	// Newest surfaceReplaced timestamp across the session's ledger blocks (0
-	// when none). A recent ship proves the surface-replace channel is alive
-	// even while the wire stays frozen — folds ARE relieving the real
-	// history, so wire-raw signaling and fold pausing must stand down.
-	const recentSurfaceShipAtOf = (sessionId) => {
-		try {
-			const blocks = store.ledgerOf(sessionId)?.blocks;
-			if (!Array.isArray(blocks)) return 0;
-			let newest = 0;
-			for (const block of blocks) {
-				const at = block?.surfaceReplaced?.at;
-				if (typeof at === "number" && at > newest) newest = at;
-			}
-			return newest;
-		} catch {
-			return 0;
-		}
-	};
-	const surfaceChannelAlive = (sessionId) => Date.now() - recentSurfaceShipAtOf(sessionId) < TRIM_VIEW_MAX_AGE_MS;
 	// Surface-replace pass (docs/surface-fold.md): ships committed fold blocks
 	// onto the session surface so folds reach the wire even for frozen
 	// dispatches. Registers its own agent/turn-stopping trigger; the idle
 	// sweep below runs after each fold cycle.
 	const surfacePass = createSurfaceFoldPass({ ctx, config, store, decisionLog, warn });
+
+	// Durable capability probe (surface.js supported): the fold gate asks THIS,
+	// never a recency window. An in-memory "did we ship in the last 10 minutes"
+	// test deadlocked resumed sessions: dispatches report injected=none, so
+	// after the window expired no fold ran, no fold meant no new ship, and the
+	// gate stayed shut forever while the provider prompt grew to 135k.
+	const surfaceChannelCapable = (sessionId) => {
+		try {
+			return surfacePass.supported(sessionId);
+		} catch {
+			return false;
+		}
+	};
+	// Durable surface-channel EVIDENCE for the banner: a block that already
+	// SHIPPED a replacement (surfaceReplaced) proves the channel reaches the
+	// wire, even across a process restart and after the in-memory recency
+	// window expired. A commit-time capture (surfaceSeqs) does NOT — the block
+	// may never ship, and a capture must not silence the honest wire=raw
+	// warning. Display only — the fold gate uses the live capability probe.
+	const ledgerShowsShippedReplacement = (sessionId) => {
+		try {
+			const blocks = store.ledgerOf(sessionId)?.blocks;
+			if (!Array.isArray(blocks)) return false;
+			return blocks.some((block) => block?.surfaceReplaced !== null && block?.surfaceReplaced !== undefined);
+		} catch {
+			return false;
+		}
+	};
 	const metrics = createMetrics();
+
+	/** Most recent provider prompt size for one session, or null when unknown.
+	 * The tally is the FULL prompt: the host reports TokenUsage as
+	 * { inputTokens (uncached), cacheReadTokens, cacheWriteTokens }, so a
+	 * heavily cached session (~130k of 136k cached) would otherwise read as
+	 * the uncached delta and keep max(view, wire) silent. The view estimate
+	 * only counts the messages array, so it under-reports by the system and
+	 * context sections; pressure tiers must not run blind on it. */
+	const wireTokensOf = (sessionId) => {
+		try {
+			return promptTokensOf(metrics.of(sessionId));
+		} catch {
+			return null;
+		}
+	};
 	const captures = new Map(); // sessionId -> { messages, refs, viewTokens, model, at }
 	const inFlight = new Set(); // sessionIds with a fold running
 	const windowCache = new Map(); // "provider/model" -> { windowTokens, at }
@@ -505,10 +533,14 @@ export function applyContextTrim(ctx, config) {
 		const injected = injectView(options, messages, view);
 		const viewTokens = estimateTokensOf(view.messages);
 		const blocksCount = Array.isArray(ledger.blocks) ? ledger.blocks.length : 0;
+		// Wire truth in the row: the most recent provider prompt size (from the
+		// previous response's usage) makes the view-vs-wire divergence visible
+		// instead of leaving the view estimate as the only lullaby in the log.
+		const wireTokens = wireTokensOf(sessionId);
 		// Per-request application evidence: whether the ledger's blocks actually
 		// locate inside THIS re-send (the host may compact/replace history, in
 		// which case applied=0 explains a stuck-high view without any failure).
-		decisionLog(`session=${sessionId} view-applied applied=${view.applied} foldedMsgs=${view.foldedMessages} view=${Math.round(viewTokens)} blocks=${blocksCount} injected=${injected}`);
+		decisionLog(`session=${sessionId} view-applied applied=${view.applied} foldedMsgs=${view.foldedMessages} view=${Math.round(viewTokens)} blocks=${blocksCount} injected=${injected}${wireTokens === null ? "" : ` wire=${wireTokens}`}`);
 		// Side-dispatch guard: auxiliary llm calls that inherit the session id
 		// (web-search summaries, title generation, fold-span material) present
 		// tiny arrays in which the ledger cannot locate. Accepting them as the
@@ -647,10 +679,15 @@ export function applyContextTrim(ctx, config) {
 		const capture = captures.get(sessionId);
 		if (capture === undefined) return;
 		// Injection-unavailable: the last dispatch could not carry the view
-		// (frozen options AND messages — the wire always ships raw history),
-		// so folding cannot relieve anything. Skip the cycle; the watermark's
-		// tally-driven force tier + auto-handover is the relief path.
-		if (recentTrimInjectOf(sessionId) === "none" && !surfaceChannelAlive(sessionId)) {
+		// (frozen options AND messages — the wire always ships raw history).
+		// Folding is pointless ONLY when NEITHER channel can reach the wire:
+		// the spliced view (inject !== "none") OR the surface-replace pass
+		// (durable capability probe, not a recency window — a proven channel
+		// that last shipped before the process restarted is still capable and
+		// the next fold ships a fresh surface event). When neither can, the
+		// watermark's tally-driven force tier + auto-handover is the relief
+		// path.
+		if (recentTrimInjectOf(sessionId) === "none" && !surfaceChannelCapable(sessionId)) {
 			decisionLog(`session=${sessionId} via=${via} action=none reason=injection-unavailable view=${Math.round(capture.viewTokens)}`);
 			return;
 		}
@@ -660,10 +697,16 @@ export function applyContextTrim(ctx, config) {
 			const foldable = computeFoldableRange(capture.messages, store.ledgerOf(sessionId), protectedTail);
 			const windowTokens = await windowTokensFor(capture.model);
 			const ledger = store.ledgerOf(sessionId);
+			// Pressure tiers run on the REAL prompt size when the tally is known:
+			// max(view, wire). The view estimate misses the system/context
+			// sections, so a 136k wire once read as a 50k view and the tiers
+			// stayed silent. Unknown tally → exactly today's behavior.
+			const wireTokens = wireTokensOf(sessionId);
+			const pressureTokens = wireTokens !== null ? Math.max(capture.viewTokens, wireTokens) : capture.viewTokens;
 			const decision = evaluateTrigger({
 				foldable,
 				messages: capture.messages,
-				viewTokens: capture.viewTokens,
+				viewTokens: pressureTokens,
 				windowTokens,
 				thresholds,
 				now: Date.now(),
@@ -672,7 +715,7 @@ export function applyContextTrim(ctx, config) {
 				lastEmergencyAt: lastEmergencyAtBySession.get(sessionId) ?? 0,
 				ledger,
 			});
-			decisionLog(`session=${sessionId} via=${via} action=${decision.action} tier=${decision.tier ?? "-"} reason=${decision.reason || "-"} view=${Math.round(capture.viewTokens)} window=${windowTokens ?? "null"}`);
+			decisionLog(`session=${sessionId} via=${via} action=${decision.action} tier=${decision.tier ?? "-"} reason=${decision.reason || "-"} view=${Math.round(capture.viewTokens)}${wireTokens === null ? "" : ` wire=${wireTokens}`} window=${windowTokens ?? "null"}`);
 			if (decision.action === "none") return;
 			const outcome = await runFoldCycle(sessionId, decision);
 			// Failure ladder: commit resets it; a summarize/commit failure
@@ -718,7 +761,12 @@ export function applyContextTrim(ctx, config) {
 					const model = captureModelOf(sessionId);
 					const windowTokens = model === null ? null : cachedWindowOf(model);
 					const growthBaseline = ledger !== null && Number.isFinite(ledger.lastFoldLowTokens) && ledger.lastFoldLowTokens > 0 ? ledger.lastFoldLowTokens : ledger !== null && Number.isFinite(ledger.lastFoldViewTokens) && ledger.lastFoldViewTokens > 0 ? ledger.lastFoldViewTokens : null;
-					const wireRaw = recentTrimInjectOf(sessionId) === "none" && !surfaceChannelAlive(sessionId);
+					// Honest wire status: the wire is only "raw" when NEITHER channel
+					// can reach it — a capable surface pass, or a ledger that already
+					// proves a SHIPPED replacement (a capture alone does not: it may
+					// never ship), keeps the marker off even after the in-memory
+					// recency window expired.
+					const wireRaw = recentTrimInjectOf(sessionId) === "none" && !surfaceChannelCapable(sessionId) && !ledgerShowsShippedReplacement(sessionId);
 					return renderTrimContextLine(label, {
 						enabled: enabledNow(),
 						mode: modeNow(),

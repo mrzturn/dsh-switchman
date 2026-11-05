@@ -287,11 +287,11 @@ test("missing service: legacy fallback, no appends, skip row logged", async (t) 
 	assert.match(decisionsOf(stateDir), /session=surf-m surface-replace skipped reason=no-service/u);
 });
 
-test("validation failure: an incomplete stored capture is skipped and logged", async (t) => {
+test("stale capture with locating refs: safe re-location ships the same range", async (t) => {
 	let listener = null;
 	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
 	const { ctx, hooks, agentsById } = mockCtx({ llmFiber: fiber });
-	const llm = { resolveModelInfo: async () => ({ context: { contextWindow: 100_000 } }), prepareCall: async () => ({ stream: async function* () { yield { type: "text-delta", text: "Broken capture." }; yield { type: "finish" }; } }) };
+	const llm = { resolveModelInfo: async () => ({ context: { contextWindow: 100_000 } }), prepareCall: async () => ({ stream: async function* () { yield { type: "text-delta", text: "Relocated capture." }; yield { type: "finish" }; } }) };
 	ctx.get = () => llm;
 	const stateDir = mkdtempSync(join(tmpdir(), "trim-surface-v-"));
 	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
@@ -302,20 +302,24 @@ test("validation failure: an incomplete stored capture is skipped and logged", a
 	assert.equal(await poll(() => handle.store.ledgerOf("surf-v").blocks.length >= 1), true);
 	const block = handle.store.ledgerOf("surf-v").blocks[0];
 	assert.ok(Array.isArray(block.surfaceSeqs) && block.surfaceSeqs.length === block.count);
-	// Tamper: drop a middle seq — endpoints stay, dense coverage is gone. The
-	// pass must NOT silently re-target a different range via live location.
+	const trueSeqs = block.surfaceSeqs.slice();
+	// Tamper: drop a middle seq — the dense coverage check fails, but the
+	// block's refs still resolve count-anchored on the live surface and no
+	// other block replaced that range. The pass re-locates onto the SAME range
+	// and ships it (post-1.10.1 safety rule), never a different one.
 	block.surfaceSeqs = [block.surfaceSeqs[0], ...block.surfaceSeqs.slice(2)];
 	hooks["agent/turn-stopping"]({ agent: { session }, turn: 1, signal: undefined });
-	await poll(() => false, 40);
-	assert.equal(block.surfaceReplaced, undefined, "incomplete sourceEventSeqs never ships");
-	assert.ok(session.rawEvents.every((event) => event.surfaceOp === undefined || event.surfaceOp === "append"), "no replace events");
-	assert.match(decisionsOf(stateDir), /session=surf-v surface-replace skipped reason=incomplete-seqs/u);
-	// The tombstone keeps later sweeps quiet (same surface generation).
-	const rowsBefore = decisionsOf(stateDir).split("\n").filter((line) => line.includes("incomplete-seqs")).length;
+	assert.equal(await poll(() => block.surfaceReplaced !== undefined), true, "safe re-location ships");
+	assert.equal(block.surfaceSkip, undefined, "no incomplete-seqs tombstone when re-location is provably the same fold");
+	const replace = session.rawEvents.find((event) => event.surfaceOp?.op === "replace");
+	assert.notEqual(replace, undefined);
+	assert.deepEqual(replace.sourceEventSeqs, trueSeqs, "the shipped range is the refs' true node span, not a re-target");
+	assert.match(decisionsOf(stateDir), /session=surf-v surface-replace startSeq=\d+ endSeq=\d+/u);
+	// Idempotent afterwards: the durable marker keeps later sweeps quiet.
+	const eventsAfterShip = session.rawEvents.length;
 	hooks["agent/turn-stopping"]({ agent: { session }, turn: 2, signal: undefined });
 	await poll(() => false, 20);
-	const rowsAfter = decisionsOf(stateDir).split("\n").filter((line) => line.includes("incomplete-seqs")).length;
-	assert.equal(rowsAfter, rowsBefore, "tombstoned block does not re-log");
+	assert.equal(session.rawEvents.length, eventsAfterShip, "no second replace append");
 });
 
 test("crash window: lost surfaceReplaced marker never re-ships the range", async (t) => {
@@ -528,4 +532,345 @@ test("capture clamp: a fresh commit over the head stores a clamped capture, mark
 	assert.equal(replace.surfaceOp.startSeq, 1);
 	assert.equal(replace.surfaceOp.endSeq, 2);
 	assert.deepEqual(replace.sourceEventSeqs, [1, 2]);
+});
+
+/** Append a real-shaped shipped replace pair over [startSeq, endSeq] and
+ * return the replacement event. The replacement body carries the
+ * acp_summary_ id, exactly like surface.js's own append. */
+function shipReplace(session, startSeq, endSeq, blockId) {
+	const nodes = session.surface.nodes;
+	const span = nodes.slice(nodes.indexOf(startSeq), nodes.indexOf(endSeq) + 1);
+	session.append("compaction/prune", { shadowedRange: { start: startSeq, end: endSeq }, shadowedSeqs: span, shadowedTokenCount: 1_000 });
+	return session.append("user/message", { id: `acp_summary_${blockId}`, role: "user", content: [{ type: "text", text: `[SWITCHMAN:TRIM] ${blockId} summary` }] }, { surfaceOp: { op: "replace", startSeq, endSeq }, sourceEventSeqs: span });
+}
+
+test("capture roundtrip across a preceding replace pair: non-monotonic node order ships", async (t) => {
+	const { ctx, agentsById } = mockCtx({ withAgents: true });
+	ctx.get = () => null;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-surface-nm-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	const session = seededSession("surf-nm");
+	agentsById.set("surf-nm", { session });
+	// A fold that already shipped: replace nodes 2..5 (seqs 2,3,4,5) with a
+	// NEW event (seq 9; seq 8 is the log-only metering row), exactly the shape
+	// of the real fold #1 whose acp_summary_ message later became fold #2's
+	// first message. Surface order becomes [0, 1, 9, 6, 7] — NOT ascending.
+	shipReplace(session, 2, 5, "b-first");
+	assert.deepEqual(session.surface.nodes, [0, 1, 9, 6, 7], "replacement seq spliced into the middle");
+	// Fresh nodes appended after the replacement (turns since the ship).
+	session.append("user/message", { id: "u9", role: "user", source: { kind: "user" }, content: [{ type: "text", text: "u9 " + "F".repeat(4_000) }] }, { surfaceOp: "append" });
+	session.append("assistant/message", { message: { id: "a9", role: "assistant", source: { kind: "model" }, content: [{ type: "text", text: "a9 " + "F".repeat(4_000) }] } }, { surfaceOp: "append" });
+	const block = { id: "b-second", kind: "summary", tier: "model", refRange: { firstId: "acp_summary_b-first", lastId: "a9" }, count: 5, approxTokens: 9_000, summary: "Second fold." };
+	handle.store.ledgerOf("surf-nm").blocks.push(block);
+
+	assert.equal(handle.surfacePass.captureFoldSeqs("surf-nm", block), true, "commit-time capture resolves");
+	assert.deepEqual(block.surfaceSeqs, [9, 6, 7, 10, 11], "capture keeps MODEL-VISIBLE order");
+	assert.equal(block.surfaceSeqs.some((seq, i) => i > 0 && seq < block.surfaceSeqs[i - 1]), true, "the span is legitimately non-monotonic in seq space");
+
+	// THE ROUND TRIP: a capture produced from this surface must validate against
+	// the same surface. Pre-fix the ascending check rejected it and the sweep
+	// tombstoned with incomplete-seqs forever.
+	const shipped = await handle.surfacePass.sweep("surf-nm", "test");
+	assert.equal(shipped, 1, "the capture round-trips and ships");
+	assert.equal(block.surfaceSkip, undefined, "no incomplete-seqs tombstone");
+	assert.equal(block.surfaceReplaced?.startSeq, 9);
+	assert.equal(block.surfaceReplaced?.endSeq, 11);
+	assert.doesNotMatch(decisionsOf(stateDir), /reason=incomplete-seqs/u);
+	const replace = session.rawEvents.find((event) => event.data?.id === "acp_summary_b-second");
+	assert.notEqual(replace, undefined);
+	assert.deepEqual(replace.sourceEventSeqs, [9, 6, 7, 10, 11], "sourceEventSeqs cover the shadowed nodes in node order");
+	assert.deepEqual(session.deriveMessages().map((message) => message.id), ["u1", "a1", "acp_summary_b-second"], "the folded range left the projection");
+});
+
+test("stale capture re-locating into an already-replaced range: tombstoned", async (t) => {
+	const { ctx, agentsById } = mockCtx({ withAgents: true });
+	ctx.get = () => null;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-surface-ov-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	const session = seededSession("surf-ov");
+	agentsById.set("surf-ov", { session });
+	// Another block already replaced a range that numerically covers the
+	// re-located span. Legacy marker shape: surfaceReplaced only, no capture.
+	const shippedMarker = { id: "b-shipped", kind: "summary", tier: "model", refRange: { firstId: "u3", lastId: "a3" }, count: 2, approxTokens: 500, summary: "Shipped.", surfaceReplaced: { startSeq: 1, endSeq: 3, atSeq: 9, contentGeneration: 0, at: Date.now() } };
+	// Our block: refs u1..a2 (nodes 0..3), capture tampered so it fails the
+	// dense check. Re-location WOULD resolve — but it collides with the
+	// already-replaced range, so the safety rule keeps the hard skip.
+	const block = { id: "b-overlap", kind: "summary", tier: "model", refRange: { firstId: "u1", lastId: "a2" }, count: 4, approxTokens: 800, summary: "Overlap.", surfaceSeqs: [0, 2, 3] };
+	handle.store.ledgerOf("surf-ov").blocks.push(shippedMarker, block);
+	const eventsBefore = session.rawEvents.length;
+
+	await handle.surfacePass.sweep("surf-ov", "test");
+
+	assert.equal(block.surfaceReplaced, undefined, "overlapping re-location never ships");
+	assert.equal(block.surfaceSkip?.reason, "incomplete-seqs", "hard skip kept");
+	assert.equal(session.rawEvents.length, eventsBefore, "nothing appended");
+	assert.match(decisionsOf(stateDir), /session=surf-ov surface-replace skipped reason=incomplete-seqs .*block=b-overlap overlap/u);
+});
+
+test("stale-but-capable surface channel: recency never gates folding or lies in the banner", async (t) => {
+	let listener = null;
+	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
+	const { ctx, hooks, agentsById, contexts } = mockCtx({ llmFiber: fiber });
+	const llm = { resolveModelInfo: async () => ({ context: { contextWindow: 100_000 } }), prepareCall: async () => ({ stream: async function* () { yield { type: "text-delta", text: "Stale channel summary." }; yield { type: "finish" }; } }) };
+	ctx.get = () => llm;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-surface-stale-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	const session = seededSession("surf-stale");
+	agentsById.set("surf-stale", { session });
+	async function dispatch(frozen) {
+		const options = frozen
+			? Object.freeze({ sessionId: "surf-stale", messages: Object.freeze(session.deriveMessages()), provider: "p", model: "m" })
+			: { sessionId: "surf-stale", messages: session.deriveMessages(), provider: "p", model: "m" };
+		const stream = listener(options, async function* () { yield { type: "finish", usage: { input_tokens: 1 } }; });
+		for await (const chunk of stream) void chunk;
+	}
+
+	// Fold 1 commits and ships.
+	await dispatch(false);
+	assert.equal(await poll(() => handle.store.ledgerOf("surf-stale").blocks.length >= 1), true);
+	hooks["agent/turn-stopping"]({ agent: { session }, turn: 1, signal: undefined });
+	assert.equal(await poll(() => handle.store.ledgerOf("surf-stale").blocks[0].surfaceReplaced !== undefined), true, "block 1 ships");
+	const block = handle.store.ledgerOf("surf-stale").blocks[0];
+	// Age the ship past the old 10-minute in-memory recency window: a proven
+	// channel is still capable, the fold gate must not care HOW LONG ago it
+	// shipped.
+	block.surfaceReplaced.at = Date.now() - 11 * 60_000;
+
+	// Grow the history so a fold cycle has something to evaluate.
+	for (let i = 5; i <= 8; i++) {
+		session.append("user/message", { id: `u${i}`, role: "user", source: { kind: "user" }, content: [{ type: "text", text: `u${i} ` + "F".repeat(4_000) }] }, { surfaceOp: "append" });
+		session.append("assistant/message", { message: { id: `a${i}`, role: "assistant", source: { kind: "model" }, content: [{ type: "text", text: `a${i} ` + "F".repeat(4_000) }] } }, { surfaceOp: "append" });
+	}
+	// An unshipped block whose refs still locate in the raw re-send: this is
+	// what makes the frozen dispatch resolve a view it cannot carry
+	// (injected=none), exactly the resumed-session shape from the incident.
+	const derived = session.deriveMessages();
+	const firstU5 = derived.find((message) => message.id === "u5");
+	const lastA6 = derived.find((message) => message.id === "a6");
+	assert.notEqual(firstU5, undefined);
+	assert.notEqual(lastA6, undefined);
+	const pending = handle.store.commitFold("surf-stale", { refRange: { firstId: firstU5.id, lastId: lastA6.id }, count: 4, approxTokens: 9_000, summary: "Pending block.", kind: "summary", tier: "model" }, null);
+	assert.equal(pending.ok, true, "unshipped block commits");
+	// Frozen dispatch: inject=none, as on every resumed-session main wire.
+	await dispatch(true);
+	assert.equal(recentTrimInjectOf("surf-stale"), "none");
+	assert.equal(handle.surfacePass.supported("surf-stale"), true, "the durable capability probe still says yes");
+
+	// Idle fold cycle: the cycle must run its full evaluation — NOT the
+	// injection-unavailable pause the recency gate used to force.
+	hooks["agent/status"]({ status: "idle", agent: { session: { id: "surf-stale" } } });
+	assert.equal(await poll(() => /session=surf-stale via=idle action=/.test(decisionsOf(stateDir))), true, "idle cycle ran");
+	const log = decisionsOf(stateDir);
+	assert.doesNotMatch(log, /session=surf-stale [^\n]*injection-unavailable/u, "a stale-but-capable channel never pauses folding");
+	// The banner must not claim wire=raw while the ledger proves a shipped
+	// replacement, even though the ship is 11 minutes old.
+	const line = contexts[0].text({ agent: { name: "Stale Agent", session: { id: "surf-stale" } } });
+	assert.doesNotMatch(line, /wire=raw/u);
+});
+
+test("wire truth: view-applied logs the tally; pressure tiers use max(view, wire)", async (t) => {
+	let listener = null;
+	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
+	const { ctx } = mockCtx({ llmFiber: fiber });
+	const llm = { resolveModelInfo: async () => ({ context: { contextWindow: 100_000 } }), prepareCall: async () => ({ stream: async function* () { yield { type: "text-delta", text: "Wire truth summary." }; yield { type: "finish" }; } }) };
+	ctx.get = () => llm;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-surface-wire-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir, trimGrowthTokens: 1_000_000_000, trimPressurePercent: 40, trimEmergencyPercent: 101, trimProtectedTail: 2 });
+	const store = [];
+	for (let i = 1; i <= 7; i++) {
+		store.push({ role: "user", content: [{ type: "text", text: `u${i} ` + "F".repeat(300) }] });
+		store.push({ role: "assistant", content: [{ type: "text", text: `a${i} ` + "F".repeat(300) }] });
+	}
+	async function send(usage = null) {
+		const stream = listener({ sessionId: "wire-2", messages: store.slice(), provider: "p", model: "m" }, async function* () {
+			if (usage !== null) yield { type: "usage", usage };
+			yield { type: "finish" };
+		});
+		for await (const chunk of stream) void chunk;
+	}
+
+	// First dispatch: no tally known yet, so the row carries no wire= field
+	// (fail-open: unknown must behave exactly like before).
+	await send();
+	assert.equal(handle.captures.has("wire-2"), true);
+	assert.equal(handle.metrics.of("wire-2").lastInputTokens, null, "tally unknown until a usage sample");
+	assert.doesNotMatch(decisionsOf(stateDir), /session=wire-2 view-applied [^\n]*wire=/u);
+
+	// The provider reports a heavily cached 61.4k prompt as a HOST-shaped
+	// TokenUsage chunk: inputTokens covers UNCACHED prompt tokens only, the
+	// rest rides the cache buckets. Reading inputTokens alone would log
+	// wire=900 and keep max(view, wire) silent — the incident's 130k-of-136k
+	// cached shape. The sampler must fold all three buckets into the total.
+	await send({ inputTokens: 900, cacheReadTokens: 60_000, cacheWriteTokens: 500, outputTokens: 100 });
+	assert.equal(handle.metrics.of("wire-2").lastInputTokens, 900, "inputTokens stays the uncached bucket");
+	assert.equal(handle.metrics.of("wire-2").cachedTokens, 60_000, "camelCase cacheReadTokens is mapped");
+	assert.equal(handle.metrics.of("wire-2").cacheWriteTokens, 500, "camelCase cacheWriteTokens is mapped");
+	await send();
+	assert.match(decisionsOf(stateDir), /session=wire-2 view-applied [^\n]* wire=61400/u, "the row carries the FULL prompt size");
+	assert.equal(handle.store.ledgerOf("wire-2").blocks.length, 0, "no fold before the tally-driven cycle");
+
+	await handle.maybeFold("wire-2", "test");
+	const log = decisionsOf(stateDir);
+	assert.match(log, /session=wire-2 via=test action=fold tier=pressure/u, "pressure fires on max(view, wire)");
+	assert.match(log, /session=wire-2 via=test [^\n]* view=\d+ wire=61400 window=100000/u, "the decision row shows both meters");
+	assert.equal(handle.store.ledgerOf("wire-2").blocks.length, 1, "pressure tier committed a fold");
+});
+
+test("stale capture with vanished refs: incomplete-seqs tombstone, no guessed range", async (t) => {
+	const { ctx, agentsById } = mockCtx({ withAgents: true });
+	ctx.get = () => null;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-surface-gone-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	const session = seededSession("surf-gone");
+	agentsById.set("surf-gone", { session });
+	// Authoritative capture from commit time (refs u1..a2 → nodes 0..3).
+	const commit = handle.store.commitFold("surf-gone", { refRange: { firstId: "u1", lastId: "a2" }, count: 4, approxTokens: 9_000, summary: "Vanished block.", kind: "summary", tier: "model" }, null);
+	assert.equal(commit.ok, true);
+	const block = commit.block;
+	assert.equal(handle.surfacePass.captureFoldSeqs("surf-gone", block), true);
+	assert.deepEqual(block.surfaceSeqs, [0, 1, 2, 3]);
+	// Another fold already shadowed that EXACT range: the capture endpoints
+	// left the surface AND the refs no longer resolve. Neither resolution path
+	// can produce an honest range, so the block must tombstone as
+	// incomplete-seqs (the hard-skip branch) instead of guessing.
+	shipReplace(session, 0, 3, "other");
+	const eventsBefore = session.rawEvents.length;
+	await handle.surfacePass.sweep("surf-gone", "test");
+	assert.equal(block.surfaceReplaced, undefined, "never shipped");
+	assert.equal(block.surfaceSkip?.reason, "incomplete-seqs", "hard skip kept");
+	assert.equal(session.rawEvents.length, eventsBefore, "nothing appended");
+	// The tombstone is keyed on the surface generation: a stable surface stays
+	// quiet on later sweeps.
+	await handle.surfacePass.sweep("surf-gone", "test");
+	const rows = decisionsOf(stateDir).split("\n").filter((line) => line.includes("session=surf-gone") && line.includes("reason=incomplete-seqs"));
+	assert.equal(rows.length, 1, "the tombstoned block logs once per surface generation");
+	assert.match(rows[0], /block=.*/u);
+});
+
+test("stale capture whose refs locate an earlier look-alike span: tombstoned, never re-targeted", async (t) => {
+	const { ctx, agentsById } = mockCtx({ withAgents: true });
+	ctx.get = () => null;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-surface-look-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	const session = mockSession("surf-look");
+	const text = (who) => [{ type: "text", text: `${who} ` + "L".repeat(500) }];
+	// Two IDENTICAL id-less pairs: refOf is content-addressed, so the pair
+	// repeats one ref twice — a count-anchored locate takes the FIRST match.
+	const dupP = () => ({ role: "user", source: { kind: "user" }, content: text("dup-p") });
+	const dupQ = () => ({ role: "assistant", source: { kind: "model" }, content: text("dup-q") });
+	session.append("user/message", { id: "u1", role: "user", source: { kind: "user" }, content: text("u1") }, { surfaceOp: "append" });
+	session.append("assistant/message", { message: { id: "a1", role: "assistant", source: { kind: "model" }, content: text("a1") } }, { surfaceOp: "append" });
+	session.append("user/message", dupP(), { surfaceOp: "append" });
+	session.append("assistant/message", { message: dupQ() }, { surfaceOp: "append" });
+	session.append("user/message", { id: "u2", role: "user", source: { kind: "user" }, content: text("u2") }, { surfaceOp: "append" });
+	session.append("assistant/message", { message: { id: "a2", role: "assistant", source: { kind: "model" }, content: text("a2") } }, { surfaceOp: "append" });
+	session.append("user/message", dupP(), { surfaceOp: "append" });
+	session.append("assistant/message", { message: dupQ() }, { surfaceOp: "append" });
+	agentsById.set("surf-look", { session });
+	assert.deepEqual(session.surface.nodes, [0, 1, 2, 3, 4, 5, 6, 7]);
+	// The block's authoritative capture is the LATER pair (nodes 6,7).
+	const block = { id: "b-look", kind: "summary", tier: "model", refRange: { firstId: refOf(dupP(), 0), lastId: refOf(dupQ(), 0) }, count: 2, approxTokens: 500, summary: "Look-alike block.", surfaceSeqs: [6, 7] };
+	handle.store.ledgerOf("surf-look").blocks.push(block);
+	// Another fold shadowed the block's TRUE span, so its refs now resolve to
+	// the earlier look-alike pair (nodes 2,3). The stored endpoints prove the
+	// located span is a DIFFERENT range: re-targeting it would shadow messages
+	// the fold never covered.
+	shipReplace(session, 6, 7, "other");
+	const nodesBefore = session.surface.nodes.slice();
+	await handle.surfacePass.sweep("surf-look", "test");
+	assert.equal(block.surfaceReplaced, undefined, "never re-targets the earlier look-alike span");
+	assert.equal(block.surfaceSkip?.reason, "incomplete-seqs", "hard skip kept");
+	assert.deepEqual(session.surface.nodes, nodesBefore, "surface untouched — no look-alike range shadowed");
+	assert.match(decisionsOf(stateDir), /session=surf-look surface-replace skipped reason=incomplete-seqs .*block=b-look relocated-range/u);
+});
+
+test("open compaction lock: supported() false and maybeFold burns no summary call", async (t) => {
+	let listener = null;
+	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
+	const { ctx, agentsById } = mockCtx({ llmFiber: fiber });
+	let prepareCalls = 0;
+	const llm = {
+		resolveModelInfo: async () => ({ context: { contextWindow: 100_000 } }),
+		prepareCall: async () => {
+			prepareCalls += 1;
+			return { stream: async function* () { yield { type: "text-delta", text: "Locked summary." }; yield { type: "finish" }; } };
+		},
+	};
+	ctx.get = () => llm;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-surface-lk-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	const session = seededSession("surf-lk");
+	agentsById.set("surf-lk", { session });
+	async function dispatch(frozen) {
+		const options = frozen
+			? Object.freeze({ sessionId: "surf-lk", messages: Object.freeze(session.deriveMessages()), provider: "p", model: "m" })
+			: { sessionId: "surf-lk", messages: session.deriveMessages(), provider: "p", model: "m" };
+		const stream = listener(options, async function* () { yield { type: "finish", usage: { input_tokens: 1 } }; });
+		for await (const chunk of stream) void chunk;
+	}
+	// Fold 1 commits on the mutable dispatch (one summary-model call), then a
+	// frozen re-send puts the dispatch on inject=none — the resumed shape.
+	await dispatch(false);
+	assert.equal(await poll(() => handle.store.ledgerOf("surf-lk").blocks.length >= 1), true, "fold 1 committed");
+	await dispatch(true);
+	assert.equal(recentTrimInjectOf("surf-lk"), "none");
+	const blocksAfterFold = handle.store.ledgerOf("surf-lk").blocks.length;
+	const callsAfterFold = prepareCalls;
+
+	// Open (orphaned) compaction lock: sweep defers, so the fold gate must say
+	// "not capable" instead of letting maybeFold burn summary calls for folds
+	// that can never reach the wire (≤6/hour with zero relief).
+	session.append("compaction/start", { compactionId: "c-open", turn: null });
+	assert.equal(handle.surfacePass.supported("surf-lk"), false, "an open lock makes the channel incapable");
+	await handle.maybeFold("surf-lk", "locktest");
+	assert.equal(prepareCalls, callsAfterFold, "no summary-model call under the lock");
+	assert.equal(handle.store.ledgerOf("surf-lk").blocks.length, blocksAfterFold, "no fold committed under the lock");
+	const lockedLog = decisionsOf(stateDir);
+	assert.match(lockedLog, /session=surf-lk via=locktest action=none reason=injection-unavailable/u, "the fold cycle is gated before evaluation");
+	assert.doesNotMatch(lockedLog, /session=surf-lk via=locktest action=fold/u);
+
+	// Lock released: the cached probe invalidates on the new session seq and
+	// the decision cycle runs again (cadence-gated, but evaluated).
+	session.append("compaction/end", { compactionId: "c-open", turn: null });
+	assert.equal(handle.surfacePass.supported("surf-lk"), true, "lock released → capable again");
+	await handle.maybeFold("surf-lk", "unlocked");
+	const log = decisionsOf(stateDir);
+	assert.match(log, /session=surf-lk via=unlocked action=/u, "the cycle evaluates after the lock clears");
+	assert.doesNotMatch(log, /session=surf-lk via=unlocked [^\n]*injection-unavailable/u);
+});
+
+test("banner: a capture alone never hides wire=raw; a shipped replacement does", async (t) => {
+	let listener = null;
+	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
+	const { ctx, contexts } = mockCtx({ llmFiber: fiber, withAgents: false });
+	ctx.get = () => null;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-surface-cap-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	// Persisted capture from an earlier process, no live registry (so the
+	// capability probe says no) and no ship: the capture must NOT suppress
+	// the honest warning.
+	const messages = [];
+	for (let i = 1; i <= 3; i++) {
+		messages.push({ id: `u${i}`, role: "user", content: [{ type: "text", text: `u${i} ` + "C".repeat(400) }] });
+		messages.push({ id: `a${i}`, role: "assistant", content: [{ type: "text", text: `a${i} ` + "C".repeat(400) }] });
+	}
+	const block = { id: "b-cap", kind: "summary", tier: "model", refRange: { firstId: "u1", lastId: "a1" }, count: 2, approxTokens: 500, summary: "Capture only.", surfaceSeqs: [0, 1] };
+	handle.store.ledgerOf("surf-cap").blocks.push(block);
+	const stream = listener(Object.freeze({ sessionId: "surf-cap", messages: Object.freeze(messages), provider: "p", model: "m" }), async function* () { yield { type: "finish" }; });
+	for await (const chunk of stream) void chunk;
+	assert.equal(recentTrimInjectOf("surf-cap"), "none");
+	const captured = contexts[0].text({ agent: { name: "Cap Agent", session: { id: "surf-cap" } } });
+	assert.match(captured, /wire=raw/u, "a capture alone must not silence the warning");
+	// Shipped evidence stands the marker down.
+	block.surfaceReplaced = { startSeq: 0, endSeq: 1, seqs: [0, 1], contentGeneration: 0, atSeq: null, via: "test", at: Date.now() };
+	const shipped = contexts[0].text({ agent: { name: "Cap Agent", session: { id: "surf-cap" } } });
+	assert.doesNotMatch(shipped, /wire=raw/u, "a shipped replacement suppresses wire=raw");
 });

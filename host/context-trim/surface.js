@@ -22,11 +22,31 @@
  * for blocks whose capture could not run (session unreachable at commit, or
  * a ledger inherited/cloned without seqs): the block's firstId/lastId refs
  * are re-located over surface.nodes with the same count-anchored resolution
- * the view builder uses. A capture that EXISTS but no longer validates
- * against the live surface (endpoints missing, span not densely covered —
- * e.g. a host compaction already shadowed part of the range) is NEVER
- * silently re-targeted: re-locating could shadow a DIFFERENT range than the
- * one that was folded, so it is skipped as `incomplete-seqs` and logged.
+ * the view builder uses.
+ *
+ * Surface node seqs are MODEL-VISIBLE order, NOT log order: a replace op
+ * splices a NEW (higher) seq into the middle of the list, so a span crossing
+ * a replacement is legitimately NON-monotonic (a real fold captured
+ * [376, 229, 230, ...] because event 376 replaced the range around it).
+ * Captures and validators therefore treat a span as an ordered SET of unique
+ * seqs — never as an ascending interval. The host validates the same way:
+ * sourceEventSeqs only need to be earlier, unique, and cover every shadowed
+ * node (core/session/src/surface.ts:329-363).
+ *
+ * A capture that EXISTS but no longer validates against the live surface
+ * (endpoints missing, span not densely covered — e.g. a host compaction
+ * already shadowed part of the range) is never silently re-targeted. The hard
+ * skip is relaxed ONLY when the re-located range is provably the same fold:
+ * the block's refs still resolve count-anchored on the visible surface, the
+ * stored first/last seqs are still live surface nodes AND equal the located
+ * span's endpoints (content-addressed refs make an EARLIER look-alike span
+ * locate just as well), AND the located node span shares no event seq with
+ * any range another block has already REPLACED (this block excepted; the
+ * marker's shipped seq set when present, then the other block's capture, then
+ * the numeric surfaceReplaced.startSeq..endSeq interval for legacy markers).
+ * A capture-less legacy block keeps the plain live-location path. Anything
+ * else keeps the `incomplete-seqs` tombstone: re-targeting a different range
+ * would shadow messages the fold never covered.
  *
  * Protocol details mirrored from the host recon:
  * - sourceEventSeqs must densely cover EVERY shadowed surface node
@@ -211,21 +231,27 @@ function locateOnSurface(pairs, block) {
 	return null;
 }
 
-/** Validate a stored capture against the live surface: seqs must be positive
- * safe integers, ordered, both endpoints present in surface.nodes, the
+/** Validate a stored capture against the live surface: seqs must be unique
+ * non-negative safe integers, both endpoints present in surface.nodes, the
  * covered node span must be EXACTLY the stored array (dense coverage — this
  * is what makes sourceEventSeqs complete, and what detects a surface that
  * moved on), and the events AT the endpoint seqs must still derive messages
  * whose refs equal the block's refRange endpoints (identity re-check: a
  * host log migration that renumbered events while the plugin ledger
  * survived would otherwise densely validate over UNRELATED events and
- * shadow the wrong range). Returns { startSeq, endSeq, seqs } or null. */
+ * shadow the wrong range). Returns { startSeq, endSeq, seqs } or null.
+ *
+ * The seqs are NOT required to ascend: surface.nodes is model-visible order,
+ * so a span crossing a replace op mixes a new replacement seq with older
+ * seqs (see header). An ascending check here rejected captures that
+ * captureFoldSeqs itself had just produced (the real 2026-11-05
+ * incomplete-seqs deadlock). */
 function validateStoredSeqs(session, nodes, stored, block) {
 	if (!Array.isArray(stored) || stored.length === 0) return null;
-	let prior = -1;
+	const seen = new Set();
 	for (const seq of stored) {
-		if (!Number.isInteger(seq) || seq < 0 || seq <= prior) return null;
-		prior = seq;
+		if (!Number.isInteger(seq) || seq < 0 || seen.has(seq)) return null;
+		seen.add(seq);
 	}
 	const indexOfSeq = new Map(nodes.map((seq, index) => [seq, index]));
 	const startIdx = indexOfSeq.get(stored[0]);
@@ -258,6 +284,44 @@ function validateStoredSeqs(session, nodes, stored, block) {
 		}
 	}
 	return { startIdx, endIdx, startSeq: stored[0], endSeq: stored[stored.length - 1], seqs: stored.slice() };
+}
+
+/** True when a re-located node span collides with a range ANOTHER block has
+ * already replaced. Precedence: the marker's own shipped seq set
+ * (surfaceReplaced.seqs, written at ship time), then the other block's
+ * persisted capture, then a numeric start..end interval for legacy markers
+ * that only recorded the endpoints. Only the last tier guesses, and it
+ * over-approximates NON-monotonic spans (a span crossing a replacement mixes
+ * a high seq with older ones), so it may tombstone a would-be valid
+ * re-location — the safe direction: never ship a guessed range. Fails closed
+ * (true) on an unreadable ledger: a safety check must never wave a collision
+ * through. */
+function overlapsReplacedRange(block, seqs, blocks) {
+	try {
+		const set = new Set(seqs);
+		let lo = Infinity;
+		let hi = -Infinity;
+		for (const seq of seqs) {
+			if (seq < lo) lo = seq;
+			if (seq > hi) hi = seq;
+		}
+		for (const other of Array.isArray(blocks) ? blocks : []) {
+			if (other === block) continue;
+			const mark = other?.surfaceReplaced;
+			if (mark === null || mark === undefined) continue;
+			const exact = Array.isArray(mark.seqs) ? mark.seqs : Array.isArray(other.surfaceSeqs) ? other.surfaceSeqs : null;
+			if (exact !== null) {
+				if (exact.some((seq) => set.has(seq))) return true;
+				continue; // exact shadow set known — no numeric guessing
+			}
+			const a = Math.min(mark.startSeq, mark.endSeq);
+			const b = Math.max(mark.startSeq, mark.endSeq);
+			if (Number.isFinite(a) && Number.isFinite(b) && lo <= b && a <= hi) return true;
+		}
+		return false;
+	} catch {
+		return true;
+	}
 }
 
 /** Build the surface-replace pass. deps: { ctx, config, store, decisionLog,
@@ -313,6 +377,28 @@ export function createSurfaceFoldPass(deps = {}) {
 			const event = typeof session?.eventAt === "function" ? session.eventAt(nodes[0]) : undefined;
 			const message = event === undefined ? null : messageOfEvent(session, event);
 			return message !== null && message !== undefined && message.role === "system";
+		} catch {
+			return false;
+		}
+	}
+
+	/** Compaction-lock probe with a per-session cache keyed on session.seq.
+	 * supported() runs on every idle boundary and a full log scan per call is
+	 * wasted work on an unchanged log; the log is append-only, so "same seq →
+	 * same lock state" holds and a changed seq invalidates. Bounded like the
+	 * other registries. Fail-open false on any error (an unreadable log must
+	 * not reinstate the fold deadlock). */
+	const lockCache = new Map(); // sessionId -> { seq, locked }
+	function lockOpenCached(sessionId, session) {
+		try {
+			const seq = Number.isFinite(session?.seq) ? session.seq : null;
+			if (seq === null) return compactionLockOpen(session);
+			const hit = lockCache.get(sessionId);
+			if (hit !== undefined && hit.seq === seq) return hit.locked;
+			const locked = compactionLockOpen(session);
+			if (lockCache.size >= 200) lockCache.delete(lockCache.keys().next().value);
+			lockCache.set(sessionId, { seq, locked });
+			return locked;
 		} catch {
 			return false;
 		}
@@ -427,7 +513,7 @@ export function createSurfaceFoldPass(deps = {}) {
 			return 0;
 		}
 		const surface = session.surface;
-		if (compactionLockOpen(session)) {
+		if (lockOpenCached(sessionId, session)) {
 			skip(sessionId, "compaction-lock", via, `blocks=${pending.length}`);
 			return 0;
 		}
@@ -442,28 +528,59 @@ export function createSurfaceFoldPass(deps = {}) {
 		let shipped = 0;
 		for (const block of pending) {
 			// Resolve the shadow range: stored capture first (validated dense
-			// against the LIVE surface — an incomplete/stale capture is a hard
-			// skip, never a silent re-target), live location as the fallback.
+			// against the LIVE surface). A stale/incomplete capture — or a
+			// capture-less legacy block — falls back to live location, but ONLY
+			// when the located span provably cannot collide with a range another
+			// block already replaced (safety rule, header). Otherwise the block
+			// tombstones as `incomplete-seqs` (or `not-located` when its refs
+			// are simply gone): never a silent re-target onto a different range.
 			let startSeq = null;
 			let endSeq = null;
 			let seqs = null;
 			const stored = Array.isArray(block.surfaceSeqs) ? validateStoredSeqs(session, nodes, block.surfaceSeqs, block) : null;
 			if (stored !== null) {
 				({ startSeq, endSeq, seqs } = stored);
-			} else if (Array.isArray(block.surfaceSeqs)) {
-				block.surfaceSkip = { reason: "incomplete-seqs", contentGeneration: liveGeneration, at: Date.now() };
-				skip(sessionId, "incomplete-seqs", via, `block=${block.id}`, false);
-				continue;
 			} else {
 				const located = locateOnSurface(pairs, block);
 				if (located === null) {
-					block.surfaceSkip = { reason: "not-located", contentGeneration: liveGeneration, at: Date.now() };
-					skip(sessionId, "not-located", via, `block=${block.id}`, false);
+					if (Array.isArray(block.surfaceSeqs)) {
+						block.surfaceSkip = { reason: "incomplete-seqs", contentGeneration: liveGeneration, at: Date.now() };
+						skip(sessionId, "incomplete-seqs", via, `block=${block.id}`, false);
+					} else {
+						block.surfaceSkip = { reason: "not-located", contentGeneration: liveGeneration, at: Date.now() };
+						skip(sessionId, "not-located", via, `block=${block.id}`, false);
+					}
+					continue;
+				}
+				const locatedSeqs = nodes.slice(located[0], located[1] + 1);
+				// A stale capture may only be re-located onto a provably IDENTICAL
+				// span: refOf is content-addressed for messages without ids, so an
+				// EARLIER look-alike span locates just as well (locateOnSurface
+				// takes the first count-anchored occurrence) and re-targeting it
+				// would shadow a range the fold never covered. Accept only when
+				// the stored endpoints are still live surface nodes AND equal the
+				// located endpoints; otherwise tombstone (never ship a guess).
+				if (Array.isArray(block.surfaceSeqs)) {
+					const storedFirst = block.surfaceSeqs[0];
+					const storedLast = block.surfaceSeqs[block.surfaceSeqs.length - 1];
+					const endpointsMatch = nodes.includes(storedFirst)
+						&& nodes.includes(storedLast)
+						&& nodes[located[0]] === storedFirst
+						&& nodes[located[1]] === storedLast;
+					if (!endpointsMatch) {
+						block.surfaceSkip = { reason: "incomplete-seqs", contentGeneration: liveGeneration, at: Date.now() };
+						skip(sessionId, "incomplete-seqs", via, `block=${block.id} relocated-range`, false);
+						continue;
+					}
+				}
+				if (overlapsReplacedRange(block, locatedSeqs, blocks)) {
+					block.surfaceSkip = { reason: "incomplete-seqs", contentGeneration: liveGeneration, at: Date.now() };
+					skip(sessionId, "incomplete-seqs", via, `block=${block.id} overlap`, false);
 					continue;
 				}
 				startSeq = nodes[located[0]];
 				endSeq = nodes[located[1]];
-				seqs = nodes.slice(located[0], located[1] + 1);
+				seqs = locatedSeqs;
 			}
 			// System head clamp (ship time, BOTH resolution paths): when the
 			// first surface node carries the system prompt, the v4 validator
@@ -525,10 +642,14 @@ export function createSurfaceFoldPass(deps = {}) {
 					sourceEventSeqs: seqs,
 				});
 				// Idempotence marker (durable, keyed by range + contentGeneration
-				// per the design): a second sweep filters the block out here.
+				// per the design): a second sweep filters the block out here. The
+				// exact shadowed seq set rides along so later re-location safety
+				// checks can intersect exactly instead of guessing from
+				// min/max (non-monotonic spans make the interval an over-approximation).
 				block.surfaceReplaced = {
 					startSeq,
 					endSeq,
+					seqs: seqs.slice(),
 					contentGeneration: liveGeneration,
 					atSeq: Number.isFinite(event?.seq) ? event.seq : null,
 					via,
@@ -568,6 +689,31 @@ export function createSurfaceFoldPass(deps = {}) {
 		return shipped;
 	}
 
+	/** Durable capability probe for the fold gate (index.js maybeFold): true
+	 * when the surface-replace channel can carry a fold for this session right
+	 * now — the pass is enabled, a surface-capable live session exists, AND no
+	 * durable compaction lock is open. The lock matters: sweep defers under an
+	 * open/orphaned compaction/start..end pair, so a supported() that ignored
+	 * it would let maybeFold keep burning summary-model calls (≤6/hour) for
+	 * folds that can never reach the wire. Lock state is cached per session
+	 * seq, so idle-frequency calls stay O(1).
+	 * Deliberately NOT a recency/freshness question: a channel that last
+	 * shipped an hour ago (or before a process restart) and still exposes
+	 * append + surface.nodes is capable, and the very next fold ships a new
+	 * surface event. Recency must never gate folding — that deadlock is what
+	 * froze real sessions at 135k tokens while decisions.log reported a 50k
+	 * view (2026-11-05). */
+	function supported(sessionId) {
+		try {
+			if (!enabledNow()) return false;
+			const session = sessionOf(sessionId);
+			if (!surfaceCapable(session)) return false;
+			return !lockOpenCached(sessionId, session);
+		} catch {
+			return false;
+		}
+	}
+
 	// Trigger 1: agent/turn-stopping — serial, no request in flight, and the
 	// session object rides the payload (agent.session). Fail-open when the
 	// host does not dispatch the event.
@@ -586,5 +732,5 @@ export function createSurfaceFoldPass(deps = {}) {
 		warn(`[context-trim] agent/turn-stopping hook failed: ${error?.message ?? error}`);
 	}
 
-	return { sweep, captureFoldSeqs, enabledNow };
+	return { sweep, captureFoldSeqs, enabledNow, supported };
 }

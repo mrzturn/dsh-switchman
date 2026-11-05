@@ -76,3 +76,56 @@ small Service registration in index.js):
 - All existing suites green; `node scripts/validate.mjs` OK.
 - Live: decisions.log shows surface-replace rows; banner stops showing wire=raw
   after the next step following a fold.
+
+## Post-1.10.1 fix: the incomplete-seqs deadlock (2026-11-05)
+
+A real resumed session folded 61.7k tokens (#2) yet the swap never reached the
+wire, and folding then stopped for 35 minutes while the prompt grew to 136k.
+Two independent defects combined:
+
+1. **Surface-node seq order is model-visible order, not log order.** A replace
+   op splices a NEW event seq into the middle of `surface.nodes`, so a captured
+   span that crosses a replacement is legitimately non-monotonic (the real
+   capture was `[376, 229, 230, ...]`). `validateStoredSeqs` demanded strictly
+   ascending seqs and therefore rejected every capture that
+   `captureFoldSeqs` had just produced on the same surface —
+   `reason=incomplete-seqs` forever. Fixed: uniqueness + dense span + endpoint
+   identity, no ordering assumption (`host/context-trim/surface.js`).
+2. **The recency gate froze folding.** `maybeFold` paused whenever
+   `inject === "none"` and the last surface ship was older than the 10-minute
+   in-memory window. Resumed sessions always dispatch `injected=none`, so after
+   ten minutes (or any restart) no fold ran, no fold shipped, and the gate
+   stayed shut. Fixed: the gate asks the durable capability probe
+   `surfacePass.supported(sessionId)` (enabled + live session with
+   `append`/`surface.nodes`); `TRIM_VIEW_MAX_AGE_MS` is display freshness only.
+   The banner's `wire=raw` now stands down only on SHIPPED evidence — a
+   ledger block carrying `surfaceReplaced`; a commit-time capture
+   (`surfaceSeqs`) that may never ship must not silence the warning.
+
+A capture that goes stale is still never blindly re-targeted. Live
+re-location is allowed only when the block's refs resolve count-anchored, the
+STORED first/last seqs are still live surface nodes AND equal the located
+span's endpoints (`refOf` is content-addressed for messages without ids, so an
+earlier look-alike span locates just as well), and the located span shares no
+seq with a range another block already replaced. Collision checks prefer the
+marker's shipped seq set (`surfaceReplaced.seqs`) and fall back to the other
+block's capture, then to the numeric interval for legacy markers. Otherwise the
+`incomplete-seqs` tombstone stays.
+
+`surfacePass.supported()` also requires that no durable
+`compaction/start..compaction/end` lock is open, since `sweep` defers under
+one: without it the fold gate kept folding (≤6 summary-model calls/hour) into
+a channel that could not ship. Lock state is cached per session `seq`, so the
+idle-frequency probe stays O(1).
+
+Known limitation (deliberately not fixed here): the trigger math still fires
+*pressure* on any usage at/above the percentage (no hysteresis or increment
+floor), and the *growth* anchor mixes units — an MD5-of-tokens view estimate
+compared against a stored `lastFoldLowTokens`, so a large fold can leave the
+growth gate armed one cycle too long. Both only cause an extra cadence-gated
+fold attempt, never a wrong range; a trigger redesign is tracked separately.
+
+Wire truth in the logs: `view-applied` rows carry `wire=<tokens>` when the
+provider tally is known, and pressure/emergency tiers run on
+`max(view, wire)` — the view estimate omits the system/context sections, so a
+136k prompt once read as a 50k view and the tiers stayed silent.

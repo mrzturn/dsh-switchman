@@ -12,7 +12,7 @@ import { refOf, buildView, injectView, ledgerIsStale, segmentBounds, rangeIsSegm
 import { createStore, emptyLedger, normalizeBlock } from "../../host/context-trim/state.js";
 import { computeFoldableRange, evaluateTrigger, FOLD_MIN_INTERVAL_MS, EMERGENCY_COOLDOWN_MS } from "../../host/context-trim/trigger.js";
 import { mechanicalSummary, renderMaterial, SUMMARY_SYSTEM_PROMPT, MAX_MATERIAL_CHARS } from "../../host/context-trim/summarizer.js";
-import { createMetrics, extractUsage, wrapStreamForMetrics } from "../../host/context-trim/metrics.js";
+import { createMetrics, extractUsage, promptTokensOf, wrapStreamForMetrics } from "../../host/context-trim/metrics.js";
 import { applyContextTrim, renderTrimContextLine, effectiveWindowTokens, TRIM_PROTOCOL_TEXT } from "../../host/context-trim/index.js";
 
 /** Build a deterministic message list (no ids — refs must hash stably). */
@@ -443,9 +443,25 @@ describe("trigger: tiers and gates", () => {
 
 describe("metrics: stream wrapping and usage extraction", () => {
 	test("extractUsage reads common provider shapes", () => {
-		assert.deepEqual(extractUsage({ type: "finish", usage: { input_tokens: 100, output_tokens: 5 } }), { inputTokens: 100, cachedTokens: null, outputTokens: 5 });
-		assert.deepEqual(extractUsage({ usage: { prompt_tokens: 70, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 40 } } }), { inputTokens: 70, cachedTokens: 40, outputTokens: 3 });
+		assert.deepEqual(extractUsage({ type: "finish", usage: { input_tokens: 100, output_tokens: 5 } }), { inputTokens: 100, cachedTokens: null, cacheWriteTokens: null, outputTokens: 5 });
+		assert.deepEqual(extractUsage({ usage: { prompt_tokens: 70, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 40 } } }), { inputTokens: 70, cachedTokens: 40, cacheWriteTokens: null, outputTokens: 3 });
+		// Host TokenUsage shape: camelCase buckets, inputTokens = UNCACHED prompt.
+		assert.deepEqual(extractUsage({ type: "usage", usage: { inputTokens: 900, cacheReadTokens: 60_000, cacheWriteTokens: 500, outputTokens: 100 } }), { inputTokens: 900, cachedTokens: 60_000, cacheWriteTokens: 500, outputTokens: 100 });
 		assert.equal(extractUsage({ type: "text-delta", text: "hi" }), null);
+	});
+
+	test("promptTokensOf totals the non-overlapping host buckets", () => {
+		const metrics = createMetrics();
+		assert.equal(promptTokensOf(null), null);
+		assert.equal(promptTokensOf(metrics.of("ghost")), null, "never streamed → no wire signal");
+		metrics.recordUsage("s1", { inputTokens: 900, cachedTokens: 60_000, cacheWriteTokens: 500, outputTokens: 100 });
+		assert.equal(promptTokensOf(metrics.of("s1")), 61_400);
+		// Missing cache buckets count as 0, and a fully cached prompt (0
+		// uncached) still reports the cache total.
+		metrics.recordUsage("s2", { inputTokens: 0, cachedTokens: 5_000, outputTokens: 1 });
+		assert.equal(promptTokensOf(metrics.of("s2")), 5_000);
+		metrics.recordUsage("s3", { inputTokens: 1_200, outputTokens: 1 });
+		assert.equal(promptTokensOf(metrics.of("s3")), 1_200);
 	});
 
 	test("wrapped stream yields every chunk; sampler errors are swallowed", () => {
