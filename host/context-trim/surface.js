@@ -188,9 +188,15 @@ function locateOnSurface(pairs, block) {
 		if (ref === lastId) lastList.push(messageIndex);
 	});
 	if (firstList.length === 0 || lastList.length === 0) return null;
+	// Anchor strictly on block.count (matching view.js's anchored path). A
+	// block without a usable count is a hard skip below (not-located), never
+	// a guessed last-occurrence range — the fallback path only serves blocks
+	// captured before the stored-seqs strategy existed, and guessing there
+	// could shadow an unrelated range on a collided content-addressed ref.
 	const count = Number.isInteger(block.count) && block.count > 0 ? block.count : null;
+	if (count === null) return null;
 	for (const start of firstList) {
-		const end = count !== null ? start + count - 1 : lastList[lastList.length - 1];
+		const end = start + count - 1;
 		if (end >= start && lastList.includes(end)) return [pairs[start].nodeIndex, pairs[end].nodeIndex];
 	}
 	return null;
@@ -329,8 +335,18 @@ export function createSurfaceFoldPass(deps = {}) {
 
 	/** One no-op row (only when the pass had pending work — a vacuous sweep
 	 * with nothing to ship stays silent, matching the early-return style of
-	 * the fold cycle's own action=none rows). */
-	const skip = (sessionId, reason, via, extra = "") => {
+	 * the fold cycle's own action=none rows). Whole-pass reasons (disabled /
+	 * no-service / compaction-lock) repeat on EVERY turn-stopping + idle
+	 * boundary while the state lasts, so identical signatures are logged
+	 * once per state change — a fresh pending count re-opens the row. */
+	const skipSeen = new Map(); // `${sessionId}:${reason}` -> last extra signature (FIFO-bounded)
+	const skip = (sessionId, reason, via, extra = "", dedupe = true) => {
+		if (dedupe) {
+			const key = `${sessionId}:${reason}`;
+			if (skipSeen.get(key) === extra) return;
+			if (skipSeen.size >= 200) skipSeen.delete(skipSeen.keys().next().value);
+			skipSeen.set(key, extra);
+		}
 		decisionLog(`session=${sessionId} surface-replace skipped reason=${reason} via=${via}${extra === "" ? "" : ` ${extra}`}`);
 	};
 
@@ -387,13 +403,13 @@ export function createSurfaceFoldPass(deps = {}) {
 				({ startSeq, endSeq, seqs } = stored);
 			} else if (Array.isArray(block.surfaceSeqs)) {
 				block.surfaceSkip = { reason: "incomplete-seqs", contentGeneration: liveGeneration, at: Date.now() };
-				skip(sessionId, "incomplete-seqs", via, `block=${block.id}`);
+				skip(sessionId, "incomplete-seqs", via, `block=${block.id}`, false);
 				continue;
 			} else {
 				const located = locateOnSurface(pairs, block);
 				if (located === null) {
 					block.surfaceSkip = { reason: "not-located", contentGeneration: liveGeneration, at: Date.now() };
-					skip(sessionId, "not-located", via, `block=${block.id}`);
+					skip(sessionId, "not-located", via, `block=${block.id}`, false);
 					continue;
 				}
 				startSeq = nodes[located[0]];

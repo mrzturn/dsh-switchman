@@ -253,6 +253,26 @@ export function applyContextTrim(ctx, config) {
 	// Per-process pipeline state (process-wide by design: ledgers persist on
 	// disk per session, metrics/captures live per session in memory).
 	const store = createStore({ stateDir: readString(config, "trimStateDir", null) ?? undefined, warn });
+
+	// Newest surfaceReplaced timestamp across the session's ledger blocks (0
+	// when none). A recent ship proves the surface-replace channel is alive
+	// even while the wire stays frozen — folds ARE relieving the real
+	// history, so wire-raw signaling and fold pausing must stand down.
+	const recentSurfaceShipAtOf = (sessionId) => {
+		try {
+			const blocks = store.ledgerOf(sessionId)?.blocks;
+			if (!Array.isArray(blocks)) return 0;
+			let newest = 0;
+			for (const block of blocks) {
+				const at = block?.surfaceReplaced?.at;
+				if (typeof at === "number" && at > newest) newest = at;
+			}
+			return newest;
+		} catch {
+			return 0;
+		}
+	};
+	const surfaceChannelAlive = (sessionId) => Date.now() - recentSurfaceShipAtOf(sessionId) < TRIM_VIEW_MAX_AGE_MS;
 	// Surface-replace pass (docs/surface-fold.md): ships committed fold blocks
 	// onto the session surface so folds reach the wire even for frozen
 	// dispatches. Registers its own agent/turn-stopping trigger; the idle
@@ -581,7 +601,7 @@ export function applyContextTrim(ctx, config) {
 		// (frozen options AND messages — the wire always ships raw history),
 		// so folding cannot relieve anything. Skip the cycle; the watermark's
 		// tally-driven force tier + auto-handover is the relief path.
-		if (recentTrimInjectOf(sessionId) === "none") {
+		if (recentTrimInjectOf(sessionId) === "none" && !surfaceChannelAlive(sessionId)) {
 			decisionLog(`session=${sessionId} via=${via} action=none reason=injection-unavailable view=${Math.round(capture.viewTokens)}`);
 			return;
 		}
@@ -643,7 +663,7 @@ export function applyContextTrim(ctx, config) {
 					const model = captureModelOf(sessionId);
 					const windowTokens = model === null ? null : cachedWindowOf(model);
 					const growthBaseline = ledger !== null && Number.isFinite(ledger.lastFoldLowTokens) && ledger.lastFoldLowTokens > 0 ? ledger.lastFoldLowTokens : ledger !== null && Number.isFinite(ledger.lastFoldViewTokens) && ledger.lastFoldViewTokens > 0 ? ledger.lastFoldViewTokens : null;
-					const wireRaw = recentTrimInjectOf(sessionId) === "none";
+					const wireRaw = recentTrimInjectOf(sessionId) === "none" && !surfaceChannelAlive(sessionId);
 					return renderTrimContextLine(label, {
 						enabled: enabledNow(),
 						mode: modeNow(),

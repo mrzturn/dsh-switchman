@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { applyContextTrim, recentTrimInjectOf } from "../../host/context-trim/index.js";
+import { refOf } from "../../host/context-trim/view.js";
 
 /** Mock session: append-only log + surface projection + host validation. */
 function mockSession(id) {
@@ -82,19 +83,20 @@ function mockSession(id) {
 function mockCtx({ llmFiber = null, withAgents = true } = {}) {
 	const hooks = {};
 	const registered = [];
+	const contexts = [];
 	const agentsById = new Map();
 	const ctx = {
 		log: { warn: () => {} },
 		agents: withAgents
 			? { currentInitiator: () => ({ session: { id: "" } }), get: (id) => agentsById.get(id) }
 			: { currentInitiator: () => ({ session: { id: "" } }) },
-		systemPrompt: { section: () => {}, context: () => {} },
+		systemPrompt: { section: () => {}, context: (c) => contexts.push(c) },
 		on: (event, handler) => { hooks[event] = handler; },
 		tools: { register: (tool) => registered.push(tool) },
 		get: () => null,
 		inject: (deps, body) => { if (deps.includes("llm") && llmFiber !== null) body(llmFiber); },
 	};
-	return { ctx, hooks, registered, agentsById };
+	return { ctx, hooks, registered, agentsById, contexts };
 }
 
 const config = {
@@ -343,4 +345,98 @@ test("crash window: lost surfaceReplaced marker never re-ships the range", async
 	assert.equal(session.rawEvents.length, afterShip, "no second replace append");
 	assert.equal(session.rawEvents.filter((event) => event.surfaceOp?.op === "replace").length, 1, "exactly one replace event ever");
 	assert.match(decisionsOf(stateDir), /session=surf-c surface-replace skipped reason=incomplete-seqs/u);
+});
+
+test("surface channel alive: a recent ship stands down the wire-raw fold pause and banner", async (t) => {
+	let listener = null;
+	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
+	const { ctx, hooks, agentsById, contexts } = mockCtx({ llmFiber: fiber });
+	const llm = { resolveModelInfo: async () => ({ context: { contextWindow: 100_000 } }), prepareCall: async () => ({ stream: async function* () { yield { type: "text-delta", text: "Relax summary." }; yield { type: "finish" }; } }) };
+	ctx.get = () => llm;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-surface-r-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	const session = seededSession("surf-r");
+	agentsById.set("surf-r", { session });
+	async function dispatch(messages) {
+		const stream = listener({ sessionId: "surf-r", messages, provider: "p", model: "m" }, async function* () { yield { type: "finish", usage: { input_tokens: 1 } }; });
+		for await (const chunk of stream) void chunk;
+	}
+
+	// Fold 1 commits on the first mutable dispatch, then ships (channel alive).
+	await dispatch(session.deriveMessages());
+	assert.equal(await poll(() => handle.store.ledgerOf("surf-r").blocks.length >= 1), true);
+	hooks["agent/turn-stopping"]({ agent: { session }, turn: 1, signal: undefined });
+	assert.equal(await poll(() => handle.store.ledgerOf("surf-r").blocks[0].surfaceReplaced !== undefined), true, "block 1 ships");
+
+	// Grow the history, then commit an UNSHIPPED block whose range still
+	// locates (store.commitFold directly — no sweep follows).
+	for (let i = 5; i <= 10; i++) {
+		session.append("user/message", { id: `u${i}`, role: "user", source: { kind: "user" }, content: [{ type: "text", text: `u${i} ` + "F".repeat(4_000) }] }, { surfaceOp: "append" });
+		session.append("assistant/message", { message: { id: `a${i}`, role: "assistant", source: { kind: "model" }, content: [{ type: "text", text: `a${i} ` + "F".repeat(4_000) }] } }, { surfaceOp: "append" });
+	}
+	const derived = session.deriveMessages();
+	const first = derived.find((message) => message.id === "u5");
+	const last = derived.find((message) => message.id === "a6");
+	assert.notEqual(first, undefined);
+	assert.notEqual(last, undefined);
+	const commit = handle.store.commitFold("surf-r", { refRange: { firstId: first.id, lastId: last.id }, count: 4, approxTokens: 9_000, summary: "Unshipped block.", kind: "summary", tier: "model" }, null);
+	assert.equal(commit.ok, true, "unshipped block commits");
+
+	// Frozen dispatch: the unshipped block locates (applied>0) but neither
+	// injection path works → inject "none", while the surface channel stays
+	// alive through block 1's recent ship.
+	const frozenStream = listener(Object.freeze({ sessionId: "surf-r", messages: Object.freeze(session.deriveMessages()), provider: "p", model: "m" }), async function* () { yield { type: "finish", usage: { input_tokens: 1 } }; });
+	for await (const chunk of frozenStream) void chunk;
+	assert.equal(recentTrimInjectOf("surf-r"), "none");
+
+	// Idle fold cycle: the injection-unavailable pause must NOT fire — the
+	// cycle runs its full evaluation (a third FOLD is cadence-gated to 60s
+	// between folds, so the decision ROW is the pass signal here).
+	hooks["agent/status"]({ status: "idle", agent: { session: { id: "surf-r" } } });
+	assert.equal(await poll(() => /session=surf-r via=idle action=/.test(decisionsOf(stateDir))), true, "idle cycle ran its evaluation");
+	const log = decisionsOf(stateDir);
+	assert.doesNotMatch(log, /session=surf-r [^\n]*injection-unavailable/u, "no injection-unavailable pause while the channel is alive");
+	assert.match(log, /session=surf-r via=idle action=/u, "the idle cycle ran");
+
+	// Banner: wireRaw only when the channel is dead — a fresh ship keeps the
+	// wire=raw marker OFF even though the last dispatch logged inject=none.
+	const line = contexts[0].text({ agent: { name: "Relax Agent", session: { id: "surf-r" } } });
+	assert.doesNotMatch(line, /wire=raw/u);
+});
+
+test("count-less legacy block: not-located hard skip, never a guessed range", async (t) => {
+	let listener = null;
+	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
+	const { ctx, hooks, agentsById } = mockCtx({ llmFiber: fiber });
+	ctx.get = () => null;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-surface-n-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	const session = seededSession("surf-n");
+	agentsById.set("surf-n", { session });
+	// Two IDENTICAL id-less messages: both derive one content-hash ref, so a
+	// last-occurrence GUESS would fold the pair [dup, dup] — the hardened
+	// count-anchored resolution must refuse instead.
+	const dup = { role: "user", source: { kind: "user" }, content: [{ type: "text", text: "duplicate payload" }] };
+	session.append("user/message", { ...dup }, { surfaceOp: "append" });
+	session.append("user/message", { ...dup }, { surfaceOp: "append" });
+	const nodesBefore = session.surface.nodes.length;
+	const dupRef = refOf(dup, 0);
+	const block = { id: "b-legacy", kind: "summary", tier: "model", refRange: { firstId: dupRef, lastId: dupRef }, count: 0, approxTokens: 10, summary: "Legacy count-less block." };
+	handle.store.ledgerOf("surf-n").blocks.push(block);
+
+	hooks["agent/turn-stopping"]({ agent: { session }, turn: 1, signal: undefined });
+	await poll(() => false, 40);
+	hooks["agent/turn-stopping"]({ agent: { session }, turn: 2, signal: undefined });
+	await poll(() => false, 20);
+
+	// Exactly one per-block row, a durable tombstone, and no shadowing.
+	const rows = decisionsOf(stateDir).split("\n").filter((line) => line.includes("session=surf-n") && line.includes("reason=not-located"));
+	assert.equal(rows.length, 1, "exactly one not-located row");
+	assert.match(rows[0], /block=b-legacy/u);
+	assert.equal(block.surfaceSkip?.reason, "not-located", "tombstone written");
+	assert.equal(block.surfaceReplaced, undefined, "never shipped");
+	assert.equal(session.rawEvents.filter((event) => event.surfaceOp?.op === "replace").length, 0, "no replace events");
+	assert.equal(session.surface.nodes.length, nodesBefore, "surface untouched — no guessed range shadowed");
 });

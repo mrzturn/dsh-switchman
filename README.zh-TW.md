@@ -131,11 +131,12 @@ bash <安裝目錄>/skills/db-query/scripts/setup.sh
 | `trimMaxFoldsPerHour` | `6` | 每滾動小時 side model 折疊的節奏上限（緊急級豁免）。 |
 | `trimSideModel` | 未設定 | 寫摘要的 side model 路由。留空 = 繼承對話目前模型。 |
 | `trimStateDir` | 未設定 | 折疊狀態目錄覆蓋。留空 = `<dshHome>/.dsh-switchman/state/trim/`。 |
+| `surfaceFold` | `true` | 把已提交的 fold 送上對話表面（shadow-price 計量事件 + `surfaceOp` replace 事件對）。關閉則維持僅拼接的 view。 |
 
 **觸發路徑。** 級別檢查在閒置邊界上執行；在閒置狀態事件不可達的宿主上，兜底改為在每次模型串流完成後也檢查一次（每個對話節流為每 60 秒至多評估一次）。每個決策——fold 與 no-op 皆然——都會作為一行 JSON 附加進裁剪狀態目錄（見 `trimStateDir`）下的 `decisions.log`，為 fold 留下離線稽核軌跡。
 
 
-**宿主壓縮紀元。** fold 引用錨定在訊息 id 與內容雜湊上，因此宿主自身的壓縮一旦替換了重發歷史，整本帳就會同時老化：所有塊都無法定位，view 靜默回退為原始歷史（fail-open——決策日誌會記錄 `view-applied applied=0`），外掛在下一次請求時把增長基線重錨到壓縮後的視圖。宿主壓縮因此是兜底的裁剪層，外掛 fold 負責單一宿主紀元內的細粒度工作。 部分派發的請求陣列或選項物件是宿主凍結的：對這些派發外掛 fail-open（決策日誌記 `injected=none`），真正產出模型回應的可變派發仍會收到摺疊視圖。
+**宿主壓縮紀元。** fold 引用錨定在訊息 id 與內容雜湊上，因此宿主自身的壓縮一旦替換了重發歷史，整本帳就會同時老化：所有塊都無法定位，view 靜默回退為原始歷史（fail-open——決策日誌會記錄 `view-applied applied=0`），外掛在下一次請求時把增長基線重錨到壓縮後的視圖。宿主壓縮因此是兜底的裁剪層，外掛 fold 負責單一宿主紀元內的細粒度工作。 部分派發改用完全凍結的請求陣列或選項物件（目前的 agent loop 會深凍結裝配好的請求）；對這類派發，`injectView` 會在決策日誌裡報告結果：`nothing-to-apply`（沒有定位到 fold 塊——原始歷史本身就是 view）、`in-place`/`swapped`（fold view 已隨請求送出）或 `none`（fold 存在但凍結的派發帶不動它——線上送出原始歷史）。**Surface replace 是可用時的發送路徑**（`surfaceFold`，預設開啟）：在序列的 `agent/turn-stopping` 邊界外加一次閒置清掃，外掛追加宿主風格的 shadow-price 計量事件與一條攜帶 `surfaceOp {op:'replace', startSeq, endSeq}` 的 `user/message` 替換事件，`sourceEventSeqs` 覆蓋被遮蔽的每個表面節點——與宿主自身壓縮用的是同一機制——已提交的 fold 由此從源頭直達線上，凍結派發也不例外。當某對話近期派發都記錄 `none` 時，外掛把 view 當作僅供計量：水位改用服務商上報的計數（force 檔與自動交接照常運作），fold 循環暫停、不再空燒 summarizer 呼叫，裁剪橫幅以 `wire=raw`（folds not shipping; watermark reads the tally）標記該行；沒有 surface 機制的宿主（或開關關閉時）保持的正是這套舊行為。
 **fold 如何保住快取命中。** 每次 fold 都要為前綴重付一次；目標是攤銷成本，不是滿分命中率。引擎守住快取契約：fold 只附加——frontier 只前進，凍結區永不再改；view 由（歷史, 折疊狀態）確定性重建，因此兩次 fold 之間序列化前綴位元組不變，服務商快取持續命中；fold 邊界絕不把 assistant 的 tool-call 與其 tool 結果拆開；最後 `trimProtectedTail` 則訊息豁免；一切皆 fail-open——內部出錯退化為透傳，絕不產生壞請求。
 
 **壓縮仲裁。** 兩個自動裁剪器搶同一份歷史會互相重複摘要、互相摧毀 frontier，因此 `cordis.patch.yml` 給宿主的 `dsh-compaction-basic` 行設了 `auto: false`：context-trim 成為唯一語義裁剪器。手動 `/compact` 照常可用，force 級交接（借用的正是這條手動路徑）不受影響。溢出恢復改由裁剪承擔：超視窗的那次嘗試失敗一次，隨後緊急級折好 view，下一次嘗試就能裝下。
