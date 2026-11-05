@@ -97,7 +97,7 @@ export function renderMaterial(messages, startIdx, endIdx, refOf) {
 		parts.push(head + body);
 		chars += head.length + body.length;
 	}
-	if (truncated) parts.push(`--- [...material truncated after ${chars} chars; ${endIdx - startIdx + 1 - (parts.length - 1)} messages dropped from this render...] ---\n`);
+	if (truncated) parts.push(`--- [...material truncated after ${chars} chars; ${endIdx - startIdx + 1 - parts.length} messages dropped from this render...] ---\n`);
 	return parts.join("");
 }
 

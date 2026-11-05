@@ -286,6 +286,37 @@ export function applyContextTrim(ctx, config) {
 	const lastStreamCheckAt = new Map(); // sessionId -> epoch ms of last stream-path fold check (throttle)
 	const epochResetDoneBySession = new Map(); // sessionId -> ledger-stale baseline reset already done for this host epoch (cleared when a fold applies again)
 
+	// Per-session fold-failure cooldown: a failing summarize/commit cycle
+	// advances NONE of the cadence gates (lastFoldAt / foldsThisHour only
+	// move on a successful commitFold), so without this the same failure
+	// re-fires at every idle boundary plus every >=60s stream check forever.
+	// In-memory only by design — a process restart re-arms the cycle open.
+	const foldFailureBySession = new Map(); // sessionId -> { count, lastAt }
+	const FOLD_FAILURE_BASE_MS = 60_000; // backoff ladder start (2^(n-1) growth)
+	const FOLD_FAILURE_MAX_MS = 900_000; // 15 min ceiling
+
+	/** Record one failed fold cycle (summary unavailable / commit rejected /
+	 * thrown): consecutive-attempt count + timestamp drive the backoff. */
+	function recordFoldFailure(sessionId) {
+		const prior = foldFailureBySession.get(sessionId);
+		foldFailureBySession.set(sessionId, { count: Math.min((prior?.count ?? 0) + 1, 16), lastAt: Date.now() });
+		if (foldFailureBySession.size > 200) foldFailureBySession.delete(foldFailureBySession.keys().next().value);
+	}
+
+	/** Remaining cooldown ms for one session (0 when not cooling): the delay
+	 * doubles per consecutive failure from 60s, capped at 15 min. */
+	function foldFailureCooldownOf(sessionId, now = Date.now()) {
+		const entry = foldFailureBySession.get(sessionId);
+		if (entry === undefined || entry.count <= 0) return 0;
+		const backoff = Math.min(FOLD_FAILURE_BASE_MS * 2 ** (entry.count - 1), FOLD_FAILURE_MAX_MS);
+		return Math.max(0, entry.lastAt + backoff - now);
+	}
+
+	/** A committed fold resets the failure ladder. */
+	function clearFoldFailure(sessionId) {
+		foldFailureBySession.delete(sessionId);
+	}
+
 	/** Append one fold-decision line to <stateDir>/decisions.log (fail-open,
 	 * best-effort observability — console warn stays reserved for outcomes). */
 	function decisionLog(entry) {
@@ -484,11 +515,19 @@ export function applyContextTrim(ctx, config) {
 		// session view clobbers the capture, the cross-layer registry that
 		// measureNow reads, and the growth baseline (observed 2026-11-04: a
 		// baseline reset to ~150 tokens mid-session). Fold-span dispatches are
-		// already covered by inFlight. A genuine host-compaction epoch ALSO
-		// shrinks history below the floor, so the guard must not stick: after
+		// already covered by inFlight. A tiny dispatch is a side candidate
+		// whenever the session ALREADY carries trim state — fold blocks, a
+		// capture, or a view registry entry — regardless of blocksCount,
+		// which is exactly 0 in the young zero-fold sessions an auxiliary
+		// dispatch most often hits. A session's very FIRST dispatch is
+		// indistinguishable from a real one and stays accepted: it cannot
+		// clobber state that does not exist yet, and the next real dispatch
+		// overwrites the capture. A genuine host-compaction epoch ALSO shrinks
+		// history below the floor, so the guard must not stick: after
 		// SIDE_DISPATCH_SKIP_BUDGET consecutive skips the dispatch is accepted
 		// as main, which re-arms capture/baseline on the compacted history.
-		const sideCandidate = inFlight.has(sessionId) || (blocksCount > 0 && view.applied === 0 && messages.length < SIDE_DISPATCH_MIN_MESSAGES);
+		const sideCandidate = inFlight.has(sessionId)
+			|| (view.applied === 0 && messages.length < SIDE_DISPATCH_MIN_MESSAGES && (blocksCount > 0 || captures.has(sessionId) || trimViewBySession.has(sessionId)));
 		const skipCount = sideDispatchSkipsBySession.get(sessionId) ?? 0;
 		if (sideCandidate && skipCount < SIDE_DISPATCH_SKIP_BUDGET) {
 			sideDispatchSkipsBySession.set(sessionId, skipCount + 1);
@@ -556,6 +595,13 @@ export function applyContextTrim(ctx, config) {
 		let summary = null;
 		let kind = "summary";
 		if (decision.action === "emergency") {
+			// Emergency cooldown timestamp set BEFORE the cycle: a commitFold
+			// rejection (e.g. duplicate-range) must cool the emergency tier
+			// down like a success, or a rejected emergency fold retries at
+			// every idle boundary forever. The 90s trigger gate semantics
+			// (EMERGENCY_COOLDOWN_MS) stay untouched.
+			lastEmergencyAtBySession.set(sessionId, Date.now());
+			if (lastEmergencyAtBySession.size > 200) lastEmergencyAtBySession.delete(lastEmergencyAtBySession.keys().next().value);
 			summary = mechanicalSummary(capture.messages, startIdx, endIdx, refOf);
 			kind = "mechanical";
 		} else {
@@ -583,8 +629,6 @@ export function applyContextTrim(ctx, config) {
 		const lowLedger = store.ledgerOf(sessionId);
 		const lowView = estimateTokensOf(buildView(capture.messages, lowLedger, { protectedTail: thresholdsNow().protectedTail }).messages);
 		store.recordFoldBaseline(sessionId, capture.viewTokens, lowView);
-		if (decision.action === "emergency") lastEmergencyAtBySession.set(sessionId, Date.now());
-		if (lastEmergencyAtBySession.size > 200) lastEmergencyAtBySession.delete(lastEmergencyAtBySession.keys().next().value);
 		return `folded:${decision.tier}:${count} msgs (~${approxTokens} tokens)`;
 	}
 
@@ -595,6 +639,11 @@ export function applyContextTrim(ctx, config) {
 		if (sessionId === null || sessionId === undefined || sessionId === "") return;
 		if (!enabledNow() || modeNow() !== "auto") return;
 		if (inFlight.has(sessionId)) return;
+		// Failure backoff: a session whose recent cycles failed stays quiet
+		// for 60s*2^(n-1) (cap 15 min) instead of re-firing at every idle
+		// boundary and stream check. Silent gate — the outcome row that armed
+		// the cooldown is already in decisions.log.
+		if (foldFailureCooldownOf(sessionId) > 0) return;
 		const capture = captures.get(sessionId);
 		if (capture === undefined) return;
 		// Injection-unavailable: the last dispatch could not carry the view
@@ -626,12 +675,18 @@ export function applyContextTrim(ctx, config) {
 			decisionLog(`session=${sessionId} via=${via} action=${decision.action} tier=${decision.tier ?? "-"} reason=${decision.reason || "-"} view=${Math.round(capture.viewTokens)} window=${windowTokens ?? "null"}`);
 			if (decision.action === "none") return;
 			const outcome = await runFoldCycle(sessionId, decision);
+			// Failure ladder: commit resets it; a summarize/commit failure
+			// climbs it (the no-backoff loop this closes — those outcomes
+			// advance no cadence gate on their own).
+			if (outcome.startsWith("folded:")) clearFoldFailure(sessionId);
+			else if (outcome === "summary-unavailable" || outcome.startsWith("commit-rejected:")) recordFoldFailure(sessionId);
 			// Outcome lands in the decision log too: warn() has no reachable
 			// sink on some hosts, and the commit/fail boundary is exactly what
 			// live diagnosis needs.
 			decisionLog(`session=${sessionId} outcome=${outcome} tier=${decision.tier}`);
 			warn(`[context-trim] ${sessionId}: ${outcome} (${decision.reason})`);
 		} catch (error) {
+			recordFoldFailure(sessionId); // a thrown cycle counts as failed too
 			warn(`[context-trim] fold cycle failed: ${error?.message ?? error}`);
 		} finally {
 			inFlight.delete(sessionId);

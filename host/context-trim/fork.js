@@ -163,10 +163,12 @@ export function resolveInheritance(parentLedger, parentId, childId, childMessage
 			delete clone.surfaceSeqs;
 			delete clone.surfaceReplaced;
 			delete clone.surfaceSkip;
+			delete clone.surfaceHeadClamped;
 			return clone;
 		}),
 		frontier,
 		lastFoldViewTokens: Number.isFinite(parentLedger.lastFoldViewTokens) && parentLedger.lastFoldViewTokens > 0 ? Math.round(parentLedger.lastFoldViewTokens) : 0,
+		lastFoldLowTokens: Number.isFinite(parentLedger.lastFoldLowTokens) && parentLedger.lastFoldLowTokens > 0 ? Math.round(parentLedger.lastFoldLowTokens) : 0,
 		lastFoldAt: Number.isFinite(parentLedger.lastFoldAt) ? parentLedger.lastFoldAt : 0,
 		foldsThisHour: Array.isArray(parentLedger.foldsThisHour) ? parentLedger.foldsThisHour.filter((ts) => Number.isFinite(ts)) : [],
 		inheritedFrom: typeof parentId === "string" && parentId !== "" ? parentId : "unknown",

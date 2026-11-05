@@ -204,6 +204,7 @@ describe("resolveInheritance", () => {
 		ledger.blocks.push({ ...blockFor(messages, 8, 12, "B"), id: "b2", createdAt: 222 });
 		ledger.frontier = ledger.blocks[1].refRange.lastId;
 		ledger.lastFoldViewTokens = 9_000;
+		ledger.lastFoldLowTokens = 4_000;
 		ledger.lastFoldAt = 333;
 		ledger.foldsThisHour = [222, 333];
 		return { ledger, messages };
@@ -219,6 +220,7 @@ describe("resolveInheritance", () => {
 		assert.equal(ledger.sessionId, "child-1");
 		assert.equal(ledger.frontier, parent.frontier, "frontier carried verbatim");
 		assert.equal(ledger.lastFoldViewTokens, 9_000);
+		assert.equal(ledger.lastFoldLowTokens, 4_000, "growth-gate low anchor cloned too");
 		assert.equal(ledger.lastFoldAt, 333);
 		assert.deepEqual(ledger.foldsThisHour, [222, 333]);
 		assert.equal(ledger.inheritedFrom, "parent-1");

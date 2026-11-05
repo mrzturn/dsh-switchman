@@ -10,7 +10,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mock, test } from "node:test";
@@ -398,4 +398,94 @@ test("side-dispatch budget: a shrunken post-compaction history is re-accepted as
 	// immediately again.
 	await send(compacted.slice());
 	assert.equal(handle.captures.get("ep-1").messages.length, compacted.length);
+});
+
+test("failure backoff: a failing cycle cools down exponentially instead of re-firing forever", async (t) => {
+	mock.timers.enable({ now: Date.now() });
+	t.after(() => mock.timers.reset());
+	let listener = null;
+	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
+	let prepareBroken = true;
+	const llm = {
+		resolveModelInfo: async () => ({ context: { contextWindow: 100_000 } }),
+		prepareCall: async () => {
+			if (prepareBroken) throw new Error("model unavailable");
+			return { stream: async function* () { yield { type: "text-delta", text: "Recovered summary." }; yield { type: "finish" }; } };
+		},
+	};
+	const { ctx, hooks } = mockCtx({ llmFiber: fiber });
+	ctx.get = () => llm;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-backoff-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	const outcomes = () => readFileSync(join(stateDir, "decisions.log"), "utf8").split("\n").filter((line) => line.includes("outcome="));
+
+	// Grow past the pressure gate, then idle: one attempt, one failure row.
+	const store = [];
+	for (let i = 1; i <= 8; i++) {
+		store.push({ role: "user", content: [{ type: "text", text: `t${i}u ` + "F".repeat(12_000) }] });
+		store.push({ role: "assistant", content: [{ type: "text", text: `t${i}a ` + "F".repeat(12_000) }] });
+	}
+	const stream = listener({ sessionId: "back-1", messages: store.slice(), provider: "p", model: "m" }, async function* () { yield { type: "finish", usage: { input_tokens: 1 } }; });
+	for await (const chunk of stream) void chunk;
+	hooks["agent/status"]({ status: "idle", agent: { session: { id: "back-1" } } });
+	assert.equal(await poll(() => outcomes().some((line) => line.includes("outcome=summary-unavailable"))), true, "first failing attempt logged");
+
+	// Still cooling (60s backoff): repeated idles and the 60s stream check
+	// stay silent — the no-backoff loop this test pins used to re-fire here.
+	hooks["agent/status"]({ status: "idle", agent: { session: { id: "back-1" } } });
+	mock.timers.tick(30_000);
+	await poll(() => false, 40);
+	assert.equal(outcomes().length, 1, "no retry inside the first backoff window");
+	mock.timers.tick(31_000); // past 60s: attempt #2 climbs the ladder
+	const stream2 = listener({ sessionId: "back-1", messages: store.slice(), provider: "p", model: "m" }, async function* () { yield { type: "finish", usage: { input_tokens: 1 } }; });
+	for await (const chunk of stream2) void chunk;
+	hooks["agent/status"]({ status: "idle", agent: { session: { id: "back-1" } } });
+	assert.equal(await poll(() => outcomes().length === 2), true, "second attempt after the first backoff");
+	mock.timers.tick(61_000); // 120s backoff after two failures — 61s is NOT enough
+	hooks["agent/status"]({ status: "idle", agent: { session: { id: "back-1" } } });
+	await poll(() => false, 40);
+	assert.equal(outcomes().length, 2, "second backoff window (2x) holds");
+
+	// Recovery: past the 120s window with the model healthy, the cycle folds
+	// again — a committed fold resets the failure ladder, so the session
+	// paces by its normal cadence gates from here on.
+	prepareBroken = false;
+	mock.timers.tick(61_000);
+	hooks["agent/status"]({ status: "idle", agent: { session: { id: "back-1" } } });
+	assert.equal(await poll(() => outcomes().some((line) => line.includes("outcome=folded:"))), true, "recovered cycle folds after the backoff expires");
+});
+
+test("zero-fold side-dispatch hole: tiny auxiliary dispatches skip even with no blocks", async (t) => {
+	let listener = null;
+	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
+	const { ctx } = mockCtx({ llmFiber: fiber });
+	const llm = { resolveModelInfo: async () => ({ context: { contextWindow: 100_000 } }), prepareCall: async () => ({ stream: async function* () { yield { type: "text-delta", text: "S." }; yield { type: "finish" }; } }) };
+	ctx.get = () => llm;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-side0-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	async function send(messages) {
+		const stream = listener({ sessionId: "side0-1", messages, provider: "p", model: "m" }, async function* () { yield { type: "finish", usage: { input_tokens: 1 } }; });
+		for await (const chunk of stream) void chunk;
+	}
+	// A REAL small main dispatch: first dispatch of the session (no trim
+	// state yet) stays accepted — it cannot clobber what does not exist.
+	const main = [
+		{ role: "user", content: [{ type: "text", text: "hello " + "M".repeat(2_000) }] },
+		{ role: "assistant", content: [{ type: "text", text: "hi " + "M".repeat(2_000) }] },
+	];
+	await send(main.slice());
+	assert.equal(handle.captures.get("side0-1").messages.length, 2, "first dispatch of a zero-fold session is main");
+	// Auxiliary tiny dispatch inheriting the session id: with trim state now
+	// present it must skip even though blocksCount === 0.
+	const aux = [{ role: "user", content: [{ type: "text", text: "summarize this page" }] }, { role: "assistant", content: [{ type: "text", text: "page summary" }] }];
+	await send(aux.slice());
+	assert.equal(handle.captures.get("side0-1").messages.length, 2, "aux dispatch with zero blocks must not clobber the capture");
+	assert.match(readFileSync(join(stateDir, "decisions.log"), "utf8"), /session=side0-1 side-dispatch skipped/u, "aux dispatch logged as side-dispatch skip");
+	// Budget release valve intact: consecutive tiny dispatches exhaust the
+	// skip budget and the third is then accepted as main again (logged).
+	await send(aux.slice());
+	await send(aux.slice());
+	assert.match(readFileSync(join(stateDir, "decisions.log"), "utf8"), /side-dispatch budget exhausted/u, "third tiny dispatch accepted via the skip budget");
 });

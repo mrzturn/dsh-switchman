@@ -186,7 +186,8 @@ test("frozen dispatch: fold commits, turn-stopping appends the surface replace p
 	assert.deepEqual(metering.data.shadowedSeqs, block.surfaceSeqs);
 	assert.match(replacement.data.content[0].text, /\[SWITCHMAN:TRIM\] Surface fold summary\./u);
 	assert.equal(replacement.data.role, "user");
-	assert.equal(replacement.data.source.kind, "compact-checkpoint");
+	assert.equal(replacement.data.source.kind, "user", "plain user source (v4 validator rejects checkpoint sources without an open compaction)");
+	assert.equal(replacement.data.source.compactionId, undefined, "no compactionId claim");
 	// deriveMessages-equivalent view shrinks: summary replaces the folded range.
 	const derived = session.deriveMessages();
 	assert.equal(derived.length, 9 - block.count, "shadowed range left the projection");
@@ -441,7 +442,7 @@ test("count-less legacy block: not-located hard skip, never a guessed range", as
 	assert.equal(session.surface.nodes.length, nodesBefore, "surface untouched — no guessed range shadowed");
 });
 
-test("system head: a block over the first node is tombstoned, later blocks still ship", async (t) => {
+test("system head: clamped out of stored and live ranges; head-only blocks tombstone", async (t) => {
 	let listener = null;
 	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
 	const { ctx, hooks, agentsById } = mockCtx({ llmFiber: fiber });
@@ -459,29 +460,72 @@ test("system head: a block over the first node is tombstoned, later blocks still
 	}
 	agentsById.set("surf-sh", { session });
 	assert.equal(session.surface.nodes[0], 0, "node 0 is the system head");
-	// Block 1: stored capture over the system head (the historical first-fold
-	// shape). Block 2: a later range without a capture (live-location path).
+	// Block 1: LEGACY stored capture spanning the head (pre-clamp persisted
+	// shape — the ship-time clamp must strip the head). Block 2: a head-only
+	// range (nothing foldable remains). Block 3: a later range without a
+	// capture (live-location path, must locate past the head untouched).
 	const headBlock = { id: "b-head", kind: "summary", tier: "model", refRange: { firstId: "sys-0", lastId: "a1" }, count: 3, approxTokens: 1_000, summary: "Head block." };
 	headBlock.surfaceSeqs = session.surface.nodes.slice(0, 3);
+	const headOnlyBlock = { id: "b-headonly", kind: "summary", tier: "model", refRange: { firstId: "sys-0", lastId: "sys-0" }, count: 1, approxTokens: 500, summary: "Head-only block." };
+	headOnlyBlock.surfaceSeqs = [0];
 	const tailBlock = { id: "b-tail", kind: "summary", tier: "model", refRange: { firstId: "u2", lastId: "a2" }, count: 2, approxTokens: 1_000, summary: "Tail block." };
-	handle.store.ledgerOf("surf-sh").blocks.push(headBlock, tailBlock);
+	handle.store.ledgerOf("surf-sh").blocks.push(headBlock, headOnlyBlock, tailBlock);
 
 	hooks["agent/turn-stopping"]({ agent: { session }, turn: 1, signal: undefined });
-	assert.equal(await poll(() => tailBlock.surfaceReplaced !== undefined), true, "the later-range block still ships");
-	assert.equal(headBlock.surfaceReplaced, undefined, "the system-head block never ships");
-	assert.equal(headBlock.surfaceSkip?.reason, "system-head", "tombstone persisted");
+	assert.equal(await poll(() => headBlock.surfaceReplaced !== undefined && tailBlock.surfaceReplaced !== undefined), true, "the clamped head block and the tail block ship");
+	assert.equal(headBlock.surfaceSkip, undefined, "a head-spanning block clamps instead of tombstoning");
+	assert.equal(headBlock.surfaceReplaced.startSeq, 1, "the shipped range starts AFTER the head seq");
+	assert.equal(headBlock.surfaceReplaced.endSeq, 2, "the shipped range keeps the foldable tail of the capture");
+	assert.equal(headOnlyBlock.surfaceReplaced, undefined, "a head-only block never ships");
+	assert.equal(headOnlyBlock.surfaceSkip?.reason, "system-head", "head-only tombstone persisted");
 	const replaces = session.rawEvents.filter((event) => event.surfaceOp?.op === "replace");
-	assert.equal(replaces.length, 1, "exactly one replace event appended");
-	assert.notEqual(replaces[0].surfaceOp.startSeq, 0, "the shipped range never covers node 0");
+	assert.equal(replaces.length, 2, "exactly two replace pairs appended");
+	for (const event of replaces) {
+		assert.notEqual(event.surfaceOp.startSeq, 0, "no shipped range covers node 0");
+		assert.equal(event.surfaceOp.startSeq === 0 || event.sourceEventSeqs.includes(0), false, "no shadowed seqs include the system head");
+	}
 	const log = decisionsOf(stateDir);
-	assert.match(log, /session=surf-sh surface-replace skipped reason=system-head .*block=b-head/u);
-	assert.match(log, /session=surf-sh surface-replace startSeq=\d+ endSeq=\d+/u, "the ship row is logged");
+	assert.match(log, /session=surf-sh surface-replace skipped reason=system-head .*block=b-headonly/u);
+	assert.match(log, /session=surf-sh surface-replace startSeq=\d+ endSeq=\d+/u, "the ship rows are logged");
 
-	// Second sweep after the content generation moved: the tombstone re-opens
-	// but the per-block row stays deduped to one, and nothing new appends.
+	// Second sweep after the content generation moved: the head-only
+	// tombstone re-opens but the per-block row stays deduped to one, and
+	// nothing new appends.
 	hooks["agent/turn-stopping"]({ agent: { session }, turn: 2, signal: undefined });
 	await poll(() => false, 20);
 	const headRows = decisionsOf(stateDir).split("\n").filter((line) => line.includes("reason=system-head"));
 	assert.equal(headRows.length, 1, "exactly one system-head row across sweeps");
-	assert.equal(session.rawEvents.filter((event) => event.surfaceOp?.op === "replace").length, 1, "still exactly one replace");
+	assert.equal(session.rawEvents.filter((event) => event.surfaceOp?.op === "replace").length, 2, "still exactly two replaces");
+});
+
+test("capture clamp: a fresh commit over the head stores a clamped capture, marker set", async (t) => {
+	let listener = null;
+	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
+	const { ctx, hooks, agentsById } = mockCtx({ llmFiber: fiber });
+	ctx.get = () => null;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-surface-cc-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	const session = mockSession("surf-cc");
+	session.append("system/message", { message: { id: "sys-0", role: "system", source: { kind: "system" }, content: [{ type: "text", text: "system prompt " + "S".repeat(2_000) }] } }, { surfaceOp: "append" });
+	for (let i = 1; i <= 2; i++) {
+		session.append("user/message", { id: `u${i}`, role: "user", source: { kind: "user" }, content: [{ type: "text", text: `u${i} ` + "F".repeat(4_000) }] }, { surfaceOp: "append" });
+		session.append("assistant/message", { message: { id: `a${i}`, role: "assistant", source: { kind: "model" }, content: [{ type: "text", text: `a${i} ` + "F".repeat(4_000) }] } }, { surfaceOp: "append" });
+	}
+	agentsById.set("surf-cc", { session });
+	const commit = handle.store.commitFold("surf-cc", { refRange: { firstId: "sys-0", lastId: "a1" }, count: 3, approxTokens: 900, summary: "Wide head block.", kind: "summary", tier: "model" }, null);
+	assert.equal(commit.ok, true);
+	assert.equal(handle.surfacePass.captureFoldSeqs("surf-cc", commit.block), true, "capture resolves");
+	assert.equal(commit.block.surfaceHeadClamped, true, "clamp marker recorded");
+	assert.deepEqual(commit.block.surfaceSeqs, [1, 2], "the stored capture never contains the head seq 0");
+
+	// The clamped capture ships from the stored path (identity check skips
+	// the deliberately dropped first endpoint).
+	hooks["agent/turn-stopping"]({ agent: { session }, turn: 1, signal: undefined });
+	assert.equal(await poll(() => commit.block.surfaceReplaced !== undefined), true, "clamped capture ships");
+	assert.equal(commit.block.surfaceReplaced.startSeq, 1, "shipped range starts after the head");
+	const replace = session.rawEvents.find((event) => event.surfaceOp?.op === "replace");
+	assert.equal(replace.surfaceOp.startSeq, 1);
+	assert.equal(replace.surfaceOp.endSeq, 2);
+	assert.deepEqual(replace.sourceEventSeqs, [1, 2]);
 });

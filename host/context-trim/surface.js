@@ -36,9 +36,15 @@
  *   compaction-tool-result-pruner/src/index.ts:159-172). 'compaction/prune'
  *   is a core-known log-only type (core/session/src/known-event-types.ts:33)
  *   whose data shape carries shadowedRange/shadowedSeqs/shadowedTokenCount.
- * - The replacement message's source kind clones the host compaction
- *   checkpoint marker {kind:'compact-checkpoint'} (compaction/src/checkpoint.ts)
- *   so downstream consumers recognize it as a compression artifact.
+ * - The replacement message's source stays a plain {kind:'user'}. It used
+ *   to clone the host compaction checkpoint marker {kind:'compact-checkpoint'}
+ *   (compaction/src/checkpoint.ts), but the installed v4 session validator
+ *   (session-format-v3-to-v4/src/relationships.ts) requires that kind to ride
+ *   an open compaction/start..end pair and rejects the event otherwise
+ *   ("compaction checkpoint has no matching compaction/start"). Downstream
+ *   recognition of the summary row rides its acp_summary_ id prefix and its
+ *   [SWITCHMAN:TRIM] content prefix (view.js summaryMessageOf), never the
+ *   source kind.
  * - Never append while a durable compaction/start..compaction/end lock pair
  *   is open for the session (design constraint).
  *
@@ -78,12 +84,15 @@ function sessionIdOfAgent(agent) {
 
 /** The replacement message event body: the block's rendered summary text in
  * a user message whose id carries the acp_summary_ prefix (downstream
- * tooling skips it) and whose source clones the compaction checkpoint
- * marker. Deterministic — no timestamps (replay determinism constraint). */
+ * tooling skips it) and a PLAIN {kind:'user'} source — a compact-checkpoint
+ * source on a non-append surfaceOp is rejected by the v4 session validator
+ * unless an open compaction/start..end pair covers it. The summary row stays
+ * findable via its acp_summary_ id and [SWITCHMAN:TRIM] content prefix.
+ * Deterministic — no timestamps (replay determinism constraint). */
 function replacementMessageOf(block) {
 	return {
 		...summaryMessageOf(block),
-		source: { kind: "compact-checkpoint", compactionId: `switchman-trim:${block.id}` },
+		source: { kind: "user" },
 	};
 }
 
@@ -227,11 +236,17 @@ function validateStoredSeqs(session, nodes, stored, block) {
 	for (let i = 0; i < span.length; i++) if (span[i] !== stored[i]) return null;
 	// Endpoint identity re-check (see header): the anchored refs must still
 	// resolve at the stored endpoint seqs; any mismatch routes the block to
-	// the incomplete-seqs hard skip — never a silent re-target.
+	// the incomplete-seqs hard skip — never a silent re-target. A
+	// capture-clamped block (surfaceHeadClamped) deliberately dropped its
+	// first endpoint (the system head seq), so only the last endpoint stays
+	// identity-checked; the dense span check covers the clamped start.
 	const firstId = block?.refRange?.firstId;
 	const lastId = block?.refRange?.lastId;
 	if (typeof firstId === "string" && typeof lastId === "string") {
-		for (const [seq, id] of [[stored[0], firstId], [stored[stored.length - 1], lastId]]) {
+		const endpoints = block?.surfaceHeadClamped === true
+			? [[stored[stored.length - 1], lastId]]
+			: [[stored[0], firstId], [stored[stored.length - 1], lastId]];
+		for (const [seq, id] of endpoints) {
 			let event = undefined;
 			try {
 				event = typeof session?.eventAt === "function" ? session.eventAt(seq) : undefined;
@@ -286,6 +301,23 @@ export function createSurfaceFoldPass(deps = {}) {
 		}
 	}
 
+	/** True when the surface's leading node derives the frozen system prompt
+	 * (the host's protected head: the v4 validator rejects any prune whose
+	 * shadowedSeqs contain it — "compaction cannot shadow the protected
+	 * system head"). Fail-open false when the head is unreadable or not a
+	 * system message: sessions without a leading system message fold their
+	 * head node like any other. */
+	function headNodeIsSystem(session, nodes) {
+		if (!Array.isArray(nodes) || nodes.length === 0) return false;
+		try {
+			const event = typeof session?.eventAt === "function" ? session.eventAt(nodes[0]) : undefined;
+			const message = event === undefined ? null : messageOfEvent(session, event);
+			return message !== null && message !== undefined && message.role === "system";
+		} catch {
+			return false;
+		}
+	}
+
 	/** In-memory idempotence belt over the durable block marker: the same
 	 * (session, range, contentGeneration) is never replaced twice even if a
 	 * crash lost the ledger persist. Bounded like the other registries. */
@@ -313,7 +345,19 @@ export function createSurfaceFoldPass(deps = {}) {
 			const nodes = session.surface.nodes.slice();
 			const located = locateOnSurface(derivingPairsOf(session, nodes), block);
 			if (located === null) return false;
-			block.surfaceSeqs = nodes.slice(located[0], located[1] + 1);
+			let startIdx = located[0];
+			const endIdx = located[1];
+			// Head clamp at CAPTURE time: the stored range must never include
+			// the leading system message, so a block captured here stays clean
+			// even when it ships from a later process. surfaceHeadClamped tells
+			// validateStoredSeqs that stored[0] is deliberately no longer the
+			// block's firstId endpoint (the head seq was dropped).
+			if (headNodeIsSystem(session, nodes) && startIdx === 0) {
+				if (endIdx < 1) return false; // head-only range: nothing shippable
+				startIdx = 1;
+				block.surfaceHeadClamped = true;
+			}
+			block.surfaceSeqs = nodes.slice(startIdx, endIdx + 1);
 			try {
 				store.persist(store.ledgerOf(sessionId));
 			} catch {
@@ -394,16 +438,7 @@ export function createSurfaceFoldPass(deps = {}) {
 		// carries the system prompt (assertSystemHeadRewrite). Resolve that
 		// head role once per sweep — sessions without a leading system
 		// message fold their head node like any other.
-		const headIsSystem = (() => {
-			if (nodes.length === 0) return false;
-			try {
-				const event = typeof session?.eventAt === "function" ? session.eventAt(nodes[0]) : undefined;
-				const message = event === undefined ? null : messageOfEvent(session, event);
-				return message !== null && message !== undefined && message.role === "system";
-			} catch {
-				return false;
-			}
-		})();
+		const headIsSystem = headNodeIsSystem(session, nodes);
 		let shipped = 0;
 		for (const block of pending) {
 			// Resolve the shadow range: stored capture first (validated dense
@@ -430,21 +465,30 @@ export function createSurfaceFoldPass(deps = {}) {
 				endSeq = nodes[located[1]];
 				seqs = nodes.slice(located[0], located[1] + 1);
 			}
-			// System head: when the first surface node carries the system
-			// prompt, the host rejects any replace op covering it outright
+			// System head clamp (ship time, BOTH resolution paths): when the
+			// first surface node carries the system prompt, the v4 validator
+			// rejects any prune whose shadowedSeqs contain it
 			// (assertSystemHeadRewrite — node 0 may be rewritten only by a
-			// system/message over exactly that node). Tombstone like an append
-			// rejection instead of shipping an op that can never land; a
-			// surface content change re-opens the attempt via the generation.
+			// system/message over exactly that node). Drop the head seq so the
+			// rest of the range still ships; this re-runs over the LIVE surface
+			// at every ship, so it also guards stored captures persisted by an
+			// earlier process (legacy ranges that predate the capture clamp).
+			// A range that is ONLY the head has nothing left: tombstone like an
+			// append rejection instead of shipping an op that can never land;
+			// a surface content change re-opens the attempt via the generation.
 			if (headIsSystem && startSeq === nodes[0]) {
-				block.surfaceSkip = { reason: "system-head", contentGeneration: liveGeneration, at: Date.now() };
-				try {
-					store.persist(ledger);
-				} catch {
-					/* best effort */
+				if (endSeq === nodes[0]) {
+					block.surfaceSkip = { reason: "system-head", contentGeneration: liveGeneration, at: Date.now() };
+					try {
+						store.persist(ledger);
+					} catch {
+						/* best effort */
+					}
+					skip(sessionId, "system-head", via, `block=${block.id}`);
+					continue;
 				}
-				skip(sessionId, "system-head", via, `block=${block.id}`);
-				continue;
+				startSeq = nodes[1];
+				seqs = seqs.slice(1);
 			}
 			const key = replacedKey(sessionId, startSeq, endSeq, liveGeneration);
 			if (wasReplaced(key)) continue; // belt over the durable marker
@@ -456,6 +500,21 @@ export function createSurfaceFoldPass(deps = {}) {
 				// pairs it with the replacement that never follows, pricing
 				// nothing. Everything is pre-validated above, so this is a
 				// host-drift backstop only.
+				//
+				// CRASH WINDOW (documented, deliberately not restructured): the
+				// compaction/prune below is DURABLE the moment append() returns,
+				// while surfaceReplaced only persists at the end of this try —
+				// a process death in between leaves the pair half-written and
+				// the block still pending. Recovery is safe without a reorder:
+				// (1) an orphan compaction/prune pairs with no replacement and
+				// prices nothing (above); (2) if the replacement DID land before
+				// the crash, the shadowed seqs have left surface.nodes, so the
+				// stored capture fails validateStoredSeqs' dense check on the
+				// next sweep and the block hard-skips to the incomplete-seqs
+				// tombstone instead of re-shipping over a moved surface; and
+				// (3) within one process the replacedKeys belt blocks an
+				// immediate replay. Worst case across a crash: one duplicated
+				// log-only prune row.
 				session.append("compaction/prune", {
 					shadowedRange: { start: startSeq, end: endSeq },
 					shadowedSeqs: seqs,
