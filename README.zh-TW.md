@@ -114,7 +114,7 @@ bash <安裝目錄>/skills/db-query/scripts/setup.sh
 
 - **`off`**——只測量：用量與快取命中取樣照常執行；無橫幅、無折疊。
 - **`advisory`**——對話模型自己折疊：向其暴露 `ctx_trim_fold` 與 `ctx_trim_status` 工具和協定頭。
-- **`auto`**（預設）——以上全部，外加閒置邊界上的自動折疊，分三級：增長閘門（自上次折疊後的低谷起算的增長 ≥ `trimGrowthTokens`——該錨點保證高位折疊後閘門依然有效——且連續可壓縮增量 ≥ `trimIncrementTokens`）、壓力級（上下文視窗的 `trimPressurePercent`）、緊急級（`trimEmergencyPercent`——帶獨立冷卻的機械折疊）。
+- **`auto`**（預設）——以上全部，外加閒置邊界上的自動折疊，分三級：增長閘門（自上次折疊後的低谷起算的增長 > `trimGrowthTokens`——該錨點保證高位折疊後閘門依然有效——且連續可壓縮增量 ≥ `trimIncrementTokens`）、壓力級（上下文視窗的 `trimPressurePercent`）、緊急級（`trimEmergencyPercent`——帶獨立冷卻的機械折疊）。
 
 所有鍵位於 設定 → dsh-switchman；預設值出自 `host/config.js`：
 
@@ -133,7 +133,7 @@ bash <安裝目錄>/skills/db-query/scripts/setup.sh
 | `trimStateDir` | 未設定 | 折疊狀態目錄覆蓋。留空 = `<dshHome>/.dsh-switchman/state/trim/`。 |
 | `surfaceFold` | `true` | 把已提交的 fold 送上對話表面（shadow-price 計量事件 + `surfaceOp` replace 事件對）。關閉則維持僅拼接的 view。 |
 
-**觸發路徑。** 級別檢查在閒置邊界上執行；在閒置狀態事件不可達的宿主上，兜底改為在每次模型串流完成後也檢查一次（每個對話節流為每 60 秒至多評估一次）。每個決策——fold 與 no-op 皆然——都會作為一行 JSON 附加進裁剪狀態目錄（見 `trimStateDir`）下的 `decisions.log`，為 fold 留下離線稽核軌跡。
+**觸發路徑。** 級別檢查在閒置邊界上執行；在閒置狀態事件不可達的宿主上，兜底改為在每次模型串流完成後也檢查一次（每個對話節流為每 60 秒至多評估一次）。每個決策——fold 與 no-op 皆然——都會作為一行帶時間戳的 `key=value` 附加進裁剪狀態目錄（見 `trimStateDir`）下的 `decisions.log`，為 fold 留下離線稽核軌跡。
 
 
 **宿主壓縮紀元。** fold 引用錨定在訊息 id 與內容雜湊上，因此宿主自身的壓縮一旦替換了重發歷史，整本帳就會同時老化：所有塊都無法定位，view 靜默回退為原始歷史（fail-open——決策日誌會記錄 `view-applied applied=0`），外掛在下一次請求時把增長基線重錨到壓縮後的視圖。宿主壓縮因此是兜底的裁剪層，外掛 fold 負責單一宿主紀元內的細粒度工作。 部分派發改用完全凍結的請求陣列或選項物件（目前的 agent loop 會深凍結裝配好的請求）；對這類派發，`injectView` 會在決策日誌裡報告結果：`nothing-to-apply`（沒有定位到 fold 塊——原始歷史本身就是 view）、`in-place`/`swapped`（fold view 已隨請求送出）或 `none`（fold 存在但凍結的派發帶不動它——線上送出原始歷史）。**Surface replace 是可用時的發送路徑**（`surfaceFold`，預設開啟）：在序列的 `agent/turn-stopping` 邊界外加一次閒置清掃，外掛追加宿主風格的 shadow-price 計量事件與一條攜帶 `surfaceOp {op:'replace', startSeq, endSeq}` 的 `user/message` 替換事件，`sourceEventSeqs` 覆蓋被遮蔽的每個表面節點——與宿主自身壓縮用的是同一機制——已提交的 fold 由此從源頭直達線上，凍結派發也不例外。當某對話近期派發都記錄 `none` 時，外掛把 view 當作僅供計量：水位改用服務商上報的計數（force 檔與自動交接照常運作），fold 循環暫停、不再空燒 summarizer 呼叫，裁剪橫幅以 `wire=raw`（folds not shipping; watermark reads the tally）標記該行；沒有 surface 機制的宿主（或開關關閉時）保持的正是這套舊行為。
@@ -156,7 +156,7 @@ bash <安裝目錄>/skills/db-query/scripts/setup.sh
 
 - DSH 升級後若出廠預設外掛清單有變，從新的 `presets/*.patch.yml` 重新同步 `cordis.patch.yml`（保留 doctrine suffix 與壓縮仲裁——`compaction-basic` 行上的 `auto: false`），然後重裝。
 - 協定行（`[SWITCHMAN:LANG|POOLS|WATERMARK|TEAMS]`）刻意保持英文且位元組穩定——不要在地化。
-- `npm pack --dry-run` 應保持稽核過的 50 個檔案 / ~205 kB 形態（`docs/` 截圖不進包）。
+- `npm pack --dry-run` 應保持稽核過的 60 個檔案 / ~380 kB 形態（解壓後 ~1.26 MB，`docs/` 不進包）。
 
 ## License
 

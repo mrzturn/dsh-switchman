@@ -1,4 +1,9 @@
-# Surface-replace smooth folding (v1.10.0 design)
+# Surface-replace smooth folding
+
+Status: the design below is v1.10.0; behavior changed in v1.10.1/v1.10.2. The
+post-1.10.1 fixes and the wire-truth semantics are documented at the end of this
+file; the operator-facing summary lives in
+[docs/context-trim.md](./context-trim.md).
 
 ## Goal
 
@@ -128,4 +133,23 @@ fold attempt, never a wrong range; a trigger redesign is tracked separately.
 Wire truth in the logs: `view-applied` rows carry `wire=<tokens>` when the
 provider tally is known, and pressure/emergency tiers run on
 `max(view, wire)` — the view estimate omits the system/context sections, so a
-136k prompt once read as a 50k view and the tiers stayed silent.
+136k prompt once read as a 50k view and the tiers stayed silent. `wire` is the
+provider's full prompt size: uncached `inputTokens` + `cacheReadTokens` (plus
+`cacheWriteTokens` when the provider reports a separate write bucket)
+(`host/context-trim/metrics.js:50`).
+
+## Expected steady state
+
+With the fixes in place the loop settles into a sawtooth well below the window
+(measured, deepseek-flash, 150k window, defaults):
+
+| Point in the cycle | view | wire |
+| --- | --- | --- |
+| just after a ship | ≈ 20.8k | ≈ 39–42k |
+| foldable span reaches 50k | ≈ 70.8k | ≈ 88k |
+| pressure tier (60% of 150k) | ≈ 72.7k | ≈ 90k |
+
+`wire − view` stays at the fixed overhead O ≈ 17.3k. The floor creeps +0.5–2k
+per cycle (each summary absorbs the previous one, and the 6 protected tail
+messages stay raw), so the ceiling — pinned at 90k by the pressure tier — is
+what actually bounds the prompt, not the window.

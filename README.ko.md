@@ -114,7 +114,7 @@ bash <설치-디렉터리>/skills/db-query/scripts/setup.sh
 
 - **`off`** — 측정만: 사용량과 캐시 히트 샘플링은 계속 돌아간다; 배너 없음, fold 없음.
 - **`advisory`** — 세션 모델이 스스로 fold 한다: `ctx_trim_fold`와 `ctx_trim_status` 도구와 프로토콜 헤드를 노출.
-- **`auto`**(기본값) — 위의 모든 것에 더해 유휴 경계에서 자동 fold가 세 단계로 동작한다: 성장 게이트(지난 접기 후 저점부터 측정한 성장 ≥ `trimGrowthTokens` — 높은 지점에서 접은 후에도 게이트가 계속 작동하도록 유지하는 앵커 — + 연속 압축 가능 증분이 `trimIncrementTokens` 이상), 압력 단계(컨텍스트 창의 `trimPressurePercent`), 비상 단계(`trimEmergencyPercent` — 독립 쿨다운을 가진 기계 fold).
+- **`auto`**(기본값) — 위의 모든 것에 더해 유휴 경계에서 자동 fold가 세 단계로 동작한다: 성장 게이트(지난 접기 후 저점부터 측정한 성장 > `trimGrowthTokens` — 높은 지점에서 접은 후에도 게이트가 계속 작동하도록 유지하는 앵커 — + 연속 압축 가능 증분이 `trimIncrementTokens` 이상), 압력 단계(컨텍스트 창의 `trimPressurePercent`), 비상 단계(`trimEmergencyPercent` — 독립 쿨다운을 가진 기계 fold).
 
 모든 키는 설정 → dsh-switchman에 있고, 기본값은 `host/config.js` 기준이다:
 
@@ -133,7 +133,7 @@ bash <설치-디렉터리>/skills/db-query/scripts/setup.sh
 | `trimStateDir` | 미설정 | fold 상태 디렉터리 재정의. 비어 있으면 `<dshHome>/.dsh-switchman/state/trim/`. |
 | `surfaceFold` | `true` | 커밋된 fold를 세션 표면으로 발송(shadow-price 계량 이벤트 + `surfaceOp` replace 이벤트 쌍). OFF는 스플라이스 전용 view를 유지. |
 
-**트리거 경로.** 단계 검사는 유휴 경계에서 돌아가고, 유휴 상태 이벤트가 도달하지 않는 호스트를 위한 폴백으로 각 모델 스트림 완료 후에도 돌아간다(세션당 60초에 한 번 평가로 스로틀링). 모든 결정 — fold든 no-op든 마찬가지 — 는 fold 상태 디렉터리(`trimStateDir` 참조) 안의 `decisions.log`에 한 줄의 JSON으로 추가되어 fold에 오프라인 감사 추적을 제공한다.
+**트리거 경로.** 단계 검사는 유휴 경계에서 돌아가고, 유휴 상태 이벤트가 도달하지 않는 호스트를 위한 폴백으로 각 모델 스트림 완료 후에도 돌아간다(세션당 60초에 한 번 평가로 스로틀링). 모든 결정 — fold든 no-op든 마찬가지 — 는 fold 상태 디렉터리(`trimStateDir` 참조) 안의 `decisions.log`에 한 줄의 `key=value`(타임스탬프 포함)로 추가되어 fold에 오프라인 감사 추적을 제공한다.
 
 
 **호스트 압축 에포크.** fold 참조는 메시지 id와 내용 해시에 고정되므로, 호스트 자체의 압축이 재전송 기록을 대체하면 장부 전체가 한꺼번에 노후됩니다. 모든 블록이 위치를 찾지 못하고, view는 조용히 원본 기록으로 폴백하며(fail-open — 결정 로그에 `view-applied applied=0`가 기록됨), 플러그인은 다음 요청에서 성장 기준선을 압축 후 뷰에 다시 고정합니다. 호스트 압축이 최후의 트림 계층이고, 플러그인 fold는 하나의 호스트 에포크 안에서 세밀한 작업을 담당합니다. 일부 디스패치는 완전히 동결된 요청 배열이나 옵션 객체를 건네받습니다(현재 에이전트 루프는 조립된 요청을 딥프리즈합니다). 이런 디스패치에 대해 `injectView`는 결과를 결정 로그에 보고합니다: `nothing-to-apply`(위치를 찾은 fold 블록이 없음 — 원본 기록이 곧 view임), `in-place`/`swapped`(fold된 뷰를 실어 보냄), 또는 `none`(fold가 존재했지만 동결된 디스패치는 그것을 실을 수 없음 — 회선에는 원본 기록이 흐름). **Surface replace는 사용 가능할 때의 발송 경로입니다**(`surfaceFold`, 기본값 켬): 직렬 `agent/turn-stopping` 경계에 유휴 스윕을 더한 시점에, 플러그인은 호스트 방식의 shadow-price 계량 이벤트와 `surfaceOp {op:'replace', startSeq, endSeq}`를 실은 단 한 건의 `user/message` 치환 이벤트를 덧붙입니다. `sourceEventSeqs`는 가려진 표면 노드 전부를 커버합니다 — 호스트 자체 압축이 쓰는 바로 그 메커니즘이라, 커밋된 fold는 소스 계층에서 회선까지 도달하며 동결 디스패치도 예외가 아닙니다. 세션의 최근 디스패치가 `none`을 기록하는 동안, 플러그인은 view를 계측 전용으로 취급합니다: 수위는 대신 프로바이더가 보고한 집계를 재고(force 단계와 자동 인계는 계속 동작하며), fold 사이클은 요약기 호출을 태우지 않고 일시 중지하며, 트림 배너는 해당 줄에 `wire=raw`(folds not shipping; watermark reads the tally) 표식을 붙입니다. surface 메커니즘이 없는 호스트(또는 플래그가 꺼진 경우)는 정확히 이 구동 동작을 유지합니다.
@@ -156,7 +156,7 @@ bash <설치-디렉터리>/skills/db-query/scripts/setup.sh
 
 - DSH 업그레이드 후 출고 프리셋 플러그인 목록이 바뀌면 새 `presets/*.patch.yml`에서 `cordis.patch.yml`을 다시 동기화하고(doctrine suffix와 `compaction-basic` 행의 `auto: false` 압축 중재도 유지) 재설치한다.
 - 프로토콜 행(`[SWITCHMAN:LANG|POOLS|WATERMARK|TEAMS]`)은 의도적으로 영어 그대로 바이트 안정으로 둔다 — 현지화하지 않는다.
-- `npm pack --dry-run`은 감사된 50 파일 / ~205 kB 형태를 유지해야 한다(`docs/` 스크린샷은 패키지에 들어가지 않는다).
+- `npm pack --dry-run`은 감사된 60 파일 / ~380 kB 형태를 유지해야 한다(~1.26 MB 해제, `docs/`는 제외된다).
 
 ## License
 

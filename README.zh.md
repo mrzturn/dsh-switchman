@@ -114,7 +114,7 @@ bash <安装目录>/skills/db-query/scripts/setup.sh
 
 - **`off`**——只测量：用量与缓存命中采样照常运行；无横幅、无折叠。
 - **`advisory`**——会话模型自己折叠：向其暴露 `ctx_trim_fold` 与 `ctx_trim_status` 工具和协议头。
-- **`auto`**（默认）——以上全部，外加空闲边界上的自动折叠，分三档：增长闸门（自上次折叠后的低谷起算的增长 ≥ `trimGrowthTokens`——该锚点保证高位折叠后闸门依然有效——且连续可压缩增量 ≥ `trimIncrementTokens`）、压力档（上下文窗口的 `trimPressurePercent`）、紧急档（`trimEmergencyPercent`——带独立冷却的机械折叠）。
+- **`auto`**（默认）——以上全部，外加空闲边界上的自动折叠，分三档：增长闸门（自上次折叠后的低谷起算的增长 > `trimGrowthTokens`——该锚点保证高位折叠后闸门依然有效——且连续可压缩增量 ≥ `trimIncrementTokens`）、压力档（上下文窗口的 `trimPressurePercent`）、紧急档（`trimEmergencyPercent`——带独立冷却的机械折叠）。
 
 所有键位于 设置 → dsh-switchman；默认值出自 `host/config.js`：
 
@@ -133,10 +133,10 @@ bash <安装目录>/skills/db-query/scripts/setup.sh
 | `trimStateDir` | 未设置 | 折叠状态目录覆盖。留空 = `<dshHome>/.dsh-switchman/state/trim/`。 |
 | `surfaceFold` | `true` | 把已提交的 fold 送上会话表面（shadow-price 计量事件 + `surfaceOp` replace 事件对）。关闭则保持仅拼接的 view。 |
 
-**触发路径。** 档位检查在空闲边界上运行；在空闲状态事件不可达的宿主上，兜底改为在每次模型流式完成后也检查一次（每个会话节流为每 60 秒至多评估一次）。每个决策——fold 与 no-op 皆然——都会作为一行 JSON 追加进裁剪状态目录（见 `trimStateDir`）下的 `decisions.log`，为 fold 留下离线审计轨迹。
+**触发路径。** 档位检查在空闲边界上运行；在空闲状态事件不可达的宿主上，兜底改为在每次模型流式完成后也检查一次（每个会话节流为每 60 秒至多评估一次）。每个决策——fold 与 no-op 皆然——都以「ISO 时间戳 + `key=value` 字段」的形式追加一行到裁剪状态目录（见 `trimStateDir`）下的 `decisions.log`，为 fold 留下离线审计轨迹。
 
 
-**宿主压缩纪元。** fold 引用锚定在消息 id 与内容哈希上，因此宿主自身的压缩一旦替换了重发历史，整本账就会同时老化：所有块都无法定位，view 静默回退为原始历史（fail-open——决策日志会记录 `view-applied applied=0`），插件在下一次请求时把增长基线重锚到压缩后的视图。宿主压缩因此是兜底的裁剪层，插件 fold 负责单个宿主纪元内的细粒度工作。 部分派发改用完全冻结的请求数组或选项对象（当前的 agent loop 会深冻结装配好的请求）；对这类派发，`injectView` 会在决策日志里报告结果：`nothing-to-apply`（没有定位到 fold 块——原始历史本身就是 view）、`in-place`/`swapped`（fold view 已随请求发出）或 `none`（fold 存在但冻结的派发带不动它——线上发送原始历史）。**Surface replace 是可用时的发送路径**（`surfaceFold`，默认开启）：在串行的 `agent/turn-stopping` 边界外加一次空闲清扫，插件追加宿主风格的 shadow-price 计量事件和一条携带 `surfaceOp {op:'replace', startSeq, endSeq}` 的 `user/message` 替换事件，`sourceEventSeqs` 覆盖被遮蔽的每个表面节点——与宿主自身压缩用的是同一机制——已提交的 fold 由此从源头直达线上，冻结派发也不例外。当某会话近期派发都记录 `none` 时，插件把 view 当作仅供计量：水位改用服务商上报的计数（force 档与自动交接照常工作），fold 循环暂停、不再空烧 summarizer 调用，裁剪横幅以 `wire=raw`（folds not shipping; watermark reads the tally）标记该行；没有 surface 机制的宿主（或开关关闭时）保持的正是这套旧行为。
+**宿主压缩纪元。** fold 引用锚定在消息 id 与内容哈希上，因此宿主自身的压缩一旦替换了重发历史，整本账就会同时老化：所有块都无法定位，view 静默回退为原始历史（fail-open——决策日志会记录 `view-applied applied=0`），插件在下一次请求时把增长基线重锚到压缩后的视图。宿主压缩因此是兜底的裁剪层，插件 fold 负责单个宿主纪元内的细粒度工作。 部分派发改用完全冻结的请求数组或选项对象（当前的 agent loop 会深冻结装配好的请求）；对这类派发，`injectView` 会在决策日志里报告结果：`nothing-to-apply`（没有定位到 fold 块——原始历史本身就是 view）、`in-place`/`swapped`（fold view 已随请求发出）或 `none`（fold 存在但冻结的派发带不动它——线上发送原始历史）。**Surface replace 是可用时的发送路径**（`surfaceFold`，默认开启）：在串行的 `agent/turn-stopping` 边界外加一次空闲清扫，插件追加宿主风格的 shadow-price 计量事件和一条携带 `surfaceOp {op:'replace', startSeq, endSeq}` 的 `user/message` 替换事件，`sourceEventSeqs` 覆盖被遮蔽的每个表面节点——与宿主自身压缩用的是同一机制——已提交的 fold 由此从源头直达线上，冻结派发也不例外。当某会话近期派发都记录 `none` 时，view 仅用于计量：水位改用服务商上报的计数（force 档与自动交接照常工作）。折叠只在 surface 通道同样不可用时才暂停——由持久的可用性探测判定（会话在线且暴露 `append`/`surface.nodes`、没有打开的 compaction 锁），与「最近是否发过货」无关，因此重启不再把引擎冻住。只有当该会话从未成功发出过任何 surface 替换时，裁剪横幅才以 `wire=raw`（folds not shipping; watermark reads the tally）标记该行；没有 surface 机制的宿主（或开关关闭时）保持的正是这套旧行为。
 **fold 如何保住缓存命中。** 每次 fold 都要为前缀重付一次；目标是摊销成本，不是满分命中率。引擎守住缓存契约：fold 只追加——frontier 只前进，冻结区永不再改；view 由（历史, 折叠状态）确定性重建，因此两次 fold 之间序列化前缀字节不变，服务商缓存持续命中；fold 边界绝不把 assistant 的 tool-call 与其 tool 结果拆开；最后 `trimProtectedTail` 条消息豁免；一切皆 fail-open——内部出错退化为透传，绝不产生坏请求。
 
 **压缩仲裁。** 两个自动裁剪器抢同一份历史会互相重复摘要、互相摧毁 frontier，因此 `cordis.patch.yml` 给宿主的 `dsh-compaction-basic` 行设了 `auto: false`：context-trim 成为唯一语义裁剪器。手动 `/compact` 照常可用，force 档交接（借用的正是这条手动路径）不受影响。溢出恢复改由裁剪承担：超窗的那次尝试失败一次，随后紧急档折好 view，下一次尝试就能装下。
@@ -156,7 +156,7 @@ bash <安装目录>/skills/db-query/scripts/setup.sh
 
 - DSH 升级后若出厂预设插件列表有变，从新的 `presets/*.patch.yml` 重新同步 `cordis.patch.yml`（保留 doctrine suffix 与压缩仲裁——`compaction-basic` 行上的 `auto: false`），然后重装。
 - 协议行（`[SWITCHMAN:LANG|POOLS|WATERMARK|TEAMS]`）刻意保持英文且字节稳定——不要本地化。
-- `npm pack --dry-run` 应保持审计过的 50 文件 / ~205 kB 形态（`docs/` 截图不进包）。
+- `npm pack --dry-run` 应保持审计过的 60 文件 / ~380 kB 形态（解压后 ~1.26 MB，`docs/` 不进包）。
 - **零运行时依赖——硬性不变量。** 宿主侧包（`@deepseek-ai/schemastery`、cordis 等）只允许声明为 `peerDependencies`，由运行中的 DSH 用它自己的副本满足。普通 `dependencies` 会被物理安装进 profile 工作区（`<profile>/node_modules/…`），从而对同处 profile 的其他插件遮蔽宿主副本——1.7.0 把 schemastery 声明为普通依赖时，正是这个机制让 dshmarket 插件市场崩溃（一个进程里出现两份 schemastery，市场产生的 schema 与宿主不再同类）。`scripts/validate.mjs` 会在 `dependencies` 再次出现时直接失败；因此安装、升级、卸载 dsh-switchman 都不会再影响 dshmarket 或任何其他社区包在运行时解析到的模块。
 
 ## License

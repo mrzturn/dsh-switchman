@@ -114,7 +114,7 @@ bash <インストールディレクトリ>/skills/db-query/scripts/setup.sh
 
 - **`off`**——計測のみ：使用量とキャッシュヒットのサンプリングは動作；バナーなし、fold なし。
 - **`advisory`**——セッションモデルが自ら fold する：`ctx_trim_fold` と `ctx_trim_status` のツールとプロトコルヘッドを公開。
-- **`auto`**（既定）——advisory のすべてに加え、アイドル境界での自動 fold が3段階で動く：成長ゲート（前回の折り返し後の低点から測定した成長 ≥ `trimGrowthTokens`——高位で折り返してもゲートが有効であり続けるためのアンカー——かつ連続圧縮可能インクリメントが `trimIncrementTokens` 以上）、圧力段（コンテキストウィンドウの `trimPressurePercent`）、緊急段（`trimEmergencyPercent`——独自クールダウン付きの機械 fold）。
+- **`auto`**（既定）——advisory のすべてに加え、アイドル境界での自動 fold が3段階で動く：成長ゲート（前回の折り返し後の低点から測定した成長 > `trimGrowthTokens`——高位で折り返してもゲートが有効であり続けるためのアンカー——かつ連続圧縮可能インクリメントが `trimIncrementTokens` 以上）、圧力段（コンテキストウィンドウの `trimPressurePercent`）、緊急段（`trimEmergencyPercent`——独自クールダウン付きの機械 fold）。
 
 すべてのキーは「設定 → dsh-switchman」にあり、既定値は `host/config.js` 由来：
 
@@ -133,7 +133,7 @@ bash <インストールディレクトリ>/skills/db-query/scripts/setup.sh
 | `trimStateDir` | 未設定 | fold 状態ディレクトリの上書き。空欄 = `<dshHome>/.dsh-switchman/state/trim/`。 |
 | `surfaceFold` | `true` | コミット済みの fold をセッション表面へ出荷します（shadow-price 計量イベント + `surfaceOp` replace イベントのペア）。OFF はスプライスのみの view を維持。 |
 
-**トリガーパス。** 段階チェックはアイドル境界で走り、アイドル状態イベントが届かないホストへのフォールバックとして、各モデルストリーム完了後にも走る（セッションごとに 60 秒につき 1 回の評価へスロットル）。すべての決定——fold も no-op も同様に——は、fold 状態ディレクトリ（`trimStateDir` を参照）内の `decisions.log` へ 1 行の JSON として追記され、fold にオフラインの監査証跡を与える。
+**トリガーパス。** 段階チェックはアイドル境界で走り、アイドル状態イベントが届かないホストへのフォールバックとして、各モデルストリーム完了後にも走る（セッションごとに 60 秒につき 1 回の評価へスロットル）。すべての決定——fold も no-op も同様に——は、fold 状態ディレクトリ（`trimStateDir` を参照）内の `decisions.log` へ タイムスタンプ付きの 1 行の `key=value` として追記され、fold にオフラインの監査証跡を与える。
 
 
 **ホスト圧縮エポック。** fold の参照はメッセージ id と内容ハッシュにアンカーされるため、ホスト側の圧縮が再送履歴を置き換えると帳簿全体が一度に老化します。すべてのブロックが位置を特定できなくなり、view は元の履歴へ静かにフォールバックし（fail-open —— 決定ログには `view-applied applied=0` が記録されます）、プラグインは次のリクエストで成長ベースラインを圧縮後のビューに再アンカーします。ホスト圧縮は最後のバックストップとなるトリム層であり、プラグインの fold は単一ホストエポック内のきめ細かい作業を担います。 一部のディスパッチは、完全に凍結されたリクエスト配列やオプションオブジェクトを渡されます（現在のエージェントループは組み立て済みリクエストをディープフリーズします）。そのようなディスパッチについて、`injectView` は結果を決定ログに報告します：`nothing-to-apply`（位置特定できた fold ブロックがない——生履歴こそが view）、`in-place`/`swapped`（fold 済み view は出荷済み）、または `none`（fold は存在したが凍結されたディスパッチでは運べなかった——回線には生履歴が流れる）。**Surface replace は利用可能なときの出荷経路です**（`surfaceFold`、デフォルトで有効）：直列の `agent/turn-stopping` 境界にアイドルスイープを加えた時点で、プラグインはホスト式の shadow-price 計量イベントと、`surfaceOp {op:'replace', startSeq, endSeq}` を運ぶ 1 件の `user/message` 置換イベントを追記します。`sourceEventSeqs` は影となる表面ノードをすべてカバーします——ホスト自身の圧縮と同じ機構なので、コミット済みの fold はソース層から回線へ届き、凍結ディスパッチも例外ではありません。セッションの最近のディスパッチが `none` を記録している間、プラグインは view を計測専用と扱います：水位は代わりにプロバイダ報告の集計を測り（force 段階と自動引き継ぎは働き続け）、fold サイクルはサマライザ呼び出しを空焼きせず一時停止し、トリムバナーは当該行に `wire=raw`（folds not shipping; watermark reads the tally）の印を付けます。surface 機構を持たないホスト（またはフラグが off の場合）は、まさにこの従来動作を保ちます。
@@ -156,7 +156,7 @@ bash <インストールディレクトリ>/skills/db-query/scripts/setup.sh
 
 - DSH のアップグレードで出荷プリセットのプラグイン一覧が変わったら、新しい `presets/*.patch.yml` から `cordis.patch.yml` を再同期（doctrine suffix と、`compaction-basic` 行への `auto: false` によるコンパクション仲裁も保持）し、入れ直す。
 - プロトコル行（`[SWITCHMAN:LANG|POOLS|WATERMARK|TEAMS]`）は意図的に英語のままバイト安定——ローカライズしない。
-- `npm pack --dry-run` は監査済みの 50 ファイル / ~205 kB の形状を保つこと（`docs/` のスクリーンショットはパッケージに入らない）。
+- `npm pack --dry-run` は監査済みの 60 ファイル / ~380 kB の形状を保つこと（展開後 ~1.26 MB、`docs/` は含まれない）。
 
 ## License
 
