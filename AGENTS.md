@@ -21,6 +21,14 @@
 - 运行前提：`index.js` 的 inject 硬依赖 `pluginManager` / `sessionQuery`（desktop/web profile 组合都提供；无 profileContext 的 headless 组合缺 pluginManager，届时本 bundle 不 apply）。HMR 事务内 setImmediate 逃不出 AsyncLocalStorage——teams 编排被「nested」拒绝时会挂起重试标志，由下一次干净上下文的 GET 请求（config / vision-state）触发重试。
 - 质量规程见 `cordis.patch.yml` 规程第三节：改动 >20 行交 tester 验证；>300 行或核心/安全/数据一致性逻辑交独立 reviewer。
 
+## 会话日志修复（v4 生命周期校验）
+
+- 症状：DSH 重启后某些会话加载失败，报 `compaction checkpoint has no matching compaction/start` 或 `compaction cannot shadow the protected system head`。这是 1.10.2 之前的 surface fold 写出的历史记录：A）`user/message` 的 `source.kind="compact-checkpoint"` 没有配套的 `compaction/start`；B）`compaction/prune` 的 `shadowedSeqs` 包含受保护的 system head seq。1.10.2 的插件修复只保证**不再新写**，已写坏的日志需要离线修复。
+- 诊断：`node scripts/repair-session-log.mjs <session-dir|workspace-sessions-dir|log> --scan`。修复：把 `--scan` 换成 `--write`（默认 dry-run）。写盘前先落 `.bak-<ts>` 再原子替换；事件数与事件身份不变，只改一条 `source` 或 prune 的 `shadowedSeqs`/`shadowedRange`，改完用装机验证器复验通过才写。
+- **验证器必须用装机真实副本**：脚本会自动从 `~/.dsh/.dsh-switchman/*/worker.cjs` 找验证器，并把它 staging 到带同级 `package.json` 的临时目录。原因是该 worker 内部执行 `createRequire(__filename)("../package.json")`——把 worker 单独放在备份目录里跑会抛 `Cannot find module '../package.json'`，验证必然失败，脚本随之拒绝写入（这正是 2026-11-05 那次修复命令「看起来执行了但没生效」的原因）。
+- A 类修复 = 丢弃无支撑的关系声明（`source.kind` → `"user"`）；B 类修复 = 从 `shadowedSeqs` 摘掉 head seq 并前移 range 端点。两类都靠 0.2.1-rc.5 的 loader 谓词验证，勿凭空改动关系图（合成 `compaction/start` 之类会破坏事件序）。
+- 路径：会话日志在 `~/.dsh/sessions/<workspace-encoded>/<session-id>/session.v4.jsonl.zstd`；`session.lock` 是写租约残留，0 字节不代表锁死。
+
 ## 零运行时依赖不变量（dshmarket 冲突事故，2026-10）
 
 - **本包永远不得声明普通 `dependencies`。** 宿主平面包（`@deepseek-ai/schemastery`、cordis、dsh-*）一律 `peerDependencies`，运行时由 DSH 自带副本满足（app-boot 的 profile 解析：profile 内 importer 的本地 node_modules 命中优先于宿主解析表 → 普通依赖会被装进 `<profile>/node_modules/@deepseek-ai/` 并对**所有** profile 驻留包遮蔽宿主副本）。
