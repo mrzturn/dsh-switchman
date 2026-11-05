@@ -14,8 +14,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mock, test } from "node:test";
-import { applyContextTrim, recentTrimViewTokensOf } from "../../host/context-trim/index.js";
+import { applyContextTrim, recentTrimInjectOf, recentTrimViewTokensOf } from "../../host/context-trim/index.js";
 import { measureNow } from "../../host/context-watch.js";
+import { estimateTokensOf, refOf, refPositions } from "../../host/context-trim/view.js";
 
 /** Minimal host-ctx mock (same contract as context-trim.test.mjs). */
 function mockCtx({ llmFiber = null } = {}) {
@@ -176,19 +177,33 @@ test("meter duality: watermark prefers the fresh trim view over the stored tally
 	const { ctx } = mockCtx({ llmFiber: fiber });
 	const stateDir = mkdtempSync(join(tmpdir(), "trim-dual-"));
 	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
-	applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	// protectedTail 2 so the manual block (first 6 of 8 messages) applies —
+	// the bridge only matters once a fold actually reshapes the view.
+	const handle = applyContextTrim(ctx, { ...config, trimProtectedTail: 2, trimStateDir: stateDir });
 
 	const meterCtx = { tokenMeter: { measure: () => ({ totalTokens: 150_000 }) } };
 	// No trim view yet: the stored tally stands.
 	assert.equal(recentTrimViewTokensOf("dual-1"), null);
 	assert.equal(measureNow(meterCtx, { session: { id: "dual-1" } }), 150_000);
 
-	// One request refreshes the outbound-view estimate; the watermark now
-	// reads it instead of the stale stored measure (the 94.5k->4.5k case).
+	// One request refreshes the outbound-view estimate; with an applied fold
+	// block the watermark now reads the view instead of the stale stored
+	// measure (the 94.5k->4.5k case).
 	const messages = Array.from({ length: 8 }, (_, i) => ({ role: i % 2 === 0 ? "user" : "assistant", content: [{ type: "text", text: "V".repeat(2_000) }] }));
 	const stream = listener({ sessionId: "dual-1", messages, provider: "p", model: "m" }, async function* () {
 		yield { type: "finish", usage: { input_tokens: 900 } }; });
 	for await (const chunk of stream) void chunk;
+	const refs = messages.map((message, i) => refOf(message, i));
+	const commit = handle.store.commitFold(
+		"dual-1",
+		{ refRange: { firstId: refs[0], lastId: refs[5] }, count: 6, approxTokens: estimateTokensOf(messages, 0, 5), summary: "Dual anchor fold.", kind: "summary", tier: "model" },
+		refPositions(messages),
+	);
+	assert.equal(commit.ok, true, "manual anchor fold must commit");
+	const resend = messages.slice();
+	const stream2 = listener({ sessionId: "dual-1", messages: resend, provider: "p", model: "m" }, async function* () {
+		yield { type: "finish", usage: { input_tokens: 900 } }; });
+	for await (const chunk of stream2) void chunk;
 	const view = recentTrimViewTokensOf("dual-1");
 	assert.ok(Number.isFinite(view) && view > 0);
 	assert.ok(view < 150_000);
@@ -197,4 +212,190 @@ test("meter duality: watermark prefers the fresh trim view over the stored tally
 	// TTL honored: a stale entry falls back to the stored tally.
 	assert.equal(recentTrimViewTokensOf("dual-1", -1), null);
 	assert.equal(measureNow(meterCtx, { session: { id: "unknown-session" } }), 150_000);
+});
+
+test("side-dispatch guard: tiny inherited-id calls never clobber the meters", async (t) => {
+	let listener = null;
+	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
+	const { ctx } = mockCtx({ llmFiber: fiber });
+	const llm = {
+		resolveModelInfo: async () => ({ context: { contextWindow: 100_000 } }),
+		prepareCall: async () => ({ stream: async function* () {
+			yield { type: "text-delta", text: "Model fold summary." };
+			yield { type: "finish" };
+		} }),
+	};
+	ctx.get = () => llm;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-side-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	// protectedTail 2 so the manual block (first 6 of 8 messages) clears it.
+	const handle = applyContextTrim(ctx, { ...config, trimProtectedTail: 2, trimStateDir: stateDir });
+
+	// A small real history (8 messages — above the 6-message protected tail)
+	// plus a manually committed block, so the ledger HAS blocks that locate.
+	const store = [];
+	for (let i = 1; i <= 4; i++) {
+		store.push({ role: "user", content: [{ type: "text", text: `u${i} ` + "F".repeat(4_000) }] });
+		store.push({ role: "assistant", content: [{ type: "text", text: `a${i} ` + "F".repeat(4_000) }] });
+	}
+	async function send(messages) {
+		const stream = listener({ sessionId: "side-1", messages, provider: "p", model: "m" }, async function* () {
+			yield { type: "finish", usage: { input_tokens: 1 } };
+		});
+		for await (const chunk of stream) void chunk;
+	}
+	await send(store.slice());
+	// Drain the async stream-path fold so the ledger deterministically has a
+	// locating block (the guard below only fires when blocks exist).
+	assert.equal(await poll(() => handle.store.ledgerOf("side-1").blocks.length >= 1), true, "anchor fold must commit");
+
+	const mainView = recentTrimViewTokensOf("side-1");
+	const mainCaptureLen = handle.captures.get("side-1").messages.length;
+	const baselineBefore = handle.store.ledgerOf("side-1").lastFoldLowTokens;
+
+	// A web-search-shaped side call inherits the session id with a tiny
+	// array in which the ledger cannot locate. Without the guard this reset
+	// the growth baseline to ~150 tokens and clobbered the view registry
+	// that measureNow (the watermark / auto-handover gate) reads.
+	await send([
+		{ role: "user", content: [{ type: "text", text: "summarize this page" }] },
+		{ role: "assistant", content: [{ type: "text", text: "page summary" }] },
+	]);
+	assert.equal(recentTrimViewTokensOf("side-1"), mainView, "registry must keep the main view");
+	assert.equal(handle.captures.get("side-1").messages.length, mainCaptureLen, "capture must keep the main history");
+	assert.equal(handle.store.ledgerOf("side-1").lastFoldLowTokens, baselineBefore, "growth baseline must not reset");
+
+	// The next MAIN dispatch is accepted again and carries the fold view.
+	const resend = store.slice();
+	await send(resend);
+	assert.ok(resend.length < store.length, "main dispatch must carry the applied fold view");
+	assert.equal(handle.captures.get("side-1").messages.length, store.length, "capture refreshed from the main dispatch");
+});
+
+test("wire-truth gate: frozen dispatches switch the watermark to the tally and pause folds", async (t) => {
+	let listener = null;
+	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
+	const { ctx, hooks, contexts } = mockCtx({ llmFiber: fiber });
+	const llm = {
+		resolveModelInfo: async () => ({ context: { contextWindow: 100_000 } }),
+		prepareCall: async () => ({ stream: async function* () {
+			yield { type: "text-delta", text: "Model fold summary." };
+			yield { type: "finish" };
+		} }),
+	};
+	ctx.get = () => llm;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-wire-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimProtectedTail: 2, trimStateDir: stateDir });
+	const meterCtx = { tokenMeter: { measure: () => ({ totalTokens: 150_000 }) } };
+
+	const store = [];
+	function pushPair(i) {
+		store.push({ role: "user", content: [{ type: "text", text: `u${i} ` + "F".repeat(4_000) }] });
+		store.push({ role: "assistant", content: [{ type: "text", text: `a${i} ` + "F".repeat(4_000) }] });
+	}
+	async function send(options) {
+		const stream = listener(options, async function* () { yield { type: "finish", usage: { input_tokens: 1 } }; });
+		for await (const chunk of stream) void chunk;
+	}
+	const dispatch = (messages) => ({ sessionId: "wire-1", messages, provider: "p", model: "m" });
+
+	// Dispatch A (mutable, no blocks yet): the stream-path fold check fires
+	// the first auto fold. Drain until it commits.
+	for (let i = 1; i <= 4; i++) pushPair(i);
+	await send(dispatch(store.slice()));
+	assert.equal(await poll(() => handle.store.ledgerOf("wire-1").blocks.length >= 1), true, "first auto fold must commit");
+
+	// Dispatch B: the block applies ("in-place") — the bridge carries the view.
+	await send(dispatch(store.slice()));
+	assert.equal(recentTrimInjectOf("wire-1"), "in-place");
+	const view = recentTrimViewTokensOf("wire-1");
+	assert.ok(Number.isFinite(view) && view > 0);
+	assert.equal(measureNow(meterCtx, { session: { id: "wire-1" } }), view);
+
+	// Grow past the growth gate so an ungated idle fold WOULD commit.
+	for (let i = 5; i <= 7; i++) pushPair(i);
+	await send(dispatch(store.slice()));
+	assert.equal(recentTrimInjectOf("wire-1"), "in-place");
+
+	// The resumed-host shape: options AND the messages array frozen (the
+	// agent loop deep-freezes assembled requests). Both injection paths
+	// throw, nothing reaches the wire — the view becomes a meter-only
+	// phantom, so the bridge must fall back to the provider tally.
+	await send(Object.freeze({ sessionId: "wire-1", messages: Object.freeze(store.slice()), provider: "p", model: "m" }));
+	assert.equal(recentTrimInjectOf("wire-1"), "none");
+	assert.equal(recentTrimViewTokensOf("wire-1"), null, "bridge must fall back to the tally");
+	assert.equal(measureNow(meterCtx, { session: { id: "wire-1" } }), 150_000);
+
+	// The trim banner marks the meter-only state so the divergence is visible.
+	const line = contexts[0].text({ agent: { name: "Wire Agent", session: { id: "wire-1" } } });
+	assert.match(line, /wire=raw/u);
+
+	// Fold cycles pause while the wire cannot carry the view: committing a
+	// block would only phantom-shrink the meter while the request stays raw.
+	const blocksBefore = handle.store.ledgerOf("wire-1").blocks.length;
+	hooks["agent/status"]({ status: "idle", agent: { session: { id: "wire-1" } } });
+	await poll(() => false, 200);
+	assert.equal(handle.store.ledgerOf("wire-1").blocks.length, blocksBefore, "no fold while injection is unavailable");
+
+	// A mutable dispatch re-arms the fold machinery (inject flips back), but
+	// the watermark bridge stays on the tally until no "none" occurred within
+	// the TTL window — the sticky gate for mixed frozen/mutable sessions.
+	await send(dispatch(store.slice()));
+	assert.equal(recentTrimInjectOf("wire-1"), "in-place");
+	assert.equal(recentTrimViewTokensOf("wire-1"), null, "bridge stays on the tally right after a none");
+});
+
+test("side-dispatch budget: a shrunken post-compaction history is re-accepted as main", async (t) => {
+	let listener = null;
+	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
+	const { ctx } = mockCtx({ llmFiber: fiber });
+	const llm = {
+		resolveModelInfo: async () => ({ context: { contextWindow: 100_000 } }),
+		prepareCall: async () => ({ stream: async function* () {
+			yield { type: "text-delta", text: "Model fold summary." };
+			yield { type: "finish" };
+		} }),
+	};
+	ctx.get = () => llm;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-epoch-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimProtectedTail: 2, trimStateDir: stateDir });
+
+	const store = [];
+	for (let i = 1; i <= 4; i++) {
+		store.push({ role: "user", content: [{ type: "text", text: `u${i} ` + "F".repeat(4_000) }] });
+		store.push({ role: "assistant", content: [{ type: "text", text: `a${i} ` + "F".repeat(4_000) }] });
+	}
+	async function send(messages) {
+		const stream = listener({ sessionId: "ep-1", messages, provider: "p", model: "m" }, async function* () { yield { type: "finish", usage: { input_tokens: 1 } }; });
+		for await (const chunk of stream) void chunk;
+	}
+
+	// Establish a ledger block over the big history.
+	await send(store.slice());
+	assert.equal(await poll(() => handle.store.ledgerOf("ep-1").blocks.length >= 1), true, "anchor fold must commit");
+
+	// Simulate a host-compaction epoch: the re-send history is now a tiny
+	// fresh set whose content cannot locate the stale block. The guard skips
+	// it as a side dispatch at first…
+	const compacted = [
+		{ role: "user", content: [{ type: "text", text: "compaction summary " + "S".repeat(300) }] },
+		{ role: "assistant", content: [{ type: "text", text: "continuation " + "S".repeat(300) }] },
+	];
+	await send(compacted.slice());
+	assert.equal(handle.captures.get("ep-1").messages.length, store.length, "capture withheld on the first skip");
+	await send(compacted.slice());
+	assert.equal(handle.captures.get("ep-1").messages.length, store.length, "capture withheld on the second skip");
+	// …but the skip budget exhausts and the dispatch is accepted as main:
+	// the capture re-anchors on the compacted history and the epoch baseline
+	// resets (ledgerIsStale fires — every block failed to locate).
+	await send(compacted.slice());
+	assert.equal(handle.captures.get("ep-1").messages.length, compacted.length, "capture re-anchored after the skip budget");
+	const ledger = handle.store.ledgerOf("ep-1");
+	assert.ok(ledger.lastFoldLowTokens > 0 && ledger.lastFoldLowTokens < 1_000, "growth baseline re-anchored at the post-compaction view");
+	// The guard counter reset: further identical dispatches are accepted
+	// immediately again.
+	await send(compacted.slice());
+	assert.equal(handle.captures.get("ep-1").messages.length, compacted.length);
 });

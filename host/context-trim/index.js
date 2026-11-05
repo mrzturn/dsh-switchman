@@ -47,19 +47,64 @@ import { childSessionIdOf } from "../subagent-model.js";
 // stored tally while it is fresh, so the watermark tracks what the model
 // actually sees after billion-context folding instead of over-triggering
 // handovers off a stale stored measure.
-const trimViewBySession = new Map(); // sessionId -> { viewTokens, at }
+const trimViewBySession = new Map(); // sessionId -> { viewTokens, at, inject, lastNoneAt }
 const TRIM_VIEW_MAX_AGE_MS = 600_000; // 10 minutes
 
+/** Dispatches below this message count are never treated as the session's
+ *  main history (the side-dispatch guard in applyViewToOptions): auxiliary
+ *  llm calls (web-search summaries, title generation) inherit the session id
+ *  with 1-6 message arrays and would clobber every per-session meter. */
+const SIDE_DISPATCH_MIN_MESSAGES = 12;
+
+/** Consecutive side-dispatch skips tolerated before one is accepted as the
+ *  main history anyway — the release valve for a genuine host-compaction
+ *  epoch that shrank the history below SIDE_DISPATCH_MIN_MESSAGES (without
+ *  it the guard would stick: no capture refresh, no epoch reset, folds run
+ *  against a stale capture forever). */
+const SIDE_DISPATCH_SKIP_BUDGET = 2;
+
+/** Consecutive side-dispatch skips per session (bounded; reset on every
+ *  accepted main dispatch). */
+const sideDispatchSkipsBySession = new Map();
+
 /** Most recent outbound-view token estimate for a session, or null when
- * missing, non-positive, or older than maxAgeMs. Read by the watermark
- * layer (meter duality); itself fail-open. */
+ * missing, non-positive, older than maxAgeMs — or when the recent dispatch
+ * stream could not carry the view (injected "none": frozen options AND
+ * messages, so the model still receives the raw history and the provider
+ * tally is the only truthful meter). The gate is deliberately sticky: a
+ * single mutable dispatch right after frozen ones re-arms maybeFold, but
+ * the WATERMARK keeps falling back to the tally until no "none" occurred
+ * within the TTL window (mixed sessions exist — one real session logged 46
+ * none + 14 swapped). Read by the watermark layer (meter duality); itself
+ * fail-open. */
 export function recentTrimViewTokensOf(sessionId, maxAgeMs = TRIM_VIEW_MAX_AGE_MS) {
 	try {
 		if (typeof sessionId !== "string" || sessionId === "") return null;
 		const entry = trimViewBySession.get(sessionId);
 		if (entry === undefined) return null;
 		if (Date.now() - entry.at > maxAgeMs) return null;
+		// Wire-truth gate: a view that never reaches the wire must not drive
+		// the watermark (observed 2026-11-04: view ~80k vs a 176k wire while
+		// the force tier stayed silent and the auto-handover never fired).
+		if (entry.inject === "none") return null;
+		if (Number.isFinite(entry.lastNoneAt) && entry.lastNoneAt > 0 && Date.now() - entry.lastNoneAt < maxAgeMs) return null;
 		return Number.isFinite(entry.viewTokens) && entry.viewTokens > 0 ? entry.viewTokens : null;
+	} catch {
+		return null;
+	}
+}
+
+/** Injection outcome of the last dispatch for one session ("in-place" |
+ * "swapped" | "none"), or null when unknown or stale. Read by maybeFold:
+ * when the wire cannot carry the view, folding cannot relieve anything and
+ * only burns a summarizer call — the watermark's tally-driven auto-handover
+ * is the correct relief path instead. */
+export function recentTrimInjectOf(sessionId, maxAgeMs = TRIM_VIEW_MAX_AGE_MS) {
+	try {
+		if (typeof sessionId !== "string" || sessionId === "") return null;
+		const entry = trimViewBySession.get(sessionId);
+		if (entry === undefined || Date.now() - entry.at > maxAgeMs) return null;
+		return typeof entry.inject === "string" ? entry.inject : null;
 	} catch {
 		return null;
 	}
@@ -160,8 +205,11 @@ export function effectiveWindowTokens(resolved, cap) {
 }
 
 /** Live context line renderer (pure; exported for tests). Silent in "off"
- * mode and whenever nothing has been measured yet. */
-export function renderTrimContextLine(agent, { enabled, mode, viewTokens, windowTokens, folds, growthTokens, lastModel }) {
+ * mode and whenever nothing has been measured yet. wireRaw marks a session
+ * whose last dispatch could not carry the fold view (frozen request) — the
+ * displayed view is then meter-only and the watermark governs off the
+ * provider tally. */
+export function renderTrimContextLine(agent, { enabled, mode, viewTokens, windowTokens, folds, growthTokens, lastModel, wireRaw = false }) {
 	if (!enabled) return "";
 	if (mode === "off") return "";
 	if (agent === null || agent === undefined || agent === "") return "";
@@ -175,6 +223,7 @@ export function renderTrimContextLine(agent, { enabled, mode, viewTokens, window
 		if (Number.isFinite(windowTokens) && windowTokens > 0) usage = ` (${Math.round((viewTokens / windowTokens) * 100)}% of window ${kilo(windowTokens)})`;
 		else usage = " (window unknown — pressure tiers off)";
 		parts.push(`view ~${kilo(viewTokens)} tokens${usage}`);
+		if (wireRaw) parts.push("wire=raw (folds not shipping; watermark reads the tally)");
 	}
 	if (hasFolds) {
 		parts.push(`folds ${folds}`);
@@ -403,6 +452,26 @@ export function applyContextTrim(ctx, config) {
 		// locate inside THIS re-send (the host may compact/replace history, in
 		// which case applied=0 explains a stuck-high view without any failure).
 		decisionLog(`session=${sessionId} view-applied applied=${view.applied} foldedMsgs=${view.foldedMessages} view=${Math.round(viewTokens)} blocks=${blocksCount} injected=${injected}`);
+		// Side-dispatch guard: auxiliary llm calls that inherit the session id
+		// (web-search summaries, title generation, fold-span material) present
+		// tiny arrays in which the ledger cannot locate. Accepting them as the
+		// session view clobbers the capture, the cross-layer registry that
+		// measureNow reads, and the growth baseline (observed 2026-11-04: a
+		// baseline reset to ~150 tokens mid-session). Fold-span dispatches are
+		// already covered by inFlight. A genuine host-compaction epoch ALSO
+		// shrinks history below the floor, so the guard must not stick: after
+		// SIDE_DISPATCH_SKIP_BUDGET consecutive skips the dispatch is accepted
+		// as main, which re-arms capture/baseline on the compacted history.
+		const sideCandidate = inFlight.has(sessionId) || (blocksCount > 0 && view.applied === 0 && messages.length < SIDE_DISPATCH_MIN_MESSAGES);
+		const skipCount = sideDispatchSkipsBySession.get(sessionId) ?? 0;
+		if (sideCandidate && skipCount < SIDE_DISPATCH_SKIP_BUDGET) {
+			sideDispatchSkipsBySession.set(sessionId, skipCount + 1);
+			if (sideDispatchSkipsBySession.size > 200) sideDispatchSkipsBySession.delete(sideDispatchSkipsBySession.keys().next().value);
+			decisionLog(`session=${sessionId} side-dispatch skipped n=${skipCount + 1} msgs=${messages.length} view=${Math.round(viewTokens)} blocks=${blocksCount}`);
+			return { sessionId, viewTokens, sideDispatch: true };
+		}
+		if (sideCandidate) decisionLog(`session=${sessionId} side-dispatch budget exhausted — accepting as main msgs=${messages.length}`);
+		sideDispatchSkipsBySession.delete(sessionId);
 		// Host-compaction epoch boundary: every block failed to LOCATE inside
 		// this re-send, so the ledger aged out as a whole. Re-anchor the growth
 		// baseline at the true post-epoch view once per epoch — carrying the
@@ -424,7 +493,9 @@ export function applyContextTrim(ctx, config) {
 		const model = { provider: options.provider ?? null, model: options.model ?? null };
 		captureOf(sessionId, rawSnapshot, model, viewTokens);
 		metrics.noteView(sessionId, viewTokens, model);
-		trimViewBySession.set(sessionId, { viewTokens, at: Date.now() });
+		const priorEntry = trimViewBySession.get(sessionId);
+		const lastNoneAt = injected === "none" ? Date.now() : Number.isFinite(priorEntry?.lastNoneAt) ? priorEntry.lastNoneAt : 0;
+		trimViewBySession.set(sessionId, { viewTokens, at: Date.now(), inject: injected, lastNoneAt });
 		// keep the view registry bounded (200 sessions, same as captures)
 		if (trimViewBySession.size > 200) {
 			const oldest = trimViewBySession.keys().next().value;
@@ -496,6 +567,14 @@ export function applyContextTrim(ctx, config) {
 		if (inFlight.has(sessionId)) return;
 		const capture = captures.get(sessionId);
 		if (capture === undefined) return;
+		// Injection-unavailable: the last dispatch could not carry the view
+		// (frozen options AND messages — the wire always ships raw history),
+		// so folding cannot relieve anything. Skip the cycle; the watermark's
+		// tally-driven force tier + auto-handover is the relief path.
+		if (recentTrimInjectOf(sessionId) === "none") {
+			decisionLog(`session=${sessionId} via=${via} action=none reason=injection-unavailable view=${Math.round(capture.viewTokens)}`);
+			return;
+		}
 		inFlight.add(sessionId);
 		try {
 			const { protectedTail, ...thresholds } = thresholdsNow();
@@ -554,7 +633,8 @@ export function applyContextTrim(ctx, config) {
 					const model = captureModelOf(sessionId);
 					const windowTokens = model === null ? null : cachedWindowOf(model);
 					const growthBaseline = ledger !== null && Number.isFinite(ledger.lastFoldLowTokens) && ledger.lastFoldLowTokens > 0 ? ledger.lastFoldLowTokens : ledger !== null && Number.isFinite(ledger.lastFoldViewTokens) && ledger.lastFoldViewTokens > 0 ? ledger.lastFoldViewTokens : null;
-return renderTrimContextLine(label, {
+					const wireRaw = recentTrimInjectOf(sessionId) === "none";
+					return renderTrimContextLine(label, {
 						enabled: enabledNow(),
 						mode: modeNow(),
 						viewTokens: record?.viewTokens ?? null,
@@ -562,6 +642,7 @@ return renderTrimContextLine(label, {
 						folds: Array.isArray(ledger?.blocks) ? ledger.blocks.length : 0,
 						growthTokens: record?.viewTokens !== null && record !== undefined && growthBaseline !== null ? record.viewTokens - growthBaseline : null,
 						lastModel: record?.lastModel ?? null,
+						wireRaw,
 					});
 				} catch {
 					return "";

@@ -25,8 +25,38 @@
 
 import { createHash } from "node:crypto";
 
-/** Cheap char → token estimate (the brief's char/4 heuristic). */
+/** Cheap char → token estimate (the brief's char/4 heuristic). Applies to
+ *  ASCII/latin text; CJK text tokenizes far denser (see below). */
 export const TOKENS_PER_CHAR = 1 / 4;
+
+/** CJK/fullwidth chars cost roughly ONE token each in the glm/deepseek BPE
+ *  vocabularies (vs 0.25 for the char/4 ASCII heuristic). Pinned at 1.0:
+ *  slightly high for common hanzi bigrams, which errs toward earlier folds
+ *  (the safe direction). NOT the 2026-11-04 incident root cause (that session
+ *  was only 4.8% CJK — the real bug was frozen-dispatch view injection); this
+ *  is a general accuracy fix for CJK-heavy sessions. */
+export const TOKENS_PER_CJK_CHAR = 1;
+
+/** CJK-ish ranges: kana, Hangul jamo+syllables, CJK radicals/blocks and
+ *  unified ideographs (incl. Ext-A), compat ideographs, vertical forms,
+ *  fullwidth forms, and the supplementary-plane CJK extensions (Ext-B..F,
+ *  /u flag — astral chars otherwise count as two ascii units). Halfwidth
+ *  katakana (\uFF61-\uFF9F) rides in the fullwidth range at the CJK weight:
+ *  slightly high, the safe direction for fold scheduling. */
+const CJK_CHAR_RE = /[\u1100-\u11FF\u2E80-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFFEF\u{20000}-\u{2FA1F}]/gu;
+
+/** Split one text into (asciiChars, cjkChars) in one pass over the string.
+ *  The replace allocates a second string — same order of cost as the
+ *  JSON.stringify this sits next to. */
+function countChars(text) {
+	let plain;
+	try {
+		plain = text.replace(CJK_CHAR_RE, "");
+	} catch {
+		return { ascii: text.length, cjk: 0 };
+	}
+	return { ascii: plain.length, cjk: text.length - plain.length };
+}
 
 /** Object keys dropped before hashing (volatility would churn refs). */
 const VOLATILE_KEYS = new Set(["ts", "time", "timestamp", "createdAt", "updatedAt", "receivedAt", "sentAt"]);
@@ -94,23 +124,34 @@ export function refPositions(messages) {
 }
 
 /** Estimated token count of one message (text content + tool-call payloads
- * + small per-message framing overhead). Never throws. */
+ * + small per-message framing overhead). CJK-aware — see TOKENS_PER_CJK_CHAR.
+ * Never throws. */
 export function messageTokens(message) {
-	let chars = 8;
+	let ascii = 8; // per-message framing overhead, counted in the ascii pool
+	let cjk = 0;
 	const content = message?.content;
 	try {
-		if (typeof content === "string") chars += content.length;
-		else if (Array.isArray(content)) {
+		if (typeof content === "string") {
+			const counted = countChars(content);
+			ascii += counted.ascii;
+			cjk += counted.cjk;
+		} else if (Array.isArray(content)) {
 			for (const block of content) {
-				if (block !== null && typeof block === "object" && typeof block.text === "string") chars += block.text.length;
-				else chars += JSON.stringify(block ?? null).length;
+				const text = block !== null && typeof block === "object" && typeof block.text === "string" ? block.text : JSON.stringify(block ?? null);
+				const counted = countChars(text);
+				ascii += counted.ascii;
+				cjk += counted.cjk;
 			}
 		}
-		if (Array.isArray(message?.tool_calls)) chars += JSON.stringify(message.tool_calls).length;
+		if (Array.isArray(message?.tool_calls)) {
+			const counted = countChars(JSON.stringify(message.tool_calls));
+			ascii += counted.ascii;
+			cjk += counted.cjk;
+		}
 	} catch {
 		/* unserializable block: keep the framing estimate */
 	}
-	return Math.max(1, Math.round(chars * TOKENS_PER_CHAR));
+	return Math.max(1, Math.round(ascii * TOKENS_PER_CHAR + cjk * TOKENS_PER_CJK_CHAR));
 }
 
 /** Estimated token count of a message range (inclusive indices). */
@@ -287,21 +328,22 @@ export function ledgerIsStale(view, ledger) {
  * identity-preserving), resumed sessions re-send FROZEN host-assembled
  * history (splice throws on its internal index deletes), and some dispatch
  * options are frozen objects on top of that. Returns the strategy used so
- * the caller can log it: "in-place" | "swapped" | "none". */
+ * the caller can log it: "in-place" | "swapped" | "none" (a fold existed but
+ * the dispatch could not carry it — the wire ships raw history) |
+ * "nothing-to-apply" (no located fold blocks; the raw history IS the view). */
 export function injectView(options, messages, view) {
-	if (view.applied > 0) {
-		try {
-			replaceInPlace(messages, view.messages);
-			return "in-place";
-		} catch {
-			/* frozen array — fall through to the reference swap */
-		}
-		try {
-			options.messages = view.messages;
-			return "swapped";
-		} catch {
-			/* frozen options — this dispatch cannot carry the view; fail open */
-		}
+	if (view.applied <= 0) return "nothing-to-apply";
+	try {
+		replaceInPlace(messages, view.messages);
+		return "in-place";
+	} catch {
+		/* frozen array — fall through to the reference swap */
+	}
+	try {
+		options.messages = view.messages;
+		return "swapped";
+	} catch {
+		/* frozen options — this dispatch cannot carry the view; fail open */
 	}
 	return "none";
 }
