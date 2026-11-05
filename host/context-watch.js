@@ -26,8 +26,8 @@
  *   reach it — the borrowed handler's closure carries the right composition.
  *   Every handover trigger — the force-tier automation (fire-and-forget,
  *   session-level in-flight flag plus a 10-minute cooldown) and manual
- *   /ctx-handover — shares one four-step flow: fork a dormant backup
- *   session (subagents' fork provider, economy pool model); then, on
+ *   /ctx-handover — shares one three-step flow: write the handover
+ *   document; then, on
  *   every compaction attempt, re-enumerate the live dispatched
  *   subagents and refresh the handover document as the very last
  *   action before compacting via the borrowed per-agent /compact
@@ -54,7 +54,6 @@ import { dirname, join } from "node:path";
 import { clearHandover, handoverOf, recordHandover } from "./handover-state.js";
 import { enumerateLiveSubagents, sessionRecordPath, sessionRecordsDir } from "./subagents.js";
 import { recentTrimViewTokensOf } from "./context-trim/index.js";
-import { recordForkLink, trimStateDirOf } from "./context-trim/fork.js";
 
 /** Tools whose result text is accounted against the per-turn read budget. */
 const ACCOUNT_TOOLS = new Set(["read", "glob", "grep", "bash"]);
@@ -187,7 +186,7 @@ function bucketKilo(tokens) {
  * invariant); the numbers live in the tail context line only. */
 const PROTOCOL_ROOT_TEXT = [
 	"[SWITCHMAN:WATERMARK] protocol: this session is guarded by a context watermark measured every step.",
-	"ok tier is silent. soft tier: prefer delegating lightweight work (subagent/workflow) over reading more context yourself. hard tier: stop broad reading (read/glob/grep are budget-limited and may be denied) and start wrapping up. force tier: MANDATORY wrap-up now — produce the final answer from what you already hold; an automatic context handover (backup + document + compaction + continuation) may run and will tell you to end the turn.",
+	"ok tier is silent. soft tier: prefer delegating lightweight work (subagent/workflow) over reading more context yourself. hard tier: stop broad reading (read/glob/grep are budget-limited and may be denied) and start wrapping up. force tier: MANDATORY wrap-up now — produce the final answer from what you already hold; an automatic context handover (document + compaction + continuation) may run and will tell you to end the turn.",
 	"The live tier and the bucketed used-token reading (against the soft/hard/force budget) arrive ONLY as [SWITCHMAN:WATERMARK] lines inside the appended runtime-context snapshot at the conversation tail; a tier change is announced on the step it happens. /ctx-pause pauses every watermark enforcement (measurement continues), /ctx-resume restores it, /ctx-handover starts a handover immediately.",
 ].join("\n");
 
@@ -215,7 +214,7 @@ function renderRootWatermark(level, used, th, status) {
 	const lines = [head, "force tier: MANDATORY wrap-up now — produce the final answer from what you already hold."];
 	const phase = status?.phase;
 	if (phase === "backup") {
-		lines.push(`context handover running: forking the backup session and writing the handover document…`);
+		lines.push(`context handover running: writing the handover document…`);
 	} else if (phase === "compacting") {
 		lines.push(`context handover running: compaction attempt ${status?.attempt ?? "?"} (retries while the turn is still running)…`);
 	} else if (phase === "continuation") {
@@ -224,7 +223,7 @@ function renderRootWatermark(level, used, th, status) {
 		lines.push(
 			status?.cooldownMin > 0
 				? `automatic handover cooldown: ${status.cooldownMin} min left; run /ctx-handover${status?.tool ? " or call the ctx_handover tool" : ""} to force one now.`
-				: `an automatic context handover (backup + document + compaction + continuation) is armed and will fire at the next step boundary${status?.tool ? "; calling the ctx_handover tool triggers it immediately" : ""}.`,
+				: `an automatic context handover (document + compaction + continuation) is armed and will fire at the next step boundary${status?.tool ? "; calling the ctx_handover tool triggers it immediately" : ""}.`,
 		);
 	} else {
 		lines.push(`run /ctx-handover${status?.tool ? " or call the ctx_handover tool" : ""} to trigger a manual context handover.`);
@@ -423,56 +422,6 @@ function applyContextWatch(ctx, config) {
 		return typeof first.provider === "string" && typeof first.model === "string" ? first : null;
 	};
 
-	/** Manual handover step 1 — fork a dormant backup child of this session
-	 *  through the subagents service's fork provider (the child inherits the
-	 *  completed turns, runs one tiny confirmation turn on the economy pool
-	 *  model when configured, then stays idle as a browsable snapshot). The
-	 *  spec MUST carry a signal: the manager calls spec.signal.throwIfAborted()
-	 *  unconditionally, so a missing signal fails the whole fork with a
-	 *  TypeError (the live failure observed on 2026-10-01). The append-only
-	 *  session log always remains the full-fidelity backup, so a failed fork
-	 *  only downgrades the UX, never the data. Returns {childId, reason}. */
-	const forkBackup = async (agent, sessionId, signal) => {
-		try {
-			const economy = firstPoolRoute(config.poolEconomy);
-			const started = await ctx.subagents?.startContinuable?.({
-				provider: "fork",
-				label: "dsh-switchman handover backup",
-				signal: signal ?? new AbortController().signal,
-				request: {
-					parent: agent,
-					prompt: [
-						{
-							type: "text",
-							text: "[SWITCHMAN:HANDOVER-BACKUP] This session is a dormant fork snapshot taken immediately before a context handover in the parent session. Do not perform any work. Reply with exactly one line confirming you hold the complete pre-handover state, then stay idle.",
-						},
-					],
-					...(economy === null ? {} : { agentOptions: { provider: economy.provider, model: economy.model } }),
-				},
-			});
-			if (typeof started?.childId !== "string") {
-				const reason = `startContinuable returned no child id (${JSON.stringify(started ?? null)})`;
-				warn(
-					`handover backup fork failed for session ${sessionId} (continuing; the append-only log remains the full backup): ${reason}`,
-				);
-				return { childId: null, reason };
-			}
-			// Copy-on-fork: the backup child inherits this session's trim fold
-			// ledger at its first model call (host/context-trim/fork.js). The
-			// link is best-effort bookkeeping on an already-successful fork —
-			// recordForkLink never throws; a lost link only downgrades the
-			// child to a clean ledger.
-			recordForkLink(sessionId, started.childId, { stateDir: trimStateDirOf(config), warn });
-			return { childId: started.childId, reason: null };
-		} catch (error) {
-			const reason = error?.message ?? String(error);
-			warn(
-				`handover backup fork failed for session ${sessionId} (continuing; the append-only log remains the full backup): ${reason}`,
-			);
-			return { childId: null, reason };
-		}
-	};
-
 	/** One handover-document path per handover run (stamp frozen at run
 	 *  start so refreshes overwrite the same file). Null when the session
 	 *  exposes no usable cwd. */
@@ -531,7 +480,7 @@ function applyContextWatch(ctx, config) {
 					``,
 					`- handed over at: ${new Date().toISOString()} (document refreshed before every compaction attempt)`,
 					`- context used before compaction: ~${used ?? "unknown"} tokens`,
-					`- backup fork session: ${backupId ?? "(fork failed — the full history remains in this session's append-only log)"}`,
+					`- backup snapshot: none — the append-only session log holds the full pre-handover history`,
 					``,
 					...liveSection,
 					`## Task state (filled in by the agent right after the handover)`,
@@ -644,9 +593,7 @@ function applyContextWatch(ctx, config) {
 				: `If the compaction summary mentions dispatched subagents that are NOT listed above, they materialized after this enumeration — a post-wake recheck will announce them within seconds; do not re-dispatch anything before it fires.`;
 		const instruction = [
 			"[SWITCHMAN:HANDOVER] A context handover just completed for this session.",
-			backupId !== null
-				? `A dormant fork backup holding the full pre-handover state is session ${backupId}.`
-				: `No fork backup was created; the append-only session log still holds the full history.`,
+			`The append-only session log holds the full pre-handover history (no fork snapshot).`,
 			docFile !== null
 				? `The handover document is at ${docFile}.`
 				: `Create the handover document under .dsh-switchman/handover/ in the working directory.`,
@@ -690,8 +637,11 @@ function applyContextWatch(ctx, config) {
 		state.inflight.add(sessionId);
 		try {
 			recordHandover(sessionId, { phase: "backup", source, at: Date.now() });
-			const backup = await forkBackup(agent, sessionId, signal);
-			const backupId = backup.childId;
+			// Backup = the append-only session log itself (full fidelity). The
+			// old fork-snapshot step was removed 2026-11-05: the subagents
+			// fork API (ctx.subagents.startContinuable) is absent from the
+			// installed host, so the fork failed on every single run.
+			const backupId = null;
 			// One document path per handover run (the stamp freezes here so
 			// refreshes overwrite the same file). The document itself is
 			// written as the LAST action before every compaction attempt —
@@ -806,7 +756,7 @@ function applyContextWatch(ctx, config) {
 			if (!outcome.ok)
 				return {
 					kind: "error",
-					text: `/ctx-handover: compaction failed after backup ${backupId ?? "n/a"} — ${outcome.reason}`,
+					text: `/ctx-handover: compaction failed — ${outcome.reason}`,
 				};
 			recordHandover(sessionId, { phase: "continuation", source, at: Date.now() });
 			// Final enumeration right after compaction settled: anything that
@@ -840,7 +790,7 @@ function applyContextWatch(ctx, config) {
 			}
 			await armContinuation(agent, backupId, docFile, live, appeared);
 			scheduleMaterializationRecheck(agent, sessionId, backupId, docFile, live);
-			const backupText = backupId ?? `n/a (${backup.reason ?? "log retains full history"})`;
+			const backupText = "session log (full pre-handover history; no fork snapshot)";
 			return {
 				kind: "success",
 				text: `[SWITCHMAN:WATERMARK] handover complete — backup ${backupText}, document ${docFile ?? "agent-created"}, compaction done, continuation armed.`,
@@ -978,7 +928,7 @@ function applyContextWatch(ctx, config) {
 	});
 	ctx.commands.register({
 		name: "ctx-handover",
-		description: "Trigger a full context handover for this session now (backup fork + document + compaction + continuation).",
+		description: "Trigger a full context handover for this session now (document + compaction + continuation).",
 		handler: (invocation) =>
 			runHandover(invocation?.agent, sessionIdOf(invocation?.agent), invocation?.commandId, invocation?.signal, "manual"),
 	});
@@ -996,7 +946,7 @@ function applyContextWatch(ctx, config) {
 		ctx.tools?.register?.({
 			name: "ctx_handover",
 			description:
-				"Trigger a full dsh-switchman context handover for this session NOW: fork a dormant backup session, write the handover document, compact this session at the idle boundary, then wake it to fill in the document and continue the task. Call it when the watermark banner reaches the force tier or the user asks for a handover, then END the turn immediately.",
+				"Trigger a full dsh-switchman context handover for this session NOW: write the handover document, compact this session at the idle boundary, then wake it to fill in the document and continue the task. Call it when the watermark banner reaches the force tier or the user asks for a handover, then END the turn immediately.",
 			parameters: {
 				type: "object",
 				properties: {
@@ -1022,7 +972,7 @@ function applyContextWatch(ctx, config) {
 						),
 					(error) => warn(`ctx_handover handover crashed: ${error?.message ?? error}`),
 				);
-				return "[SWITCHMAN:WATERMARK] ctx_handover scheduled: backup fork + handover document + compaction + continuation are running. END this turn now — reply briefly and call no more tools, so the compaction lands at the idle boundary. Your closing line must tell the user the handover is running in the background and will continue automatically (the session-header badge shows the live state) — otherwise the GUI looks idle during fork+compact.";
+				return "[SWITCHMAN:WATERMARK] ctx_handover scheduled: handover document + compaction + continuation are running. END this turn now — reply briefly and call no more tools, so the compaction lands at the idle boundary. Your closing line must tell the user the handover is running in the background and will continue automatically (the session-header badge shows the live state) — otherwise the GUI looks idle during the handover window.";
 			},
 			presentCall: (args) => ({
 				card: "generic",

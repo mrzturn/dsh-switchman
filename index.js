@@ -20,8 +20,8 @@
  *
  * Phase 3 mounts the context-watermark layer (host/context-watch.js): the
  * `[SWITCHMAN:WATERMARK]` tiered banner from the live token meter, a per-turn
- * read budget with deny/cap gates, the four-step force-tier handover
- * (backup fork + document + compaction + continuation) plus the
+ * read budget with deny/cap gates, the force-tier handover
+ * (document + compaction + continuation) plus the
  * ctx_handover agent tool, and the /ctx-pause, /ctx-resume,
  * /ctx-handover commands.
  *
@@ -89,7 +89,7 @@ const name = "dsh-switchman";
  * system-prompt section registry, the settings store it writes back to, the
  * token meter and agent registry the watermark reads, the command registry
  * for /ctx-*, the tools registry for the ctx_handover agent tool, the
- * subagents service the handover's backup fork goes through, the sessions
+ * subagents service the teams layer dispatch goes through, the sessions
  * persistence the handover's continuation flush uses, the plugin-manager
  * service the teams layer's bundle enable goes through, and the session
  * query engine the subagent model annotation + per-session vision verdicts

@@ -2,10 +2,10 @@
  * Shared in-flight handover registry (process-lifetime, never persisted).
  *
  * context-watch.js records phase transitions from the first synchronous
- * line of runHandover (t=0, before the fork even starts); routes.js
+ * line of runHandover (t=0); routes.js
  * exposes the read-only snapshot behind GET /api/dsh-switchman/
  * handover-state so the client badge can show a live "handover in
- * progress" cue during the otherwise-silent fork+compact window.
+ * progress" cue during the otherwise-silent handover window.
  */
 
 /** sessionId -> { sessionId, phase, source?, attempt?, at }. */

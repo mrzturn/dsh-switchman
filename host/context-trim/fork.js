@@ -1,7 +1,6 @@
 /** dsh-switchman context-trim fork-state inheritance.
  *
- * When a session is forked (subagent_fork tool, or the handover's backup
- * fork through the subagents service), the child conversation STARTS as a
+ * When a session is forked (subagent_fork tool), the child conversation STARTS as a
  * content copy of the parent's history — including every range the parent
  * already folded. Without inheritance the child re-derives its ledger from
  * scratch and re-folds (or never folds) ranges the parent already settled,
@@ -12,8 +11,7 @@
  * - Linkage (fork time): the parent→child edge is recorded the moment the
  *   fork is observed, into <stateDir>/fork-links.json (one bounded JSON
  *   map, atomic tmp+rename writes). Two call sites observe forks: the
- *   tools/post-execute listener on the subagent_fork tool (index.js) and
- *   the handover backup fork (context-watch.js forkBackup). Refs are
+ *   tools/post-execute listener on the subagent_fork tool (index.js). Refs are
  *   CONTENT-anchored (view.js refOf), so a link only stores session ids.
  * - Inheritance (child first sight): when the child's history first flows
  *   through the llm/stream view builder, the parent ledger is cloned into

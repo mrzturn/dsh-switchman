@@ -587,7 +587,7 @@ export function makeRoutes(ctx, config) {
 			handler: async (req, res) => {
 				if (!guard(req, res, "GET")) return;
 				// Read-only live registry: the client badge polls this during
-				// the otherwise-silent fork+compact window ({count, handovers}),
+				// the otherwise-silent handover window ({count, handovers}),
 				// so the GUI shows an animated "handover in progress" cue.
 				const handovers = handoverSnapshot();
 				writeJson(res, 200, { count: handovers.length, handovers });

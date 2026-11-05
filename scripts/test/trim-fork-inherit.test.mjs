@@ -399,8 +399,8 @@ describe("fork inheritance loop (mock host)", () => {
 		// Warm the instance's links cache with an unrelated session (loads the
 		// empty map) — the handover writes the file afterwards.
 		await streamOnce(listener, "warm-1", makeMessages(4, 7));
-		// Channel B: the handover backup fork records directly on the shared
-		// stateDir (context-watch.js forkBackup does exactly this).
+		// Channel B: a general session fork records directly on the shared
+		// stateDir (index.js post-execute does exactly this).
 		assert.equal(recordForkLink("parent-1", "child-b", { stateDir }), true);
 		const childMessages = structuredClone(parentMessages);
 		const view = await streamOnce(listener, "child-b", childMessages);

@@ -131,13 +131,13 @@ export const Config = z.object({
 	wmSoftTokens: z.number().min(1000).default(80000).volatile(),
 	/** Hard watermark: read budget tightens, wrap-up advised (tokens). */
 	wmHardTokens: z.number().min(2000).default(120000).volatile(),
-	/** Force watermark: backup + compaction handover (tokens). */
+	/** Force watermark: handover document + compaction (tokens). */
 	wmForceTokens: z.number().min(3000).default(150000).volatile(),
 	/** Per-call read budget for read/glob/grep (tokens). */
 	wmReadBudgetTokens: z.number().min(200).default(3000).volatile(),
 	/** Hard-tier behavior: cap reads and advise, or deny outright. */
 	wmDenyMode: z.union(["cap", "deny"]).default("cap").volatile(),
-	/** Force tier triggers backup + compaction automatically. */
+	/** Force tier triggers the handover (document + compaction) automatically. */
 	wmAutoHandover: z.boolean().default(true).volatile(),
 	/** Cap subagent contexts at wmSubagentForceTokens. */
 	wmSubagentCap: z.boolean().default(true).volatile(),
