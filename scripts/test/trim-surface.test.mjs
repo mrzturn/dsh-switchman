@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { applyContextTrim, recentTrimInjectOf } from "../../host/context-trim/index.js";
-import { refOf } from "../../host/context-trim/view.js";
+import { refOf, refPositions } from "../../host/context-trim/view.js";
 
 /** Mock session: append-only log + surface projection + host validation. */
 function mockSession(id) {
@@ -161,7 +161,9 @@ test("frozen dispatch: fold commits, turn-stopping appends the surface replace p
 	assert.equal(await poll(() => handle.store.ledgerOf("surf-1").blocks.length >= 1), true, "auto fold must commit");
 	const block = handle.store.ledgerOf("surf-1").blocks[0];
 	assert.ok(Array.isArray(block.surfaceSeqs) && block.surfaceSeqs.length === block.count, "commit-time capture stores the node span");
-	assert.deepEqual(block.surfaceSeqs, session.surface.nodes.slice(0, block.count), "captured seqs are the leading surface nodes");
+	// The FIRST USER message (node 0) is task-intent protected: folds start
+	// after it, so the captured span begins at node 1 (docs/ladder-fold.md).
+	assert.deepEqual(block.surfaceSeqs, session.surface.nodes.slice(1, block.count + 1), "captured seqs start after the protected first user message");
 
 	// Frozen re-sends (resumed-host shape): the view cannot ship — wire=raw.
 	for (let i = 0; i < 2; i++) {
@@ -188,10 +190,12 @@ test("frozen dispatch: fold commits, turn-stopping appends the surface replace p
 	assert.equal(replacement.data.role, "user");
 	assert.equal(replacement.data.source.kind, "user", "plain user source (v4 validator rejects checkpoint sources without an open compaction)");
 	assert.equal(replacement.data.source.compactionId, undefined, "no compactionId claim");
-	// deriveMessages-equivalent view shrinks: summary replaces the folded range.
+	// deriveMessages-equivalent view shrinks: the protected first user
+	// message stays at the head, the summary replaces the folded range.
 	const derived = session.deriveMessages();
 	assert.equal(derived.length, 9 - block.count, "shadowed range left the projection");
-	assert.match(derived[0].content[0].text, /Surface fold summary/u);
+	assert.match(derived[0].content[0].text, /^u1 /u, "first user message stays raw (task-intent protection)");
+	assert.match(derived[1].content[0].text, /Surface fold summary/u);
 	assert.ok(derived.length < first.length);
 	assert.match(decisionsOf(stateDir), new RegExp(`session=surf-1 surface-replace startSeq=\\d+ endSeq=\\d+ seqs=${block.count} tokens=\\d+ generation=\\d+ via=turn-stopping`, "u"));
 });
@@ -404,10 +408,12 @@ test("surface channel alive: a recent ship stands down the wire-raw fold pause a
 	assert.doesNotMatch(log, /session=surf-r [^\n]*injection-unavailable/u, "no injection-unavailable pause while the channel is alive");
 	assert.match(log, /session=surf-r via=idle action=/u, "the idle cycle ran");
 
-	// Banner: wireRaw only when the channel is dead — a fresh ship keeps the
-	// wire=raw marker OFF even though the last dispatch logged inject=none.
-	const line = contexts[0].text({ agent: { name: "Relax Agent", session: { id: "surf-r" } } });
-	assert.doesNotMatch(line, /wire=raw/u);
+	// Banner: REMOVED from the model view (model-invisibility invariant,
+	// docs/ladder-fold.md) — the trim layer registers no systemPrompt
+	// context at all; the human reads the wire-truth state from
+	// decisions.log's view-applied rows instead.
+	assert.equal(contexts.length, 0, "no model-visible trim context is registered");
+	assert.match(decisionsOf(stateDir), /session=surf-r view-applied [^\n]*injected=none/u, "the frozen dispatch is visible to the human in the log");
 });
 
 test("count-less legacy block: not-located hard skip, never a guessed range", async (t) => {
@@ -822,10 +828,11 @@ test("stale-but-capable surface channel: recency never gates folding or lies in 
 	assert.equal(await poll(() => /session=surf-stale via=idle action=/.test(decisionsOf(stateDir))), true, "idle cycle ran");
 	const log = decisionsOf(stateDir);
 	assert.doesNotMatch(log, /session=surf-stale [^\n]*injection-unavailable/u, "a stale-but-capable channel never pauses folding");
-	// The banner must not claim wire=raw while the ledger proves a shipped
-	// replacement, even though the ship is 11 minutes old.
-	const line = contexts[0].text({ agent: { name: "Stale Agent", session: { id: "surf-stale" } } });
-	assert.doesNotMatch(line, /wire=raw/u);
+	// The banner is gone from the model view (model-invisibility invariant):
+	// the 11-minute-old ship stays irrelevant to the model — nothing numeric
+	// is ever rendered — while the human's log carries the honest row.
+	assert.equal(contexts.length, 0, "no model-visible trim context is registered");
+	assert.match(decisionsOf(stateDir), /session=surf-stale view-applied [^\n]*injected=none/u, "the frozen dispatch is visible to the human in the log");
 });
 
 test("wire truth: view-applied logs the tally; pressure tiers use max(view, wire)", async (t) => {
@@ -1003,7 +1010,7 @@ test("open compaction lock: supported() false and maybeFold burns no summary cal
 	assert.doesNotMatch(log, /session=surf-lk via=unlocked [^\n]*injection-unavailable/u);
 });
 
-test("banner: a capture alone never hides wire=raw; a shipped replacement does", async (t) => {
+test("model visibility: no capture/ship state reaches the model; the log carries the wire truth", async (t) => {
 	let listener = null;
 	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
 	const { ctx, contexts } = mockCtx({ llmFiber: fiber, withAgents: false });
@@ -1012,22 +1019,150 @@ test("banner: a capture alone never hides wire=raw; a shipped replacement does",
 	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
 	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
 	// Persisted capture from an earlier process, no live registry (so the
-	// capability probe says no) and no ship: the capture must NOT suppress
-	// the honest warning.
+	// capability probe says no) and no ship: the OLD banner would have shown
+	// wire=raw to the model — the new contract keeps the model completely
+	// blind and the log honest instead.
 	const messages = [];
 	for (let i = 1; i <= 3; i++) {
 		messages.push({ id: `u${i}`, role: "user", content: [{ type: "text", text: `u${i} ` + "C".repeat(400) }] });
 		messages.push({ id: `a${i}`, role: "assistant", content: [{ type: "text", text: `a${i} ` + "C".repeat(400) }] });
 	}
-	const block = { id: "b-cap", kind: "summary", tier: "model", refRange: { firstId: "u1", lastId: "a1" }, count: 2, approxTokens: 500, summary: "Capture only.", surfaceSeqs: [0, 1] };
+	const block = { id: "b-cap", kind: "summary", tier: 1, refRange: { firstId: "u1", lastId: "a1" }, count: 2, approxTokens: 500, summary: "Capture only.", active: true, consumes: [], surfaceSeqs: [1, 2] };
 	handle.store.ledgerOf("surf-cap").blocks.push(block);
 	const stream = listener(Object.freeze({ sessionId: "surf-cap", messages: Object.freeze(messages), provider: "p", model: "m" }), async function* () { yield { type: "finish" }; });
 	for await (const chunk of stream) void chunk;
 	assert.equal(recentTrimInjectOf("surf-cap"), "none");
-	const captured = contexts[0].text({ agent: { name: "Cap Agent", session: { id: "surf-cap" } } });
-	assert.match(captured, /wire=raw/u, "a capture alone must not silence the warning");
-	// Shipped evidence stands the marker down.
-	block.surfaceReplaced = { startSeq: 0, endSeq: 1, seqs: [0, 1], contentGeneration: 0, atSeq: null, via: "test", at: Date.now() };
-	const shipped = contexts[0].text({ agent: { name: "Cap Agent", session: { id: "surf-cap" } } });
-	assert.doesNotMatch(shipped, /wire=raw/u, "a shipped replacement suppresses wire=raw");
+	// The model sees NO trim context (no wire=raw marker, no numbers — the
+	// registration itself is gone).
+	assert.equal(contexts.length, 0, "no model-visible trim context is registered");
+	// The human's diagnostics carry the injected=none row (wire truth).
+	assert.match(decisionsOf(stateDir), /session=surf-cap view-applied [^\n]*injected=none/u, "the log keeps the honest wire-truth row");
+});
+
+// ---- ladder ship (docs/ladder-fold.md) ------------------------------------------
+
+test("ladder ship: a T2 distillation replaces exactly its consumed T1 replacement nodes", async (t) => {
+	let listener = null;
+	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
+	const { ctx, hooks, agentsById } = mockCtx({ llmFiber: fiber });
+	const llm = { resolveModelInfo: async () => ({ context: { contextWindow: 100_000 } }), prepareCall: async () => ({ stream: async function* () { yield { type: "text-delta", text: "Distilled surface summary." }; yield { type: "finish" }; } }) };
+	ctx.get = () => llm;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-ladder-ship-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	const session = seededSession("surf-ld");
+	agentsById.set("surf-ld", { session });
+	async function dispatch(frozen = false) {
+		const options = frozen
+			? Object.freeze({ sessionId: "surf-ld", messages: Object.freeze(session.deriveMessages()), provider: "p", model: "m" })
+			: { sessionId: "surf-ld", messages: session.deriveMessages(), provider: "p", model: "m" };
+		const stream = listener(options, async function* () { yield { type: "finish", usage: { input_tokens: 1 } }; });
+		for await (const chunk of stream) void chunk;
+	}
+
+	// Fold 1 commits on a mutable dispatch and ships (marker carries atSeq).
+	await dispatch(false);
+	assert.equal(await poll(() => handle.store.ledgerOf("surf-ld").blocks.length >= 1), true, "fold 1 commits");
+	hooks["agent/turn-stopping"]({ agent: { session }, turn: 1, signal: undefined });
+	assert.equal(await poll(() => handle.store.ledgerOf("surf-ld").blocks[0].surfaceReplaced !== undefined), true, "fold 1 ships");
+	const b1 = handle.store.ledgerOf("surf-ld").blocks[0];
+	assert.ok(Number.isFinite(b1.surfaceReplaced.atSeq), "the ship marker carries the replacement node seq");
+
+	// Grow, fold 2 commits (directly — the 60s side-model interval would
+	// gate an immediate auto fold) + ships: its replacement node lands
+	// ADJACENT to fold 1's (engine folds are frontier-ordered — the ladder's
+	// tiling).
+	for (let i = 5; i <= 6; i++) {
+		session.append("user/message", { id: `u${i}`, role: "user", source: { kind: "user" }, content: [{ type: "text", text: `u${i} ` + "F".repeat(4_000) }] }, { surfaceOp: "append" });
+		session.append("assistant/message", { message: { id: `a${i}`, role: "assistant", source: { kind: "model" }, content: [{ type: "text", text: `a${i} ` + "F".repeat(4_000) }] } }, { surfaceOp: "append" });
+	}
+	const derived2 = session.deriveMessages();
+	const fold2 = handle.store.commitFold("surf-ld", { refRange: { firstId: "u4", lastId: "a5" }, count: 4, approxTokens: 9_000, summary: "Second shipped fold.", kind: "summary", tier: 1 }, refPositions(derived2));
+	assert.equal(fold2.ok, true, JSON.stringify(fold2));
+	hooks["agent/turn-stopping"]({ agent: { session }, turn: 2, signal: undefined });
+	assert.equal(await poll(() => fold2.block.surfaceReplaced !== undefined), true, "fold 2 ships");
+	const b2 = fold2.block;
+	const nodesNow = session.surface.nodes;
+	const idx1 = nodesNow.indexOf(b1.surfaceReplaced.atSeq);
+	const idx2 = nodesNow.indexOf(b2.surfaceReplaced.atSeq);
+	assert.ok(idx1 !== -1 && idx2 !== -1, "both replacement nodes are live");
+	assert.equal(idx2, idx1 + 1, "the consumed replacement nodes are adjacent on the surface");
+
+	// Ladder commit (ledger-only validation: no posMap), then sweep.
+	const ladder = handle.store.commitFold("surf-ld", { consumes: [b1.id, b2.id], summary: "T2 over two shipped folds.", kind: "summary", tier: 2, approxTokens: b1.approxTokens + b2.approxTokens }, null);
+	assert.equal(ladder.ok, true, JSON.stringify(ladder));
+	hooks["agent/turn-stopping"]({ agent: { session }, turn: 3, signal: undefined });
+	assert.equal(await poll(() => ladder.block.surfaceReplaced !== undefined), true, "the ladder block ships");
+	const events = session.rawEvents;
+	const metering = events[events.length - 2];
+	const replacement = events[events.length - 1];
+	assert.equal(metering.type, "compaction/prune");
+	assert.equal(replacement.type, "user/message");
+	assert.deepEqual(metering.data.shadowedSeqs, [b1.surfaceReplaced.atSeq, b2.surfaceReplaced.atSeq], "the span is exactly the consumed replacement nodes");
+	assert.deepEqual(replacement.sourceEventSeqs, [b1.surfaceReplaced.atSeq, b2.surfaceReplaced.atSeq]);
+	assert.match(replacement.data.content[0].text, /\[SWITCHMAN:TRIM\] T2 over two shipped folds\./u);
+	// The derived view now shows: protected u1, ONE T2 summary, the raw tail.
+	const derived = session.deriveMessages();
+	const summaryCount = derived.filter((message) => typeof message.id === "string" && message.id.startsWith("acp_summary_")).length;
+	assert.equal(summaryCount, 1, "exactly one synthetic message survives the distillation");
+	assert.match(derived[1].content[0].text, /T2 over two shipped folds\./u);
+	assert.match(decisionsOf(stateDir), /session=surf-ld surface-replace [^\n]*ladder=2/u, "the ship row names the ladder tier");
+});
+
+test("ladder ship: waits for consumed blocks to ship, then tombstones on a non-summary span", async (t) => {
+	let listener = null;
+	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
+	const { ctx, hooks, agentsById } = mockCtx({ llmFiber: fiber });
+	const llm = { resolveModelInfo: async () => ({ context: { contextWindow: 100_000 } }), prepareCall: async () => ({ stream: async function* () { yield { type: "text-delta", text: "Waiting distill." }; yield { type: "finish" }; } }) };
+	ctx.get = () => llm;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-ladder-wait-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	const session = seededSession("surf-lw");
+	agentsById.set("surf-lw", { session });
+	async function dispatch(frozen = false) {
+		const options = frozen
+			? Object.freeze({ sessionId: "surf-lw", messages: Object.freeze(session.deriveMessages()), provider: "p", model: "m" })
+			: { sessionId: "surf-lw", messages: session.deriveMessages(), provider: "p", model: "m" };
+		const stream = listener(options, async function* () { yield { type: "finish", usage: { input_tokens: 1 } }; });
+		for await (const chunk of stream) void chunk;
+	}
+
+	await dispatch(false);
+	assert.equal(await poll(() => handle.store.ledgerOf("surf-lw").blocks.length >= 1), true);
+	const b1 = handle.store.ledgerOf("surf-lw").blocks[0];
+	// Ladder committed while b1 is UNSHIPPED: one sweep ships b1 FIRST (the
+	// pending loop walks the ledger in order) and the ladder rides the SAME
+	// sweep — by the time it is reached, its material is on the surface.
+	const ladder = handle.store.commitFold("surf-lw", { consumes: [b1.id], summary: "Wait for me.", kind: "summary", tier: 2, approxTokens: b1.approxTokens }, null);
+	assert.equal(ladder.ok, true);
+	hooks["agent/turn-stopping"]({ agent: { session }, turn: 1, signal: undefined });
+	assert.equal(await poll(() => ladder.block.surfaceReplaced !== undefined), true, "consumed ship + ladder ship land on one sweep");
+	assert.notEqual(b1.surfaceReplaced, undefined, "the consumed block shipped first");
+
+	// Mismatch (ledger is [b1, ladder] right now): a consumed marker whose
+	// node is NOT a summary tombstones the ladder instead of shadowing raw
+	// history. The forged block sits right after the ladder, so the run is
+	// ledger-consecutive and passes structural checks.
+	const forged = { id: "b-forged", kind: "summary", tier: 2, refRange: null, count: 1, approxTokens: 500, summary: "Forged block.", active: true, consumes: ["x-forged"], surfaceReplaced: { startSeq: 0, endSeq: 0, seqs: [0], contentGeneration: 0, atSeq: 0, via: "test", at: Date.now() } };
+	handle.store.ledgerOf("surf-lw").blocks.push(forged);
+	const bad = handle.store.commitFold("surf-lw", { consumes: [ladder.block.id, "b-forged"], summary: "Bad run.", kind: "summary", tier: 3, approxTokens: 999 }, null);
+	assert.equal(bad.ok, true, "structural checks pass (ledger-consecutive, tiers line up)");
+	hooks["agent/turn-stopping"]({ agent: { session }, turn: 2, signal: undefined });
+	assert.equal(await poll(() => bad.block.surfaceSkip !== undefined), true, "the non-summary span tombstones");
+	assert.match(bad.block.surfaceSkip.reason, /ladder-span-mismatch/u);
+	assert.match(decisionsOf(stateDir), /session=surf-lw surface-replace skipped reason=ladder-span-mismatch/u);
+
+	// Consumed-skipped: a block whose refs never locate tombstones as
+	// incomplete-seqs on the sweep; a ladder consuming it must tombstone
+	// too — its surface material can never fully materialize.
+	const stale = handle.store.commitFold("surf-lw", { refRange: { firstId: "ghost-a", lastId: "ghost-b" }, count: 2, approxTokens: 500, summary: "Never locates.", kind: "summary", tier: 1 }, null);
+	assert.equal(stale.ok, true, "the stale block commits (no posMap)");
+	hooks["agent/turn-stopping"]({ agent: { session }, turn: 3, signal: undefined });
+	assert.equal(await poll(() => stale.block.surfaceSkip !== undefined), true, "the stale block hard-skips");
+	const staleLadder = handle.store.commitFold("surf-lw", { consumes: [stale.block.id], summary: "Doomed distill.", kind: "summary", tier: 2, approxTokens: 500 }, null);
+	assert.equal(staleLadder.ok, true);
+	hooks["agent/turn-stopping"]({ agent: { session }, turn: 4, signal: undefined });
+	assert.equal(await poll(() => staleLadder.block.surfaceSkip !== undefined), true, "the ladder tombstones with its consumed block");
+	assert.equal(staleLadder.block.surfaceSkip.reason, "ladder-consumed-skipped");
 });

@@ -265,13 +265,22 @@ window.__ModuleLoader__.load({
 
 		/** Numeric trim fields: settings field, schema minimum, and the
 		 *  Host-side default (also the fallback for malformed stored
-		 *  values). Percent fields cap at 100 like their Host schema. */
+		 *  values). Percent fields cap at 100 like their Host schema.
+		 *  MUST mirror host/routes.js TRIM_NUMBER_FIELDS bounds — a field
+		 *  coerced server-side but never sent here fails every fenced
+		 *  write (and vice versa). */
 		const TRIM_NUMBER_FIELDS = [
 			{ field: 'trimGrowthTokens', min: 1000, def: 22500 },
 			{ field: 'trimIncrementTokens', min: 1000, def: 50000 },
 			{ field: 'trimPressurePercent', min: 5, max: 100, def: 60 },
 			{ field: 'trimEmergencyPercent', min: 5, max: 100, def: 95 },
 			{ field: 'trimWindowTokens', min: 0, def: 0 },
+			{ field: 'trimProtectedTail', min: 0, max: 100, def: 6 },
+			{ field: 'trimMaxFoldsPerHour', min: 1, max: 60, def: 6 },
+			{ field: 'trimLadderT2Tokens', min: 1000, def: 8000 },
+			{ field: 'trimLadderT2MinBlocks', min: 2, max: 200, def: 3 },
+			{ field: 'trimLadderT3Tokens', min: 1000, def: 6000 },
+			{ field: 'trimLadderT3MinBlocks', min: 2, max: 200, def: 2 },
 		];
 
 		/** Dictionary keys per numeric trim row. */
@@ -293,6 +302,30 @@ window.__ModuleLoader__.load({
 				label: 'trimWindowLabel',
 				help: 'trimWindowHelp',
 			},
+			trimProtectedTail: {
+				label: 'trimProtectedTailLabel',
+				help: 'trimProtectedTailHelp',
+			},
+			trimMaxFoldsPerHour: {
+				label: 'trimMaxFoldsPerHourLabel',
+				help: 'trimMaxFoldsPerHourHelp',
+			},
+			trimLadderT2Tokens: {
+				label: 'trimLadderT2TokensLabel',
+				help: 'trimLadderT2TokensHelp',
+			},
+			trimLadderT2MinBlocks: {
+				label: 'trimLadderT2MinBlocksLabel',
+				help: 'trimLadderT2MinBlocksHelp',
+			},
+			trimLadderT3Tokens: {
+				label: 'trimLadderT3TokensLabel',
+				help: 'trimLadderT3TokensHelp',
+			},
+			trimLadderT3MinBlocks: {
+				label: 'trimLadderT3MinBlocksLabel',
+				help: 'trimLadderT3MinBlocksHelp',
+			},
 		};
 
 		/** Every settings field this page edits, in mutate order. */
@@ -311,6 +344,10 @@ window.__ModuleLoader__.load({
 			// Context trim (design: context-trim-port-design.md).
 			'trimMode',
 			'trimEnabled',
+			'trimLadderEnabled',
+			'surfaceFold',
+			'trimSideModel',
+			'trimStateDir',
 			...TRIM_NUMBER_FIELDS.map(({ field }) => field),
 			'teamsMode',
 			'syncWhitelist',
@@ -482,6 +519,12 @@ window.__ModuleLoader__.load({
 					? value.trimMode
 					: 'auto',
 				trimEnabled: bool('trimEnabled', true),
+				trimLadderEnabled: bool('trimLadderEnabled', true),
+				surfaceFold: bool('surfaceFold', true),
+				trimSideModel:
+					sanitizeRoute(value?.trimSideModel) ??
+					({ provider: '', model: '' }),
+				trimStateDir: string('trimStateDir'),
 				...Object.fromEntries(
 					TRIM_NUMBER_FIELDS.map((spec) => [spec.field, number(spec)]),
 				),
@@ -561,6 +604,10 @@ window.__ModuleLoader__.load({
 				wmSubagentCap: values.wmSubagentCap,
 				trimMode: values.trimMode,
 				trimEnabled: values.trimEnabled,
+				trimLadderEnabled: values.trimLadderEnabled,
+				surfaceFold: values.surfaceFold,
+				trimSideModel: routeKey(values.trimSideModel),
+				trimStateDir: values.trimStateDir,
 				...Object.fromEntries(
 					TRIM_NUMBER_FIELDS.map(({ field }) => [field, values[field]]),
 				),
@@ -853,6 +900,26 @@ window.__ModuleLoader__.load({
 					'空闲时何时把历史折叠为摘要：off = 从不折叠，advisory = 仅模型主动调用，auto = 自动折叠。',
 				trimEnabledLabel: '启用自动裁剪',
 				trimEnabledHelp: '上下文裁剪层的总开关。',
+				trimLadderEnabledLabel: '阶梯折叠（T1/T2/T3）',
+				trimLadderEnabledHelp: '把累积的 T1 摘要再蒸馏为 T2、T2 再凝聚为 T3，让长会话视图保持平稳。',
+				surfaceFoldLabel: '把折叠写入会话表面',
+				surfaceFoldHelp: '追加宿主风格的替换事件，让折叠在冻结派发下也能到达线上。建议保持开启。',
+				trimSideModelLabel: '摘要模型',
+				trimSideModelHelp: '折叠摘要使用的模型路由；留空 = 会话当前模型。阶梯蒸馏同样使用该路由。',
+				trimStateDirLabel: '账本目录',
+				trimStateDirHelp: '留空 = 默认的裁剪状态目录。',
+				trimProtectedTailLabel: '保护尾部（条数）',
+				trimProtectedTailHelp: '最后 N 条消息永不折叠。',
+				trimMaxFoldsPerHourLabel: '每小时折叠上限',
+				trimMaxFoldsPerHourHelp: '带模型调用的折叠节奏上限（紧急机械折叠不受限）。',
+				trimLadderT2TokensLabel: '阶梯 T2 质量（token）',
+				trimLadderT2TokensHelp: 'T1 摘要总质量达到该值后蒸馏为一个 T2。',
+				trimLadderT2MinBlocksLabel: '阶梯 T2 块数',
+				trimLadderT2MinBlocksHelp: '一次 T2 蒸馏至少合并的活跃 T1 块数。',
+				trimLadderT3TokensLabel: '阶梯 T3 质量（token）',
+				trimLadderT3TokensHelp: 'T2 摘要总质量达到该值后凝聚为一个 T3。',
+				trimLadderT3MinBlocksLabel: '阶梯 T3 块数',
+				trimLadderT3MinBlocksHelp: '一次 T3 凝聚至少合并的活跃 T2 块数。',
 				trimGrowthLabel: '增长阈值（token）',
 				trimGrowthHelp: '视图较上次折叠增长超过该 token 数后触发折叠。',
 				trimIncrementLabel: '增量阈值（token）',
@@ -1093,6 +1160,31 @@ window.__ModuleLoader__.load({
 					'When to fold history into summaries at idle: off = never, advisory = model-invoked only, auto = automatic folds.',
 				trimEnabledLabel: 'Enable auto-trim',
 				trimEnabledHelp: 'Master switch for the context-trim layer.',
+				trimLadderEnabledLabel: 'Ladder folding (T1/T2/T3)',
+				trimLadderEnabledHelp:
+					'Distill accumulated T1 summaries into T2, and T2 into T3, keeping long sessions flat.',
+				surfaceFoldLabel: 'Ship folds to the session surface',
+				surfaceFoldHelp:
+					'Append host-style replace events so folds reach the wire even on frozen dispatches. Leave on.',
+				trimSideModelLabel: 'Summarizer model',
+				trimSideModelHelp:
+					'Route for fold summaries; empty = the session model. Also used by ladder distillations.',
+				trimStateDirLabel: 'Ledger directory',
+				trimStateDirHelp: 'Empty = the default per-host trim state directory.',
+				trimProtectedTailLabel: 'Protected tail (messages)',
+				trimProtectedTailHelp: 'The last N messages are never folded.',
+				trimMaxFoldsPerHourLabel: 'Max folds per hour',
+				trimMaxFoldsPerHourHelp: 'Cadence cap for side-model folds (emergency mechanical folds exempt).',
+				trimLadderT2TokensLabel: 'Ladder T2 mass (tokens)',
+				trimLadderT2TokensHelp:
+					'Distill T1 summaries into one T2 once their combined mass reaches this.',
+				trimLadderT2MinBlocksLabel: 'Ladder T2 blocks',
+				trimLadderT2MinBlocksHelp: 'Minimum active T1 blocks a T2 distillation merges.',
+				trimLadderT3TokensLabel: 'Ladder T3 mass (tokens)',
+				trimLadderT3TokensHelp:
+					'Condense T2 summaries into one T3 once their combined mass reaches this.',
+				trimLadderT3MinBlocksLabel: 'Ladder T3 blocks',
+				trimLadderT3MinBlocksHelp: 'Minimum active T2 blocks a T3 condensation merges.',
 				trimGrowthLabel: 'Growth threshold (tokens)',
 				trimGrowthHelp:
 					'Fold once the view grows this many tokens since the last fold.',
@@ -1336,6 +1428,26 @@ window.__ModuleLoader__.load({
 					'閒置時何時將歷史摺疊為摘要：off = 從不摺疊，advisory = 僅模型主動呼叫，auto = 自動摺疊。',
 				trimEnabledLabel: '啟用自動裁剪',
 				trimEnabledHelp: '上下文裁剪層的總開關。',
+				trimLadderEnabledLabel: '階梯摺疊（T1/T2/T3）',
+				trimLadderEnabledHelp: '把累積的 T1 摘要再蒸餾為 T2、T2 再凝聚為 T3，讓長會話檢視保持平穩。',
+				surfaceFoldLabel: '把摺疊寫入會話表面',
+				surfaceFoldHelp: '追加宿主風格的替換事件，讓摺疊在凍結派發下也能到達線上。建議保持開啟。',
+				trimSideModelLabel: '摘要模型',
+				trimSideModelHelp: '摺疊摘要使用的模型路由；留空 = 會話當前模型。階梯蒸餾同樣使用該路由。',
+				trimStateDirLabel: '帳本目錄',
+				trimStateDirHelp: '留空 = 預設的裁剪狀態目錄。',
+				trimProtectedTailLabel: '保護尾部（條數）',
+				trimProtectedTailHelp: '最後 N 訊息永不摺疊。',
+				trimMaxFoldsPerHourLabel: '每小時摺疊上限',
+				trimMaxFoldsPerHourHelp: '帶模型呼叫的摺疊節奏上限（緊急機械摺疊不受限）。',
+				trimLadderT2TokensLabel: '階梯 T2 質量（token）',
+				trimLadderT2TokensHelp: 'T1 摘要總質量達到該值後蒸餾為一個 T2。',
+				trimLadderT2MinBlocksLabel: '階梯 T2 塊數',
+				trimLadderT2MinBlocksHelp: '一次 T2 蒸餾至少合併的活躍 T1 塊數。',
+				trimLadderT3TokensLabel: '階梯 T3 質量（token）',
+				trimLadderT3TokensHelp: 'T2 摘要總質量達到該值後凝聚為一個 T3。',
+				trimLadderT3MinBlocksLabel: '階梯 T3 塊數',
+				trimLadderT3MinBlocksHelp: '一次 T3 凝聚至少合併的活躍 T2 塊數。',
 				trimGrowthLabel: '增長閾值（token）',
 				trimGrowthHelp: '檢視較上次摺疊增長超過該 token 數後觸發摺疊。',
 				trimIncrementLabel: '增量閾值（token）',
@@ -5207,6 +5319,13 @@ window.__ModuleLoader__.load({
 				wmSubagentCap: values.wmSubagentCap,
 				trimMode: values.trimMode,
 				trimEnabled: values.trimEnabled,
+				trimLadderEnabled: values.trimLadderEnabled,
+				surfaceFold: values.surfaceFold,
+				trimSideModel: {
+					provider: values.trimSideModel.provider,
+					model: values.trimSideModel.model,
+				},
+				trimStateDir: values.trimStateDir,
 				...Object.fromEntries(
 					TRIM_NUMBER_FIELDS.map(({ field }) => [field, values[field]]),
 				),
@@ -6645,6 +6764,40 @@ window.__ModuleLoader__.load({
 							checked: values.trimEnabled,
 							onChange: () => {
 								edit('trimEnabled', !values.trimEnabled);
+							},
+							disabled: !editable,
+							style: STYLE.checkbox,
+						}),
+						lines: [],
+					}),
+					h(SettingsRow, {
+						key: 'trimLadderEnabled',
+						id: `${trimId}-ladder`,
+						label: t('trimLadderEnabledLabel'),
+						help: t('trimLadderEnabledHelp'),
+						control: h('input', {
+							type: 'checkbox',
+							id: `${trimId}-ladder`,
+							checked: values.trimLadderEnabled,
+							onChange: () => {
+								edit('trimLadderEnabled', !values.trimLadderEnabled);
+							},
+							disabled: !editable,
+							style: STYLE.checkbox,
+						}),
+						lines: [],
+					}),
+					h(SettingsRow, {
+						key: 'surfaceFold',
+						id: `${trimId}-surface`,
+						label: t('surfaceFoldLabel'),
+						help: t('surfaceFoldHelp'),
+						control: h('input', {
+							type: 'checkbox',
+							id: `${trimId}-surface`,
+							checked: values.surfaceFold,
+							onChange: () => {
+								edit('surfaceFold', !values.surfaceFold);
 							},
 							disabled: !editable,
 							style: STYLE.checkbox,

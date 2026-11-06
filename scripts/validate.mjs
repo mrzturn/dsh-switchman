@@ -394,6 +394,12 @@ for (const asset of [
 // Any digit leaking into the protocol texts would churn the head per step and
 // kill the prompt-cache prefix again — these assertions pin the invariant.
 
+// ---- 7. KV-cache stability: the watermark head protocol stays byte-stable
+// (digit-free), and — since v1.11 (docs/ladder-fold.md) — the TAIL channel
+// is number-free too: tier directives carry no used/budget/percentage
+// numbers (bili lesson #2: a model told "you're at 20%" anchors on "looks
+// healthy" and refuses to fold). The registration shape stays pinned.
+
 const cw = await import(new URL("../host/context-watch.js", import.meta.url));
 for (const [name, text] of [
 	["PROTOCOL_ROOT_TEXT", cw.PROTOCOL_ROOT_TEXT],
@@ -403,33 +409,27 @@ for (const [name, text] of [
 	assert.ok(text.length > 0, `${name} is empty`);
 	assert.doesNotMatch(text, /\d/u, `${name} must stay digit-free (byte-stable head invariant)`);
 }
-const WM_TH = { soft: 50000, hard: 90000, force: 130000 };
-assert.equal(cw.renderRootWatermark("ok", 12345, WM_TH, {}), "", "root watermark must be silent at ok tier");
-assert.equal(cw.renderSubWatermark(12345, WM_TH), "", "sub watermark must be silent at ok tier");
-for (const [level, used] of [
-	["soft", 62000],
-	["hard", 95000],
-	["force", 131000],
-]) {
-	for (const status of [{}, { autoHandover: true, cooldownMin: 10 }, { phase: "compacting", attempt: 2 }]) {
-		const a = cw.renderRootWatermark(level, used, WM_TH, status);
-		const b = cw.renderRootWatermark(level, used, WM_TH, status);
+assert.equal(cw.renderRootWatermark("ok", {}), "", "root watermark must be silent at ok tier");
+assert.equal(cw.renderSubWatermark("ok"), "", "sub watermark must be silent at ok tier");
+for (const level of ["soft", "hard", "force"]) {
+	for (const status of [{}, { autoHandover: true, cooldown: true }, { phase: "compacting" }]) {
+		const a = cw.renderRootWatermark(level, status);
+		const b = cw.renderRootWatermark(level, status);
 		assert.equal(a, b, `renderRootWatermark(${level}) must be deterministic`);
 		assert.ok(a.length > 0, `${level} tier must render a live root line`);
+		assert.doesNotMatch(a, /%|~\d+k|of budget|\d+ min/u, `renderRootWatermark(${level}) must stay number-free`);
 	}
-	const s1 = cw.renderSubWatermark(used, WM_TH);
-	const s2 = cw.renderSubWatermark(used, WM_TH);
+	const s1 = cw.renderSubWatermark(level);
+	const s2 = cw.renderSubWatermark(level);
 	assert.equal(s1, s2, `renderSubWatermark(${level}) must be deterministic`);
 	assert.ok(s1.length > 0, `${level} tier must render a live sub line`);
+	assert.doesNotMatch(s1, /%|~\d+k|of budget|\d+ min/u, `renderSubWatermark(${level}) must stay number-free`);
 }
-assert.match(cw.renderRootWatermark("soft", 62000, WM_TH, {}), /~60k/u, "used reading must be 5k-bucketed");
-assert.equal(cw.bucketKilo(0), "0k", "bucketKilo(0) must be 0k");
-assert.equal(cw.bucketKilo(52000), "50k", "bucketKilo(52000) must bucket down to 50k");
 const cwSource = readFileSync(fileURLToPath(new URL("../host/context-watch.js", import.meta.url)), "utf8");
 assert.match(cwSource, /ctx\.systemPrompt\.context\(\s*\{/u, "watermark must register the tail runtime-context channel");
 assert.match(cwSource, /order:\s*300,/u, "tail context must sit after the core runtime-context placements");
 assert.match(cwSource, /required:\s*true,\s*\n\s*interpolate:\s*false,/u, "tail context must survive suppressRuntimeContext and skip interpolation");
-console.log("OK: watermark head protocol byte-stable; live numbers confined to the tail context line");
+console.log("OK: watermark head protocol byte-stable; the tail channel stays number-free (model-invisibility invariant)");
 
 console.log(
 	SKIP_HOST_CHECK

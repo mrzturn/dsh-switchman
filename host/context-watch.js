@@ -115,11 +115,6 @@ function levelOf(used, th) {
 	return "ok";
 }
 
-/** `42k`-style rounding for the anchor line. */
-function kilo(tokens) {
-	return `${Math.round(tokens / 1000)}k`;
-}
-
 /** Session id off an exec/invocation agent (shared agent/session id). */
 function sessionIdOf(agent) {
 	const id = agent?.session?.id ?? agent?.id;
@@ -171,58 +166,53 @@ export function measureNow(ctx, agent) {
 
 // ---- watermark rendering (pure given state + measurement) ------------------
 
-/** Bucket width for the live used reading. 5k steps keep the tail snapshot
- * emission rate low (the snapshot re-emits only when its joined text
- * changes); tier crossings change the line immediately regardless. */
-const USED_BUCKET_TOKENS = 5000;
-
-/** `~50k`-style bucketed reading for the live watermark line. */
-function bucketKilo(tokens) {
-	return `${Math.round(tokens / USED_BUCKET_TOKENS) * (USED_BUCKET_TOKENS / 1000)}k`;
-}
+/** MODEL-VISIBILITY POLICY (docs/ladder-fold.md, bili lesson #2): the
+ * watermark NEVER shows the model a water level — no used-token counts, no
+ * budget values, no percentages, no cooldown minutes. A model told "you're
+ * at 20%" anchors on "looks healthy" and refuses to fold or wrap; with the
+ * numbers hidden, judgment roots in the task. Only BEHAVIORAL directives
+ * travel, and only when enforcement changes (a tier crossing or a handover
+ * phase change), which also keeps the runtime-context snapshot byte-stable
+ * between those events. The full numeric picture stays available to the
+ * human through the client badge. */
 
 /** Byte-stable protocol text for root sessions: no live numbers, so the
  * request head stays byte-identical for the whole session (KV-cache
- * invariant); the numbers live in the tail context line only. */
+ * invariant). */
 const PROTOCOL_ROOT_TEXT = [
-	"[SWITCHMAN:WATERMARK] protocol: this session is guarded by a context watermark measured every step.",
-	"ok tier is silent. soft tier: prefer delegating lightweight work (subagent/workflow) over reading more context yourself. hard tier: stop broad reading (read/glob/grep are budget-limited and may be denied) and start wrapping up. force tier: MANDATORY wrap-up now — produce the final answer from what you already hold; an automatic context handover (document + compaction + continuation) may run and will tell you to end the turn.",
-	"The live tier and the bucketed used-token reading (against the soft/hard/force budget) arrive ONLY as [SWITCHMAN:WATERMARK] lines inside the appended runtime-context snapshot at the conversation tail; a tier change is announced on the step it happens. /ctx-pause pauses every watermark enforcement (measurement continues), /ctx-resume restores it, /ctx-handover starts a handover immediately.",
+	"[SWITCHMAN:WATERMARK] protocol: this session's context is managed automatically (folding runs before you notice; a handover may run when needed). You will never receive token counts, percentages, or progress numbers — none exist in this protocol, and no pacing decision is yours to make from them.",
+	"Only BEHAVIORAL directives arrive, as [SWITCHMAN:WATERMARK] lines inside the appended runtime-context snapshot, when enforcement changes: a soft line asks you to prefer delegation over reading more context yourself; a hard line says broad reading is budget-limited this turn and it is time to start wrapping up; a force line is a MANDATORY wrap-up — produce the final answer from what you already hold. /ctx-pause pauses every watermark enforcement (measurement continues), /ctx-resume restores it, /ctx-handover starts a handover immediately.",
 ].join("\n");
 
 /** Byte-stable protocol text for subagent sessions (same invariant). */
 const PROTOCOL_SUB_TEXT = [
-	"[SWITCHMAN:WATERMARK] protocol: this subagent session is guarded by a context watermark measured every step.",
-	"ok tier is silent. soft tier: keep reads narrow and drop bulky raw output. hard tier: stop broad reading; wrap toward the final summary. force tier: stop reading and return the final summary now — end the FINAL message with a HANDOFF block: completed / key findings (file:line) / remaining / next steps.",
-	"The live tier and the bucketed used-token reading arrive ONLY as [SWITCHMAN:WATERMARK] lines inside the appended runtime-context snapshot; a tier change is announced on the step it happens.",
+	"[SWITCHMAN:WATERMARK] protocol: this subagent session's context is managed automatically. You will never receive token counts, percentages, or progress numbers — judgment stays rooted in the task.",
+	"Only BEHAVIORAL directives arrive, as [SWITCHMAN:WATERMARK] lines inside the appended runtime-context snapshot, when enforcement changes: a soft line asks for narrow reads; a hard line says stop broad reading and wrap toward the final summary; a force line says stop reading and return the final summary now, ending the FINAL message with a HANDOFF block: completed / key findings (file:line) / remaining / next steps.",
 ].join("\n");
 
-/** Static paused line (numbers omitted on purpose: enforcement is off, and a
+/** Static paused line (never changes while paused: enforcement is off, and a
  * frozen string emits once and never churns the snapshot again). */
 const PAUSED_LINE =
 	"[SWITCHMAN:WATERMARK] paused — measurement continues, but every watermark enforcement stays off until /ctx-resume.";
 
-/** Root-session live line: "" at ok (token economy), tier advice lines plus
- * the live handover progress (phase/attempt) and auto-cooldown state. */
-function renderRootWatermark(level, used, th, status) {
+/** Root-session live line: directive text only — no numbers (see the
+ * policy note above). "" while the session sits at the silent ok tier. */
+function renderRootWatermark(level, status) {
 	if (level === "ok") return "";
-	const head =
-		`[SWITCHMAN:WATERMARK] ${level} tier — used ~${bucketKilo(used)}` +
-		` of budget ${kilo(th.soft)}/${kilo(th.hard)}/${kilo(th.force)}`;
-	if (level === "soft") return `${head}\nsoft tier: prefer delegating lightweight work (subagent/workflow) over reading more context yourself.`;
-	if (level === "hard") return `${head}\nhard tier: stop broad reading (read/glob/grep are budget-limited this turn) and start wrapping up.`;
-	const lines = [head, "force tier: MANDATORY wrap-up now — produce the final answer from what you already hold."];
+	if (level === "soft") return "[SWITCHMAN:WATERMARK] soft tier: prefer delegating lightweight work (subagent/workflow) over reading more context yourself.";
+	if (level === "hard") return "[SWITCHMAN:WATERMARK] hard tier: stop broad reading (read/glob/grep are budget-limited this turn) and start wrapping up.";
+	const lines = ["[SWITCHMAN:WATERMARK] force tier: MANDATORY wrap-up now — produce the final answer from what you already hold."];
 	const phase = status?.phase;
 	if (phase === "backup") {
 		lines.push(`context handover running: writing the handover document…`);
 	} else if (phase === "compacting") {
-		lines.push(`context handover running: compaction attempt ${status?.attempt ?? "?"} (retries while the turn is still running)…`);
+		lines.push(`context handover running: compaction in progress (retries while the turn is still running)…`);
 	} else if (phase === "continuation") {
 		lines.push(`context handover completing: waking this session to fill in the document and continue the task…`);
 	} else if (status?.autoHandover) {
 		lines.push(
-			status?.cooldownMin > 0
-				? `automatic handover cooldown: ${status.cooldownMin} min left; run /ctx-handover${status?.tool ? " or call the ctx_handover tool" : ""} to force one now.`
+			status?.cooldown
+				? `automatic handover is cooling down; run /ctx-handover${status?.tool ? " or call the ctx_handover tool" : ""} to force one now.`
 				: `an automatic context handover (document + compaction + continuation) is armed and will fire at the next step boundary${status?.tool ? "; calling the ctx_handover tool triggers it immediately" : ""}.`,
 		);
 	} else {
@@ -231,21 +221,16 @@ function renderRootWatermark(level, used, th, status) {
 	return lines.join("\n");
 }
 
-/** Subagent-session live line: the same soft/hard/force absolute-token tiers
- *  as the root line ("" while ok — token economy), with subagent-flavored
- *  advice and the HANDOFF block due at the force tier. Pausing never applies
- *  to subagents (oc index.ts:187-190). */
-function renderSubWatermark(used, th) {
-	const level = levelOf(used, th);
+/** Subagent-session live line: the same tiers as the root line, directive
+ * text only — no numbers (see the policy note above). Pausing never
+ * applies to subagents (oc index.ts:187-190). */
+function renderSubWatermark(level) {
 	if (level === "ok") return "";
-	const head =
-		`[SWITCHMAN:WATERMARK] subagent ${level} tier — used ~${bucketKilo(used)}` +
-		` of budget ${kilo(th.soft)}/${kilo(th.hard)}/${kilo(th.force)}`;
-	if (level === "soft") return `${head}\nsoft tier: keep reads narrow and drop bulky raw output.`;
-	if (level === "hard") return `${head}\nhard tier: stop broad reading; start wrapping toward the final summary.`;
+	if (level === "soft") return "[SWITCHMAN:WATERMARK] soft tier: keep reads narrow and drop bulky raw output.";
+	if (level === "hard") return "[SWITCHMAN:WATERMARK] hard tier: stop broad reading; start wrapping toward the final summary.";
 	return (
-		`${head}\nforce tier: stop reading and return the final summary now.\n` +
-		`End the FINAL message with a HANDOFF block: completed / key findings (file:line) / remaining / next steps.`
+		"[SWITCHMAN:WATERMARK] force tier: stop reading and return the final summary now.\n" +
+		"End the FINAL message with a HANDOFF block: completed / key findings (file:line) / remaining / next steps."
 	);
 }
 
@@ -258,24 +243,24 @@ function renderWatermarkContext(ctx, config, state, agent) {
 		const th = readThresholds(config);
 		const used = measureNow(ctx, agent);
 		if (used === null) return "";
+		const level = levelOf(used, th);
+		if (level === "ok") return "";
 		if (!isRoot(ctx, agent)) {
 			// Subagents share the root soft/hard thresholds; the optional
 			// wmSubagentForceTokens override replaces only the force tier
 			// (enabled by the wmSubagentCap toggle, 0/0 = follow the root set).
 			const subForce = readBool(config.wmSubagentCap, true) ? readNumber(config.wmSubagentForceTokens, 0) : 0;
 			const subTh = subForce > 0 ? { ...th, force: subForce } : th;
-			return renderSubWatermark(used, subTh);
+			return renderSubWatermark(levelOf(used, subTh));
 		}
 		if (state.paused.has(sessionId)) return PAUSED_LINE;
 		const live = handoverOf(sessionId);
 		const elapsed = Date.now() - (state.lastHandover.get(sessionId) ?? 0);
-		// Cooldown quantized to 5-minute steps so the emitted line stays
-		// byte-stable between steps (snapshot re-emits only on change).
-		return renderRootWatermark(levelOf(used, th), used, th, {
+		return renderRootWatermark(level, {
 			autoHandover: readBool(config.wmAutoHandover, true),
 			phase: live?.phase,
 			attempt: live?.attempt,
-			cooldownMin: Math.max(0, Math.ceil((HANDOVER_COOLDOWN_MS - elapsed) / 300_000) * 5),
+			cooldown: elapsed < HANDOVER_COOLDOWN_MS,
 			tool: state.handoverTool ?? undefined,
 		});
 	} catch {
@@ -989,7 +974,6 @@ function applyContextWatch(ctx, config) {
 
 export {
 	applyContextWatch,
-	bucketKilo,
 	PAUSED_LINE,
 	PROTOCOL_ROOT_TEXT,
 	PROTOCOL_SUB_TEXT,

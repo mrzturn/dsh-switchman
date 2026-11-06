@@ -258,6 +258,23 @@ export const Config = z.object({
 	/** Route for the side-model summarizer (L3). Empty = inherit the
 	 *  session's current model. */
 	trimSideModel: IntentRouteSchema.default({ provider: "", model: "" }).volatile(),
+	/** T1/T2/T3 ladder folding (docs/ladder-fold.md): master switch for the
+	 *  T2/T3 distillation tiers. T1 raw-range folds are governed by
+	 *  trimMode; the ladder only adds the summary-maintenance tiers. */
+	trimLadderEnabled: z.boolean().default(true).volatile(),
+	/** Ladder T2 gate: minimum active-T1 summary token mass before a T2
+	 *  distillation fires (the need signal — bili #379: block count alone
+	 *  is not a need signal). */
+	trimLadderT2Tokens: z.number().min(1000).default(8000).volatile(),
+	/** Ladder T2 companion floor: a T2 distillation merges at least this
+	 *  many active T1 blocks (filters degenerate two-block rewrites). */
+	trimLadderT2MinBlocks: z.number().min(2).max(200).default(3).volatile(),
+	/** Ladder T3 gate: minimum active-T2 summary token mass before a T3
+	 *  condensation fires. */
+	trimLadderT3Tokens: z.number().min(1000).default(6000).volatile(),
+	/** Ladder T3 companion floor: a T3 condensation merges at least this
+	 *  many active T2 blocks. */
+	trimLadderT3MinBlocks: z.number().min(2).max(200).default(2).volatile(),
 	/** Explicit ledger state directory. Empty = <dshHome>/.dsh-switchman/
 	 *  state/trim/. */
 	trimStateDir: z.string().default("").volatile(),

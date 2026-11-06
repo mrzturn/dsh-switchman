@@ -12,23 +12,29 @@
  * - agent/status idle hook: the only place fold decisions run (design §4:
  *   fold at the idle boundary, never mid-stream).
  * - ctx_trim_fold / ctx_trim_status tools: the L1 advisory surface — the
- *   session model may fold ranges itself and inspect trim state.
- * - systemPrompt head section (byte-stable protocol text) + live context
- *   line (bucketed view tokens / fold count / growth — byte-stable between
- *   5k-token steps so the serialized tail stops churning).
+ *   session model may fold ranges itself and inspect compressible ranges
+ *   (true sizes only — NEVER a fill percentage or water level; bili lesson
+ *   #2, docs/ladder-fold.md).
+ *
+ * MODEL-VISIBILITY INVARIANT: the trim layer registers NO systemPrompt
+ * context line. Water levels, view-token estimates, growth numbers, and
+ * fold counts are engine internals; the model sees only the byte-stable
+ * protocol head and (on demand) the true-size recommendation list. Human
+ * diagnostics live in decisions.log.
  *
  * Config fields (host/config.js, all volatile): trimEnabled, trimMode
  * ("off"|"advisory"|"auto"), trimGrowthTokens, trimIncrementTokens,
  * trimPressurePercent, trimEmergencyPercent, trimWindowTokens,
- * trimProtectedTail,
- * trimMaxFoldsPerHour, trimSideModel, trimStateDir.
+ * trimProtectedTail, trimMaxFoldsPerHour, trimSideModel, trimStateDir,
+ * trimLadderEnabled, trimLadderT2Tokens, trimLadderT2MinBlocks,
+ * trimLadderT3Tokens, trimLadderT3MinBlocks.
  */
 
 import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { buildView, estimateTokensOf, injectView, ledgerIsStale, rangeIsSegmentAligned, refOf, refPositions } from "./view.js";
+import { buildView, estimateTokensOf, injectView, ledgerIsStale, messageTokens, rangeIsSegmentAligned, refOf, refPositions } from "./view.js";
 import { computeFoldableRange, evaluateTrigger, EMERGENCY_COOLDOWN_MS } from "./trigger.js";
-import { mechanicalSummary, renderMaterial, summarizeWithModel } from "./summarizer.js";
+import { LADDER_SYSTEM_PROMPT, mechanicalSummary, renderLadderMaterial, renderMaterial, summarizeWithModel } from "./summarizer.js";
 import { createStore } from "./state.js";
 import { createMetrics, extractUsage, promptTokensOf, wrapStreamForMetrics } from "./metrics.js";
 import { forkLinkOf, loadForkLinks, recordForkLink, resolveInheritance, INHERIT_WINDOW_MS } from "./fork.js";
@@ -124,14 +130,6 @@ export function agentSessionIdOf(agent) {
 	return null;
 }
 
-/** Display label for the banner: object → name, string → itself, else the
- * session id (never prints [object Object]). */
-export function agentLabelOf(agent) {
-	if (typeof agent === "string") return agent;
-	if (agent !== null && typeof agent === "object" && typeof agent.name === "string" && agent.name !== "") return agent.name;
-	return agentSessionIdOf(agent);
-}
-
 // ---- config field readers (fail-open defaults) -------------------------------
 
 function readBool(config, key, fallback) {
@@ -189,12 +187,14 @@ function readRoute(config, key) {
 // ---- prompt texts -------------------------------------------------------------
 
 /** Byte-stable head section: the trim protocol (digit-free, like the
- * watermark protocol, so it stays out of KV invariants' way). */
+ * watermark protocol, so it stays out of KV invariants' way). States the
+ * number-free disclosure policy explicitly — the model never receives
+ * water levels or progress numbers from this engine. */
 export const TRIM_PROTOCOL_TEXT = [
-	"[SWITCHMAN:TRIM] This session has automatic context trimming.",
+	"[SWITCHMAN:TRIM] This session has automatic context trimming. The engine folds consumed ranges itself and never reports sizes, percentages, or progress to you — no action or pacing is expected of you on that front.",
 	"- Old message ranges may be replaced by ONE synthetic [SWITCHMAN:TRIM] summary message; treat those summaries as faithful compressions, and message refs inside them as historical anchors.",
 	"- NEVER contradict or re-derive content a summary already settled; build on it.",
-	"- When context grows large, you may fold a contiguous range yourself with the ctx_trim_fold tool (give firstId/lastId message refs and a summary following the compression rules); inspect state with ctx_trim_status.",
+	"- You may fold a contiguous range yourself with the ctx_trim_fold tool (give firstId/lastId message refs and a summary following the compression rules); ctx_trim_status lists the compressible ranges with their true sizes.",
 	"- Tool-call pairs (an assistant tool call and its results) must always be folded together or not at all.",
 ].join("\n");
 
@@ -207,37 +207,6 @@ export function effectiveWindowTokens(resolved, cap) {
 	if (a === null) return b;
 	if (b === null) return a;
 	return Math.min(a, b);
-}
-
-/** Live context line renderer (pure; exported for tests). Silent in "off"
- * mode and whenever nothing has been measured yet. wireRaw marks a session
- * whose last dispatch could not carry the fold view (frozen request) — the
- * displayed view is then meter-only and the watermark governs off the
- * provider tally. */
-export function renderTrimContextLine(agent, { enabled, mode, viewTokens, windowTokens, folds, growthTokens, lastModel, wireRaw = false }) {
-	if (!enabled) return "";
-	if (mode === "off") return "";
-	if (agent === null || agent === undefined || agent === "") return "";
-	const hasView = Number.isFinite(viewTokens) && viewTokens > 0;
-	const hasFolds = Number.isFinite(folds) && folds > 0;
-	if (!hasView && !hasFolds) return "";
-	const kilo = (n) => `${Math.round(n / 1000)}k`;
-	const parts = [];
-	if (hasView) {
-		let usage = "";
-		if (Number.isFinite(windowTokens) && windowTokens > 0) usage = ` (${Math.round((viewTokens / windowTokens) * 100)}% of window ${kilo(windowTokens)})`;
-		else usage = " (window unknown — pressure tiers off)";
-		parts.push(`view ~${kilo(viewTokens)} tokens${usage}`);
-		if (wireRaw) parts.push("wire=raw (folds not shipping; watermark reads the tally)");
-	}
-	if (hasFolds) {
-		parts.push(`folds ${folds}`);
-		if (Number.isFinite(growthTokens)) parts.push(`growth ~${kilo(growthTokens)} since last fold`);
-	}
-	if (lastModel !== null && typeof lastModel === "object" && typeof lastModel.model === "string" && lastModel.model !== "") parts.push(`model ${lastModel.model}`);
-	if (parts.length === 0) return "";
-	const modeNote = mode === "advisory" ? "advisory: fold via ctx_trim_fold when context feels heavy" : "auto folding active";
-	return `[SWITCHMAN:TRIM] agent ${agent}: ${parts.join(", ")}; ${modeNote}.\n`;
 }
 
 // ---- layer ---------------------------------------------------------------------
@@ -272,21 +241,6 @@ export function applyContextTrim(ctx, config) {
 	const surfaceChannelCapable = (sessionId) => {
 		try {
 			return surfacePass.supported(sessionId);
-		} catch {
-			return false;
-		}
-	};
-	// Durable surface-channel EVIDENCE for the banner: a block that already
-	// SHIPPED a replacement (surfaceReplaced) proves the channel reaches the
-	// wire, even across a process restart and after the in-memory recency
-	// window expired. A commit-time capture (surfaceSeqs) does NOT — the block
-	// may never ship, and a capture must not silence the honest wire=raw
-	// warning. Display only — the fold gate uses the live capability probe.
-	const ledgerShowsShippedReplacement = (sessionId) => {
-		try {
-			const blocks = store.ledgerOf(sessionId)?.blocks;
-			if (!Array.isArray(blocks)) return false;
-			return blocks.some((block) => block?.surfaceReplaced !== null && block?.surfaceReplaced !== undefined);
 		} catch {
 			return false;
 		}
@@ -449,7 +403,46 @@ export function applyContextTrim(ctx, config) {
 		emergencyPercent: readNumber(config, "trimEmergencyPercent", 95),
 		protectedTail: Math.max(0, Math.round(readNumber(config, "trimProtectedTail", 6))),
 		maxFoldsPerHour: readNumber(config, "trimMaxFoldsPerHour", 6),
+		ladderT2Tokens: readNumber(config, "trimLadderT2Tokens", 8_000),
+		ladderT2MinBlocks: readNumber(config, "trimLadderT2MinBlocks", 3),
+		ladderT3Tokens: readNumber(config, "trimLadderT3Tokens", 6_000),
+		ladderT3MinBlocks: readNumber(config, "trimLadderT3MinBlocks", 2),
 	});
+	const ladderEnabledNow = () => readBool(config, "trimLadderEnabled", true);
+	/** CJK-aware summary-mass estimator for the ladder census (same units
+	 * the view estimate speaks, applied to summary text). */
+	const summaryTokensOf = (text) => messageTokens({ role: "user", content: [{ type: "text", text: typeof text === "string" ? text : "" }] });
+	/** Maximal runs of consecutive ACTIVE tier-1 / tier-2 blocks in ledger
+	 * order — the ladder's candidate consumes sets (docs/ladder-fold.md).
+	 * A run breaks on an inactive member, a tier change, or a tier-3 block
+	 * interleaving. Runs carry { consumes, mass, count }; mass is the
+	 * CJK-aware summary-mass estimate. Pure over the ledger. */
+	function ladderRunsOf(ledger) {
+		const runs = { t2: [], t3: [] };
+		if (ledger === null || !Array.isArray(ledger.blocks)) return runs;
+		let cur = null;
+		const flush = () => {
+			if (cur !== null && cur.ids.length > 0) {
+				const run = { consumes: cur.ids, mass: cur.mass, count: cur.ids.length };
+				if (cur.tier === 1) runs.t2.push(run);
+				else if (cur.tier === 2) runs.t3.push(run);
+			}
+			cur = null;
+		};
+		for (const block of ledger.blocks) {
+			const tier = block?.active === true && (block.tier === 1 || block.tier === 2) ? block.tier : null;
+			if (tier === null || (cur !== null && cur.tier !== tier)) {
+				flush();
+			}
+			if (tier !== null && cur === null) cur = { tier, ids: [], mass: 0 };
+			if (cur !== null) {
+				cur.ids.push(block.id);
+				cur.mass += summaryTokensOf(block.summary);
+			}
+		}
+		flush();
+		return runs;
+	}
 	/** Effective-window cap: explicit trimWindowTokens, else auto-follow
 	 * wmForceTokens (keeps fold tiers ahead of the handover tier). */
 	const windowCapNow = () => {
@@ -618,6 +611,37 @@ export function applyContextTrim(ctx, config) {
 	async function runFoldCycle(sessionId, decision) {
 		const capture = captures.get(sessionId);
 		if (capture === undefined) return "no-capture";
+		const { protectedTail } = thresholdsNow();
+		// Ladder cycle (docs/ladder-fold.md): distill the decision's consumed
+		// run of block summaries into ONE replacement. Never mechanical — a
+		// failed distillation skips the cycle (fail-open + failure ladder).
+		if (decision.kind === "ladder") {
+			const ledgerBefore = store.ledgerOf(sessionId);
+			const byId = new Map(Array.isArray(ledgerBefore.blocks) ? ledgerBefore.blocks.map((block) => [block.id, block]) : []);
+			const consumed = decision.consumes.map((id) => byId.get(id)).filter((block) => block !== undefined);
+			if (consumed.length !== decision.consumes.length) return "ladder-consumed-missing";
+			const llm = ctx.get("llm", false);
+			const route = sideRouteFor(sessionId);
+			const approxTokens = consumed.reduce((sum, block) => sum + (Number.isFinite(block.approxTokens) && block.approxTokens > 0 ? block.approxTokens : 0), 0);
+			const summary = await summarizeWithModel(llm, route, renderLadderMaterial(consumed), {
+				systemPrompt: LADDER_SYSTEM_PROMPT,
+				onFail: (why) => decisionLog(`session=${sessionId} summary-fail why=${why} ladder=${decision.tier}`),
+			});
+			if (summary === null) return "summary-unavailable"; // skip cycle, fail-open
+			const result = store.commitFold(
+				sessionId,
+				{ consumes: decision.consumes.slice(), summary, kind: "summary", tier: decision.tier === "ladder-3" ? 3 : 2, approxTokens },
+				null, // ladder commits validate against the ledger, never the capture
+			);
+			if (!result.ok) return `commit-rejected:${result.reason}`;
+			// Post-fold low baseline: the ladder shrinks the view; re-anchor
+			// the growth gate at the new low so it does not re-fire on stale
+			// anchor math (same pair semantics as raw folds).
+			const lowLedger = store.ledgerOf(sessionId);
+			const lowView = estimateTokensOf(buildView(capture.messages, lowLedger, { protectedTail }).messages);
+			store.recordFoldBaseline(sessionId, capture.viewTokens, lowView);
+			return `folded:${decision.tier}:${decision.consumes.length} blocks (~${approxTokens} tokens)`;
+		}
 		const { startIdx, endIdx } = decision;
 		const slice = capture.messages.slice(startIdx, endIdx + 1);
 		if (slice.length === 0) return "empty-slice";
@@ -659,7 +683,7 @@ export function applyContextTrim(ctx, config) {
 		// post-fold low (tier-a anchor — keeps the gate armed after folds
 		// that commit at high view points).
 		const lowLedger = store.ledgerOf(sessionId);
-		const lowView = estimateTokensOf(buildView(capture.messages, lowLedger, { protectedTail: thresholdsNow().protectedTail }).messages);
+		const lowView = estimateTokensOf(buildView(capture.messages, lowLedger, { protectedTail }).messages);
 		store.recordFoldBaseline(sessionId, capture.viewTokens, lowView);
 		return `folded:${decision.tier}:${count} msgs (~${approxTokens} tokens)`;
 	}
@@ -694,9 +718,9 @@ export function applyContextTrim(ctx, config) {
 		inFlight.add(sessionId);
 		try {
 			const { protectedTail, ...thresholds } = thresholdsNow();
-			const foldable = computeFoldableRange(capture.messages, store.ledgerOf(sessionId), protectedTail);
-			const windowTokens = await windowTokensFor(capture.model);
 			const ledger = store.ledgerOf(sessionId);
+			const foldable = computeFoldableRange(capture.messages, ledger, protectedTail);
+			const windowTokens = await windowTokensFor(capture.model);
 			// Pressure tiers run on the REAL prompt size when the tally is known:
 			// max(view, wire). The view estimate misses the system/context
 			// sections, so a 136k wire once read as a 50k view and the tiers
@@ -714,15 +738,18 @@ export function applyContextTrim(ctx, config) {
 				foldsThisHour: ledger.foldsThisHour,
 				lastEmergencyAt: lastEmergencyAtBySession.get(sessionId) ?? 0,
 				ledger,
+				ladderRuns: ladderEnabledNow() ? ladderRunsOf(ledger) : { t2: [], t3: [] },
 			});
 			decisionLog(`session=${sessionId} via=${via} action=${decision.action} tier=${decision.tier ?? "-"} reason=${decision.reason || "-"} view=${Math.round(capture.viewTokens)}${wireTokens === null ? "" : ` wire=${wireTokens}`} window=${windowTokens ?? "null"}`);
 			if (decision.action === "none") return;
 			const outcome = await runFoldCycle(sessionId, decision);
 			// Failure ladder: commit resets it; a summarize/commit failure
 			// climbs it (the no-backoff loop this closes — those outcomes
-			// advance no cadence gate on their own).
+			// advance no cadence gate on their own). A ladder run whose
+			// consumed blocks vanished between trigger and commit is the same
+			// family: without backoff it would re-fire at every boundary.
 			if (outcome.startsWith("folded:")) clearFoldFailure(sessionId);
-			else if (outcome === "summary-unavailable" || outcome.startsWith("commit-rejected:")) recordFoldFailure(sessionId);
+			else if (outcome === "summary-unavailable" || outcome.startsWith("commit-rejected:") || outcome === "ladder-consumed-missing") recordFoldFailure(sessionId);
 			// Outcome lands in the decision log too: warn() has no reachable
 			// sink on some hosts, and the commit/fail boundary is exactly what
 			// live diagnosis needs.
@@ -738,62 +765,16 @@ export function applyContextTrim(ctx, config) {
 
 	// ---- host registrations (each individually fail-open) --------------------
 
+	// MODEL-VISIBILITY INVARIANT: only the byte-stable protocol head is
+	// registered. The previous live context line (view tokens, % of window,
+	// folds, growth) is gone by design — water levels and progress numbers
+	// steer model judgment (bili lesson #2, docs/ladder-fold.md). Human
+	// diagnostics live in decisions.log (view-applied / decision / outcome
+	// rows) and the client badge.
 	try {
 		ctx.systemPrompt?.section?.({ name: "switchman:trim", order: 10450, interpolate: false, text: () => TRIM_PROTOCOL_TEXT });
 	} catch (error) {
 		warn(`[context-trim] systemPrompt.section failed: ${error?.message ?? error}`);
-	}
-	try {
-		ctx.systemPrompt?.context?.({
-			name: "switchman:trim",
-			order: 299,
-			required: true,
-			interpolate: false,
-			text: (context) => {
-				try {
-					const agent = context?.agent ?? null;
-					// context.agent is also the agent OBJECT — derive the id plus a
-					// display label so the banner never prints [object Object].
-					const sessionId = agentSessionIdOf(agent);
-					const label = agentLabelOf(agent);
-					const record = sessionId !== null ? metrics.of(sessionId) : null;
-					const ledger = sessionId !== null ? store.ledgerOf(sessionId) : null;
-					const model = captureModelOf(sessionId);
-					const windowTokens = model === null ? null : cachedWindowOf(model);
-					const growthBaseline = ledger !== null && Number.isFinite(ledger.lastFoldLowTokens) && ledger.lastFoldLowTokens > 0 ? ledger.lastFoldLowTokens : ledger !== null && Number.isFinite(ledger.lastFoldViewTokens) && ledger.lastFoldViewTokens > 0 ? ledger.lastFoldViewTokens : null;
-					// Honest wire status: the wire is only "raw" when NEITHER channel
-					// can reach it — a capable surface pass, or a ledger that already
-					// proves a SHIPPED replacement (a capture alone does not: it may
-					// never ship), keeps the marker off even after the in-memory
-					// recency window expired.
-					const wireRaw = recentTrimInjectOf(sessionId) === "none" && !surfaceChannelCapable(sessionId) && !ledgerShowsShippedReplacement(sessionId);
-					return renderTrimContextLine(label, {
-						enabled: enabledNow(),
-						mode: modeNow(),
-						viewTokens: record?.viewTokens ?? null,
-						windowTokens,
-						folds: Array.isArray(ledger?.blocks) ? ledger.blocks.length : 0,
-						growthTokens: record?.viewTokens !== null && record !== undefined && growthBaseline !== null ? record.viewTokens - growthBaseline : null,
-						lastModel: record?.lastModel ?? null,
-						wireRaw,
-					});
-				} catch {
-					return "";
-				}
-			},
-		});
-	} catch (error) {
-		warn(`[context-trim] systemPrompt.context failed: ${error?.message ?? error}`);
-	}
-
-	/** Synchronous window lookup for the banner: raw cache composed with
-	 *  the cap (async resolution happens in the idle path / stream path). */
-	function captureModelOf(sessionId) {
-		return captures.get(sessionId)?.model ?? null;
-	}
-	function cachedWindowOf(model) {
-		const resolved = model !== null && typeof model.provider === "string" && typeof model.model === "string" ? windowCache.get(`${model.provider}/${model.model}`)?.windowTokens ?? null : null;
-		return effectiveWindowTokens(resolved, windowCapNow());
 	}
 
 	try {
@@ -860,29 +841,55 @@ export function applyContextTrim(ctx, config) {
 
 	// ---- tools (L1 advisory surface) ------------------------------------------
 
+	/** Render the fold ledger for the status tool: ACTIVE blocks with true
+	 * sizes, absorbed history as one line. NO water level, NO fill
+	 * percentage, NO window math, NO threshold percentages — sizes of
+	 * concrete ranges are the model-facing interface (bili mechanism #5);
+	 * global progress numbers are not (lesson #2). */
+	function renderStatusLedger(ledger) {
+		const blocks = Array.isArray(ledger?.blocks) ? ledger.blocks : [];
+		const active = blocks.filter((block) => block?.active === true);
+		const absorbed = blocks.length - active.length;
+		const lines = [];
+		if (blocks.length === 0) {
+			lines.push("fold ledger: empty (nothing folded yet)");
+			return lines;
+		}
+		lines.push(`fold ledger: ${active.length} active block(s)${absorbed > 0 ? `, ${absorbed} absorbed by higher tiers` : ""} (oldest first)`);
+		for (const block of active) {
+			const tier = block.tier === 3 ? "T3" : block.tier === 2 ? "T2" : "T1";
+			const range = block.refRange !== null && block.refRange !== undefined ? ` refs [m${block.refRange.firstId}]..[m${block.refRange.lastId}]` : ` distills ${block.count} lower-tier block(s)`;
+			lines.push(`- ${block.id} ${tier}: ~${Math.round(Number.isFinite(block.approxTokens) ? block.approxTokens : 0)} tokens of material${range}${block.tier >= 2 ? ` — foldable into a higher tier together with its sibling blocks` : ""}`);
+		}
+		return lines;
+	}
+
 	try {
 		ctx.tools?.register?.({
 			name: "ctx_trim_status",
-			description: "Inspect the context-trim state of the current session: mode, thresholds, view token estimate, fold ledger, per-message refs of the captured history. Read-only.",
+			description: "List this session's compressible context ranges with their true sizes: the fold ledger, the raw range a fold would cover, and distillation targets. Read-only. Contains sizes only — never progress percentages.",
 			parameters: { type: "object", properties: {}, additionalProperties: false },
 			required: [],
 			async execute() {
 				const sessionId = sessionIdOf({});
 				if (sessionId === null) return "No session context available.";
 				const ledger = store.ledgerOf(sessionId);
-				const record = metrics.of(sessionId);
 				const capture = captures.get(sessionId);
-				const { protectedTail, ...thresholds } = thresholdsNow();
-				const lines = [
-					"ctx_trim_status",
-					`mode: ${modeNow()} (enabled: ${enabledNow()})`,
-					`view tokens (estimate): ${record?.viewTokens ?? "n/a"}`,
-					`window tokens: ${cachedWindowOf(capture?.model ?? null) ?? "unknown"}`,
-					`folds: ${Array.isArray(ledger.blocks) ? ledger.blocks.length : 0}, frontier: ${ledger.frontier ?? "none"}, last fold view tokens: ${ledger.lastFoldViewTokens || "n/a"}`,
-					`thresholds: growth>${thresholds.growthTokens} increment>=${thresholds.incrementTokens} pressure=${thresholds.pressurePercent}% emergency=${thresholds.emergencyPercent}% maxPerHour=${thresholds.maxFoldsPerHour} protectedTail=${protectedTail}`,
-				];
+				const { protectedTail } = thresholdsNow();
+				const lines = [`ctx_trim_status — mode: ${modeNow()} (enabled: ${enabledNow()})`];
+				lines.push(...renderStatusLedger(ledger));
+				// The raw range a fold would cover next, with its true size.
 				if (capture !== undefined) {
-					lines.push("", `captured history (${capture.messages.length} messages; refs [m...] are fold anchors):`);
+					const foldable = computeFoldableRange(capture.messages, ledger, protectedTail);
+					if (foldable !== null) {
+						const firstRef = refOf(capture.messages[foldable.startIdx], foldable.startIdx);
+						const lastRef = refOf(capture.messages[foldable.endIdx], foldable.endIdx);
+						lines.push("", `compressible raw range: [m${firstRef}]..[m${lastRef}] (${foldable.endIdx - foldable.startIdx + 1} messages, ~${estimateTokensOf(capture.messages, foldable.startIdx, foldable.endIdx)} tokens) — a ctx_trim_fold over this range replaces it with your summary.`);
+					} else {
+						lines.push("", "compressible raw range: none right now (everything settled is already folded).");
+					}
+					// Message refs stay available for fold targeting (sizes only).
+					lines.push("", `captured history (${capture.messages.length} messages; refs [m...] are fold anchors, per-message sizes are estimates):`);
 					capture.messages.forEach((message, i) => {
 						lines.push(`- [m${refOf(message, i)}] (${message?.role ?? "?"}) ~${estimateTokensOf(capture.messages, i, i)} tokens`);
 					});
@@ -945,7 +952,7 @@ export function applyContextTrim(ctx, config) {
 						approxTokens: estimateTokensOf(capture.messages, firstIdx, lastIdx),
 						summary: String(args.summary ?? ""),
 						kind: "summary",
-						tier: "model",
+						tier: 1,
 					},
 					positions,
 				);
@@ -1050,5 +1057,5 @@ export function applyContextTrim(ctx, config) {
 		warn(`[context-trim] ctx.inject(llm) failed: ${error?.message ?? error}`);
 	}
 
-	return { store, metrics, captures, inFlight, maybeFold, maybeInherit, applyViewToOptions, surfacePass, renderTrimContextLine: (agent) => renderTrimContextLine(agent, { enabled: enabledNow(), mode: modeNow(), viewTokens: null, windowTokens: null, folds: 0, growthTokens: null, lastModel: null, wireRaw: false }) };
+	return { store, metrics, captures, inFlight, maybeFold, maybeInherit, applyViewToOptions, surfacePass };
 }

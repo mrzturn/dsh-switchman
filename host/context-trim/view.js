@@ -8,6 +8,15 @@
  * (the golden test pins this), because a stable serialized prefix between
  * folds is exactly what keeps provider prompt-cache hits alive.
  *
+ * LADDER VIEW (docs/ladder-fold.md): the rebuild is a deterministic
+ * three-pass overlay. Pass 1 locates every T1 block — active AND consumed —
+ * on the raw messages (a consumed T1 summary is the ladder's raw material,
+ * so it must render). Pass 2 replaces each active T2 block's consumed-run
+ * summary messages with the T2 summary; pass 3 does the same for active T3
+ * blocks over the T2 summaries. Fail-open: a ladder block whose consumed
+ * run is missing, non-adjacent, or already covered is skipped for this
+ * view, never guessed.
+ *
  * Message refs: messages at the llm/stream boundary are plain JSON-ish
  * objects ({id?, role, content blocks / text}). An explicit id is trusted
  * only when it looks addressable (short, no whitespace/control chars — the
@@ -24,6 +33,13 @@
  */
 
 import { createHash } from "node:crypto";
+
+/** Ladder-block probe, inlined to keep the state.js ⇄ view.js import graph
+ * acyclic (state.js imports this module's estimators). A ladder block is
+ * an active distillation of other blocks: tier 2 or 3, no raw refRange. */
+function isLadderBlock(block) {
+	return block !== null && typeof block === "object" && (block.tier === 2 || block.tier === 3);
+}
 
 /** Cheap char → token estimate (the brief's char/4 heuristic). Applies to
  *  ASCII/latin text; CJK text tokenizes far denser (see below). */
@@ -226,14 +242,18 @@ export function rangeIsSegmentAligned(messages, startIdx, endIdx) {
 
 // ---- fold blocks ------------------------------------------------------------
 
-/** Deterministic wire text of one fold block's synthetic message. */
+/** Deterministic wire text of one fold block's synthetic message. The
+ * [SWITCHMAN:TRIM] content prefix is the downstream recognition anchor
+ * (surface.js, session tooling) and stays IDENTICAL for every tier — the
+ * ladder lives in the ledger, not in the wire text shape. */
 export function renderSummaryText(block) {
 	return `[SWITCHMAN:TRIM] ${block.summary}`;
 }
 
 /** The ONE synthetic message replacing a folded range (brief: synthetic
  * user message; id carries the acp_summary_ prefix downstream tooling
- * skips). Pure — same block, same bytes. */
+ * skips). Pure — same block, same bytes. The ladder replaces messages BY
+ * this id (id-suffix = block id), which is why ids must stay stable. */
 export function summaryMessageOf(block) {
 	return {
 		id: `acp_summary_${block.id}`,
@@ -284,20 +304,107 @@ function locateBlock(positions, block, afterIdx) {
 	return span === expected ? [firstIdx, lastIdx] : null;
 }
 
+// ---- ladder passes ------------------------------------------------------------
+
+/** Summary-id positions of one intermediate view: id suffix (the block id)
+ * -> index, for every synthetic message. One index per id (a block renders
+ * at most once — single consumption). */
+function summaryPositionsOf(messages) {
+	const prefix = "acp_summary_";
+	const positions = new Map();
+	messages.forEach((message, index) => {
+		const id = message?.id;
+		if (typeof id !== "string" || !id.startsWith(prefix)) return;
+		positions.set(id.slice(prefix.length), index);
+	});
+	return positions;
+}
+
+/** Validate one ladder block's consumed run against a positions map: every
+ * consumed id present, indices strictly consecutive ascending. Returns
+ * [firstIdx, lastIdx] or null (fail-open skip). */
+function locateLadderRun(positions, block) {
+	const consumes = Array.isArray(block?.consumes) ? block.consumes : [];
+	if (consumes.length === 0) return null;
+	let prev = null;
+	let firstIdx = -1;
+	for (const id of consumes) {
+		const at = positions.get(id);
+		if (at === undefined) return null;
+		if (prev !== null && at !== prev + 1) return null;
+		prev = at;
+		if (firstIdx < 0) firstIdx = at;
+	}
+	return [firstIdx, prev];
+}
+
+/** Apply one tier's ladder pass to the working view. Participation (docs/
+ * ladder-fold.md): ACTIVE tier-`tier` blocks replace their consumed runs —
+ * AND inactive tier-`tier` blocks consumed by an ACTIVE tier-`tier+1` block
+ * render their summary as pure ANCHOR material (a T3's consumed T2 summary
+ * must exist in the intermediate view or the T3 pass could never locate
+ * its run). Anchors replaced by the next pass do not double-count
+ * `applied`. Entries that fail their adjacency/completeness check are
+ * skipped (never guessed); valid runs are disjoint by construction (single
+ * consumption) and applied from the highest start index backward, so
+ * earlier indices stay valid while splicing. Returns the new array. */
+function applyLadderTier(messages, ladderBlocks, tier, state) {
+	if (ladderBlocks.length === 0) return messages;
+	const participants = [];
+	for (const block of ladderBlocks) {
+		if (block.tier !== tier) continue;
+		if (block.active === true) {
+			participants.push(block);
+			continue;
+		}
+		// Inactive block: an anchor only when an ACTIVE next-tier block
+		// directly consumed it.
+		const consumedByActive = ladderBlocks.some((other) => other.active === true && other.tier === tier + 1 && Array.isArray(other.consumes) && other.consumes.includes(block.id));
+		if (consumedByActive) participants.push(block);
+	}
+	if (participants.length === 0) return messages;
+	const positions = summaryPositionsOf(messages);
+	const runs = [];
+	for (const block of participants) {
+		const run = locateLadderRun(positions, block);
+		if (run === null) continue;
+		runs.push({ block, firstIdx: run[0], lastIdx: run[1] });
+	}
+	runs.sort((a, b) => b.firstIdx - a.firstIdx); // apply back-to-front
+	const out = messages.slice();
+	for (const run of runs) {
+		if (run.lastIdx >= out.length) continue;
+		// Splice the run out and drop the ladder summary in its place.
+		out.splice(run.firstIdx, run.lastIdx - run.firstIdx + 1, summaryMessageOf(run.block));
+		if (run.block.active === true) state.applied += 1;
+	}
+	return out;
+}
+
 /** Build the outbound view: apply every applicable fold block to a copy of
  * the messages array. Pure (never mutates the input; the assembly splices
- * the result into the live request array). Blocks apply in positional
- * order; a block that cannot be located, overlaps an already-applied one,
- * or reaches into the last protectedTail messages is skipped. Returns
- * { messages, applied, foldedMessages } (foldedMessages = live messages
- * the applied blocks replaced). */
+ * the result into the live request array). The rebuild is deterministic
+ * three-pass ladder overlay (docs/ladder-fold.md):
+ * 1. every T1 block — active AND consumed — locates on raw messages and
+ *    splices its summary (consumed T1 summaries are the ladder's material);
+ * 2. active T2 blocks replace their consumed runs of T1 summaries;
+ * 3. active T3 blocks replace their consumed runs of T2 summaries.
+ * A block that cannot be located, overlaps an already-applied one, or
+ * reaches into the last protectedTail messages is skipped. Returns
+ * { messages, applied, foldedMessages, unlocated } (foldedMessages = live
+ * raw messages the applied T1 blocks replaced). */
 export function buildView(messages, ledger, options = {}) {
 	const protectedTail = Number.isInteger(options.protectedTail) && options.protectedTail > 0 ? options.protectedTail : 0;
 	const blocks = Array.isArray(ledger?.blocks) ? ledger.blocks : [];
+	const t1Blocks = blocks.filter((block) => block !== null && typeof block === "object" && block.refRange !== null);
+	// Ladder blocks participate regardless of active: ACTIVE ones replace
+	// their consumed runs; INACTIVE ones may be pure anchors for the next
+	// tier's pass (applyLadderTier decides per block).
+	const ladderBlocks = blocks.filter((block) => block !== null && typeof block === "object" && isLadderBlock(block));
 	const positions = refPositions(messages);
 	const located = [];
 	let unlocated = 0;
-	for (const block of blocks) {
+	for (const block of t1Blocks) {
 		const range = locateBlock(positions, block, -1);
 		if (range !== null) located.push({ block, firstIdx: range[0], lastIdx: range[1] });
 		else unlocated += 1;
@@ -322,17 +429,26 @@ export function buildView(messages, ledger, options = {}) {
 		applied += 1;
 	}
 	for (let i = at; i < messages.length; i++) out.push(messages[i]);
-	return { messages: out, applied, foldedMessages, unlocated };
+	// Ladder passes, ascending tier (T3 anchors are T2 summaries that only
+	// exist after the T2 pass ran).
+	const ladderState = { applied };
+	let ladderOut = applyLadderTier(out, ladderBlocks, 2, ladderState);
+	ladderOut = applyLadderTier(ladderOut, ladderBlocks, 3, ladderState);
+	applied = ladderState.applied;
+	return { messages: ladderOut, applied, foldedMessages, unlocated };
 }
 
-/** Epoch-boundary detection: every block failed to LOCATE inside the current
- * re-send — the host replaced history (its own compaction) and the ledger
- * aged out as a whole. The fail-open skip stays correct, but a growth
- * baseline carried over from the previous epoch does not: the caller
- * re-anchors it exactly once per epoch. */
+/** Epoch-boundary detection: every T1 block failed to LOCATE inside the
+ * current re-send — the host replaced history (its own compaction) and the
+ * ledger aged out as a whole. Only raw-range blocks count (ladder blocks
+ * locate through their consumed T1 summaries, which the T1 pass renders);
+ * a ladder-only ledger can never read stale on its own. The fail-open skip
+ * stays correct, but a growth baseline carried over from the previous epoch
+ * does not: the caller re-anchors it exactly once per epoch. */
 export function ledgerIsStale(view, ledger) {
-	const blocksCount = Array.isArray(ledger?.blocks) ? ledger.blocks.length : 0;
-	return blocksCount > 0 && view.applied === 0 && view.unlocated === blocksCount;
+	const blocks = Array.isArray(ledger?.blocks) ? ledger.blocks : [];
+	const t1Count = blocks.filter((block) => block !== null && typeof block === "object" && block.refRange !== null).length;
+	return t1Count > 0 && view.applied === 0 && view.unlocated === t1Count;
 }
 
 /** Install the built view for one dispatch. Host immutability varies: probe

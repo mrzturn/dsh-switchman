@@ -130,10 +130,13 @@ test("full loop: auto folds commit across raw re-sends; pairs intact; banner ren
 	assert.equal(handle.captures.get("loop-1").messages.length, store.length, "capture stays RAW");
 
 	// The committed fold reshapes the very next request view (frontier
-	// resolution across raw re-sends).
+	// resolution across raw re-sends). The FIRST USER message (turn 1) is
+	// task-intent protected (docs/ladder-fold.md): it stays raw at the head
+	// and the summary lands right behind it.
 	const after1 = await turnStep();
 	assert.ok(after1.length < store.length, "view must replace the folded range");
-	assert.match(after1[0].content[0].text, /\[SWITCHMAN:TRIM\] Model fold summary\./u);
+	assert.match(after1[0].content[0].text, /^turn 1 user /u, "first user message stays raw (task-intent protection)");
+	assert.match(after1[1].content[0].text, /\[SWITCHMAN:TRIM\] Model fold summary\./u);
 
 	// Four more turns of growth, then a second auto fold past the 60s
 	// min-interval (mock clock advanced — same wall-clock test run).
@@ -154,10 +157,10 @@ test("full loop: auto folds commit across raw re-sends; pairs intact; banner ren
 		}
 	}
 
-	// Banner: the context line renders for an OBJECT agent with a name and
-	// carries the live view-reading.
-	const line = contexts[0].text({ agent: { name: "Loop Agent", session: { id: "loop-1" } } });
-	assert.match(line, /^\[SWITCHMAN:TRIM\] agent Loop Agent: view ~\d+k tokens/u);
+	// Model-invisibility invariant (docs/ladder-fold.md): the trim layer
+	// registers NO systemPrompt context — view readings, fold counts, and
+	// growth numbers never reach the model; the human reads decisions.log.
+	assert.equal(contexts.length, 0, "no model-visible trim context is registered");
 
 	// Fail-open: a summarizer that rejects must skip the fold silently.
 	prepareBroken = true;
@@ -327,9 +330,12 @@ test("wire-truth gate: frozen dispatches switch the watermark to the tally and p
 	assert.equal(recentTrimViewTokensOf("wire-1"), null, "bridge must fall back to the tally");
 	assert.equal(measureNow(meterCtx, { session: { id: "wire-1" } }), 150_000);
 
-	// The trim banner marks the meter-only state so the divergence is visible.
-	const line = contexts[0].text({ agent: { name: "Wire Agent", session: { id: "wire-1" } } });
-	assert.match(line, /wire=raw/u);
+	// The wire-truth state is human diagnostics now (decisions.log), never
+	// model-visible: the frozen dispatch logs injected=none, and the trim
+	// layer registers no context line the model could read.
+	const log = (() => { try { return readFileSync(join(stateDir, "decisions.log"), "utf8"); } catch { return ""; } })();
+	assert.match(log, /session=wire-1 view-applied [^\n]*injected=none/u, "the frozen dispatch logs injected=none for the human");
+	assert.equal(contexts.length, 0, "no model-visible trim context is registered");
 
 	// Fold cycles pause while the wire cannot carry the view: committing a
 	// block would only phantom-shrink the meter while the request stays raw.

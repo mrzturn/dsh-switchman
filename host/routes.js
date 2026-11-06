@@ -95,6 +95,24 @@ const NUMBER_FIELDS = [
 	"wmReadBudgetTokens",
 	"wmSubagentForceTokens",
 ];
+/** Trim numbers carry their own schema bounds (host/config.js), so the
+ *  shared NUMBER_FIELDS coercion (which only rejects negatives) is too
+ *  loose — these validate against each field's declared min/max. This group
+ *  MUST mirror the client page's TRIM_NUMBER_FIELDS: a field coerced here
+ *  but never sent by the client fails every fenced write (and vice versa). */
+const TRIM_NUMBER_FIELDS = [
+	{ field: "trimGrowthTokens", min: 1000, max: Number.POSITIVE_INFINITY, def: 22500 },
+	{ field: "trimIncrementTokens", min: 1000, max: Number.POSITIVE_INFINITY, def: 50000 },
+	{ field: "trimPressurePercent", min: 5, max: 100, def: 60 },
+	{ field: "trimEmergencyPercent", min: 5, max: 100, def: 95 },
+	{ field: "trimWindowTokens", min: 0, max: Number.POSITIVE_INFINITY, def: 0 },
+	{ field: "trimProtectedTail", min: 0, max: 100, def: 6 },
+	{ field: "trimMaxFoldsPerHour", min: 1, max: 60, def: 6 },
+	{ field: "trimLadderT2Tokens", min: 1000, max: Number.POSITIVE_INFINITY, def: 8000 },
+	{ field: "trimLadderT2MinBlocks", min: 2, max: 200, def: 3 },
+	{ field: "trimLadderT3Tokens", min: 1000, max: Number.POSITIVE_INFINITY, def: 6000 },
+	{ field: "trimLadderT3MinBlocks", min: 2, max: 200, def: 2 },
+];
 const BOOLEAN_FIELDS = [
 	"wmAutoHandover",
 	"wmSubagentCap",
@@ -110,6 +128,10 @@ const BOOLEAN_FIELDS = [
 	"syncWhitelist",
 	// Intent recognition (mirrors the intent* group in host/config.js).
 	"intentEnabled",
+	// Context trim switches (mirrors the trim group in host/config.js).
+	"trimEnabled",
+	"trimLadderEnabled",
+	"surfaceFold",
 ];
 /** Intent numbers carry their own schema bounds (config.js), so the shared
  *  NUMBER_FIELDS coercion (which only rejects negatives) is too loose — these
@@ -125,7 +147,7 @@ const INTENT_NUMBER_FIELDS = [
 /** Intent route references: unlike pool routes they round-trip the "unset"
  *  {provider:"", model:""} pair, so they validate against the loosened
  *  cleanIntentRoute (both keys must be strings; either may be empty). */
-const INTENT_ROUTE_FIELDS = ["intentClassifierRoute", "intentFallbackRoute"];
+const INTENT_ROUTE_FIELDS = ["intentClassifierRoute", "intentFallbackRoute", "trimSideModel"];
 /** Intent candidate list (route + optional effort/note per entry). */
 const INTENT_CANDIDATE_FIELDS = ["intentCandidates"];
 
@@ -144,7 +166,10 @@ const ENUM_FIELDS = {
 	dispatchEnforce: ["off", "advice", "enforce"],
 	wmDenyMode: ["cap", "deny"],
 	intentClassifierKind: ["chat", "systemone"],
+	trimMode: ["off", "advisory", "auto"],
 };
+/** Trim string fields (mirrors host/config.js strings). */
+const TRIM_STRING_FIELDS = ["trimStateDir"];
 
 /** JSON response helper. */
 function writeJson(res, status, payload) {
@@ -312,6 +337,7 @@ function cleanIntentCandidate(entry) {
 export function snapshotOf(config) {
 	const values = {};
 	for (const field of STRING_FIELDS) values[field] = String(rawOf(config?.[field]) ?? "");
+	for (const field of TRIM_STRING_FIELDS) values[field] = String(rawOf(config?.[field]) ?? "");
 	for (const field of POOL_FIELDS)
 		values[field] = Array.isArray(rawOf(config?.[field]))
 			? rawOf(config[field]).map(cleanRoute).filter(Boolean)
@@ -337,6 +363,11 @@ export function snapshotOf(config) {
 	values.dispatchEnforce = ENUM_FIELDS.dispatchEnforce.includes(rawOf(config?.dispatchEnforce))
 		? rawOf(config.dispatchEnforce)
 		: "advice";
+	values.trimMode = ENUM_FIELDS.trimMode.includes(rawOf(config?.trimMode)) ? rawOf(config.trimMode) : "auto";
+	for (const { field, def } of TRIM_NUMBER_FIELDS) {
+		const raw = Number(rawOf(config?.[field]));
+		values[field] = Number.isFinite(raw) ? raw : def;
+	}
 	for (const field of NUMBER_FIELDS) {
 		const raw = Number(rawOf(config?.[field]));
 		values[field] = Number.isFinite(raw) ? raw : 0;
@@ -407,6 +438,17 @@ export function coerceValues(input) {
 	values.langScope = input.langScope;
 	if (!ENUM_FIELDS.dispatchEnforce.includes(input.dispatchEnforce)) return null;
 	values.dispatchEnforce = input.dispatchEnforce;
+	if (!ENUM_FIELDS.trimMode.includes(input.trimMode)) return null;
+	values.trimMode = input.trimMode;
+	for (const field of TRIM_STRING_FIELDS) {
+		if (typeof input[field] !== "string") return null;
+		values[field] = input[field];
+	}
+	for (const { field, min, max } of TRIM_NUMBER_FIELDS) {
+		const raw = Number(input[field]);
+		if (!Number.isFinite(raw) || raw < min || raw > max) return null;
+		values[field] = raw;
+	}
 	for (const field of NUMBER_FIELDS) {
 		const raw = Number(input[field]);
 		if (!Number.isFinite(raw) || raw < 0) return null;

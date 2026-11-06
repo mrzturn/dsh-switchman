@@ -1,16 +1,20 @@
 /** dsh-switchman context-trim summarizer.
  *
- * Produces the summary text for one fold block, two ways:
+ * Produces the summary text for one fold block, three ways:
  *
  * - summarizeWithModel — the L3 path (design §5): a side-model call via
  *   llm.prepareCall + call.stream (receiver-bound on the llm service, the
  *   same waterfall pattern intent classification uses). Guarded by a hard
  *   deadline (AbortController); ANY failure (timeout, error chunk, empty
  *   output) returns null and the caller skips the fold cycle — fail-open.
+ *   Used by BOTH the raw T1 folds (renderMaterial) and the ladder T2/T3
+ *   distillations (renderLadderMaterial, LADDER_SYSTEM_PROMPT).
  * - mechanicalSummary — the deterministic fallback used by the emergency
- *   tier: structural heads of each message, no model round trip.
+ *   tier: structural heads of each message, no model round trip. Never
+ *   used for ladder folds (mechanical summary-of-summaries reclaims little
+ *   and corrupts craft — docs/ladder-fold.md).
  *
- * The summary prompt carries the bili compression rules: message refs and
+ * The summary prompts carry the bili compression rules: message refs and
  * file paths verbatim, decisions WITH rationale, exact values, open
  * objectives carry forward, verbose logs drop.
  */
@@ -101,6 +105,57 @@ export function renderMaterial(messages, startIdx, endIdx, refOf) {
 	return parts.join("");
 }
 
+/** Distillation system prompt for the ladder tiers (T2 merges active T1
+ * summaries; T3 merges active T2 summaries). The output replaces its
+ * inputs PERMANENTLY — the craft rules are the same KEEP/DROP priorities,
+ * applied one level up. */
+export const LADDER_SYSTEM_PROMPT = [
+	"You distill several context-fold summaries of one coding-agent session into ONE shorter self-contained plain-text summary that permanently replaces them.",
+	"",
+	"Treat the input summaries as facts already settled: never re-derive, never contradict, merge overlapping points.",
+	"",
+	"KEEP VERBATIM:",
+	"- Full file paths with line numbers (lib/hooks.ts:347) — never bare filenames.",
+	"- Function/class/type signatures and the critical code line that encodes a finding.",
+	"- Error messages and stack-trace key lines (exact text).",
+	"- Exact values: versions, config keys, thresholds, magic numbers.",
+	"- Decisions WITH their rationale (the because is load-bearing).",
+	"- Open objectives, unresolved TODOs, and open questions, each tagged with its original message refs.",
+	"",
+	"DROP (one line of lesson per failure stays): verbose detail once the exact value is captured, repetition between the summaries, settled exploration, process narration.",
+	"",
+	"FORMAT:",
+	"- Dense bullets, short thematic headers; no narrative prose.",
+	"- Keep the [m<ref>] anchors for anything a later step may need to unfold.",
+	"- Write the summary in the same language as the input summaries.",
+	"- Output ONLY the summary text.",
+].join("\n");
+
+/** Render the ladder distillation material for one run of consumed blocks:
+ * labeled, block-stamped sections (deterministic — same blocks, same
+ * bytes). Capped by the same material ceiling as renderMaterial. */
+export function renderLadderMaterial(blocks) {
+	const parts = [];
+	let chars = 0;
+	let truncated = false;
+	for (const block of blocks) {
+		const tier = block?.tier === 3 ? 3 : block?.tier === 2 ? 2 : 1;
+		const tokens = Number.isFinite(block?.approxTokens) ? Math.round(block.approxTokens) : "?";
+		const count = Number.isInteger(block?.count) && block.count > 0 ? block.count : "?";
+		const summary = typeof block?.summary === "string" ? block.summary : "";
+		const head = `--- [block ${block?.id ?? "?"}] (tier ${tier}, ~${tokens} tokens, ${count} msgs) ---\n`;
+		const body = `${summary}\n\n`;
+		if (chars + head.length + body.length > MAX_MATERIAL_CHARS) {
+			truncated = true;
+			break;
+		}
+		parts.push(head + body);
+		chars += head.length + body.length;
+	}
+	if (truncated) parts.push(`--- [...material truncated after ${chars} chars; ${blocks.length - parts.length} blocks dropped from this render...] ---\n`);
+	return parts.join("");
+}
+
 /** Emergency-tier mechanical summary: deterministic structural heads (no
  * model call). One line per message: ref, role, first line (capped). */
 export function mechanicalSummary(messages, startIdx, endIdx, refOf) {
@@ -129,14 +184,17 @@ export function mechanicalSummary(messages, startIdx, endIdx, refOf) {
 
 /** Side-model summary. llm: the dsh llm service (receiver-bound methods);
  * route: { provider, model } | null (null → caller skips); materialText:
- * renderMaterial output; deadlineMs: hard budget. Returns the summary
- * text, or null on ANY failure (caller skips the fold cycle). */
+ * renderMaterial output; options.systemPrompt overrides the default
+ * compression prompt (the ladder distillation passes its own); deadlineMs:
+ * hard budget. Returns the summary text, or null on ANY failure (caller
+ * skips the fold cycle). */
 export async function summarizeWithModel(llm, route, materialText, options = {}) {
 	const fail = typeof options.onFail === "function" ? options.onFail : null;
 	if (route === null || route === undefined) { fail?.("no-route"); return null; }
 	if (typeof llm?.prepareCall !== "function") { fail?.("no-prepare-call"); return null; }
 	const deadlineMs = Number.isFinite(options.deadlineMs) && options.deadlineMs > 0 ? options.deadlineMs : SUMMARY_TIMEOUT_MS;
 	const maxTokens = Number.isFinite(options.maxTokens) && options.maxTokens > 0 ? options.maxTokens : 8_192;
+	const systemPrompt = typeof options.systemPrompt === "string" && options.systemPrompt !== "" ? options.systemPrompt : SUMMARY_SYSTEM_PROMPT;
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(new Error("trim summary deadline")), deadlineMs);
 	try {
@@ -154,7 +212,7 @@ export async function summarizeWithModel(llm, route, materialText, options = {})
 		// source tag, exactly like the intent classifier's proven shape.
 		const streamOptions = {
 			...call.config,
-			system: SUMMARY_SYSTEM_PROMPT,
+			system: systemPrompt,
 			messages: [
 				{ id: randomUUID(), role: "user", content: [{ type: "text", text: materialText }], source: { kind: "dsh-switchman-trim-summary" } },
 			],

@@ -159,7 +159,11 @@ export function resolveInheritance(parentLedger, parentId, childId, childMessage
 		version: LEDGER_VERSION,
 		sessionId: childId,
 		blocks: blocks.map((block) => {
-			const clone = { ...block, refRange: { ...block.refRange } };
+			// [2026-11-07]-[v2 ladder blocks carry refRange: null]-[spreading
+			// null produced {} on the clone, which slipped past the view's
+			// `refRange !== null` T1 filter and inflated the unlocated count
+			// (a phantom epoch signal); ladder clones must keep null]
+			const clone = { ...block, refRange: block.refRange !== null && block.refRange !== undefined ? { ...block.refRange } : null };
 			delete clone.surfaceSeqs;
 			delete clone.surfaceReplaced;
 			delete clone.surfaceSkip;

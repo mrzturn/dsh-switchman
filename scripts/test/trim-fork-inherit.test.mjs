@@ -216,7 +216,7 @@ describe("resolveInheritance", () => {
 		const outcome = resolveInheritance(parent, "parent-1", "child-1", childMessages, 77_000);
 		assert.equal(outcome.ok, true);
 		const ledger = outcome.ledger;
-		assert.equal(ledger.version, 1);
+		assert.equal(ledger.version, 2);
 		assert.equal(ledger.sessionId, "child-1");
 		assert.equal(ledger.frontier, parent.frontier, "frontier carried verbatim");
 		assert.equal(ledger.lastFoldViewTokens, 9_000);

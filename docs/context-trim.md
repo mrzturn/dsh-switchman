@@ -1,9 +1,12 @@
 # Context-trim design — inject contract, wire-truth gate, surface shipping
 
-Status: reflects the shipped design as of **v1.10.2** — v1.9.1 (inject contract
-+ wire-truth gate), v1.10.0 (surface-replace ship pass), and the 2026-11-05
+Status: reflects the shipped design as of **v1.11.0** — v1.9.1 (inject contract
++ wire-truth gate), v1.10.0 (surface-replace ship pass), the 2026-11-05
 post-1.10.1 fixes (durable-capability fold gate, live re-location of stale
-captures, provider-tally wire metrics). Authoritative implementation:
+captures, provider-tally wire metrics), and v1.11.0 (T1/T2/T3 ladder folding +
+the model-invisibility invariant — see
+[docs/ladder-fold.md](./ladder-fold.md); this page keeps the pre-ladder
+mechanics that still apply verbatim). Authoritative implementation:
 `host/context-trim/index.js`, `host/context-trim/surface.js` and
 `host/context-trim/metrics.js`; the surface pass, its post-fix behavior and
 the trigger-math nits are specified in depth in
@@ -194,14 +197,17 @@ Consequences:
   uncached delta and silently skips its tiers;
 - the growth tier still subtracts the VIEW-unit anchor `lastFoldLowTokens` (see
   Known limitations);
-- the banner prints `view ~Nk tokens (P% of window W)` plus `folds N` and
-  `growth ~Nk since last fold`; it does not print the wire number, and the
-  `wire=raw` marker follows the durable-evidence rule above.
+- the former banner (`view ~Nk tokens (P% of window W)` + folds + growth) is
+  removed in v1.11: no trim numbers reach the model; the `wire=raw` marker is
+  gone with it — the injected=none rows in `decisions.log` carry that truth.
 
 ## Triggers and constants
 
 Defaults, no overrides (`host/config.js` holds the schema; the numbers below are
-the effective values).
+the effective values). v1.11 adds the ladder tiers AFTER these (docs/
+ladder-fold.md): ladder T2/T3 distillation, gated on active-summary token
+mass (8000/6000) and block-count floors (3/2), each on a 120 s interval after
+any fold; they fire only when the raw tiers stay quiet.
 
 | Gate / constant | Value | Code | Notes |
 | --- | --- | --- | --- |
@@ -288,6 +294,11 @@ all.
   the 50 most recently active sessions (`metrics.js:78`); a session absent from
   it reports no `wire=` until its next response lands, and a restart starts the
   tally empty. Missing `wire=` is not evidence of a broken channel.
+- **v1.11 note:** the model-visible `[SWITCHMAN:TRIM]` context line (view
+  tokens / % of window / folds / growth) is GONE — the engine never reports
+  sizes or progress to the model (docs/ladder-fold.md). The human reads
+  `decisions.log` and the client badge. The task-intent line (the first user
+  message) is protected from folding.
 
 ## What the current design supersedes
 

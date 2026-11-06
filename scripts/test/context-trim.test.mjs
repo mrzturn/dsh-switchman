@@ -13,7 +13,7 @@ import { createStore, emptyLedger, normalizeBlock } from "../../host/context-tri
 import { computeFoldableRange, evaluateTrigger, FOLD_MIN_INTERVAL_MS, EMERGENCY_COOLDOWN_MS } from "../../host/context-trim/trigger.js";
 import { mechanicalSummary, renderMaterial, SUMMARY_SYSTEM_PROMPT, MAX_MATERIAL_CHARS } from "../../host/context-trim/summarizer.js";
 import { createMetrics, extractUsage, promptTokensOf, wrapStreamForMetrics } from "../../host/context-trim/metrics.js";
-import { applyContextTrim, renderTrimContextLine, effectiveWindowTokens, TRIM_PROTOCOL_TEXT } from "../../host/context-trim/index.js";
+import { applyContextTrim, effectiveWindowTokens, TRIM_PROTOCOL_TEXT } from "../../host/context-trim/index.js";
 
 /** Build a deterministic message list (no ids — refs must hash stably). */
 function makeMessages(n, seed = 0) {
@@ -347,21 +347,26 @@ describe("state: ledger store", () => {
 		const ok = normalizeBlock({ refRange: { firstId: "a", lastId: "b" }, count: 2, summary: " text " }, now);
 		assert.equal(ok.summary, "text");
 		assert.equal(ok.kind, "summary");
-		assert.equal(ok.tier, "model");
+		assert.equal(ok.tier, 1, "legacy tier strings normalize to the T1 numeric tier");
+		assert.equal(ok.active, true);
+		assert.deepEqual(ok.consumes, []);
 		assert.equal(ok.createdAt, now);
+		assert.equal(normalizeBlock({ refRange: { firstId: "a", lastId: "b" }, count: 2, summary: "x", tier: "emergency" }, now).tier, 1);
+		assert.equal(normalizeBlock({ consumes: ["b1"], summary: "x", tier: 2 }, now), null, "ladder candidates take the commit path, not this normalizer");
 	});
 
 	test("emptyLedger shape", () => {
 		const ledger = emptyLedger("sx");
-		assert.deepEqual(ledger, { version: 1, sessionId: "sx", blocks: [], frontier: null, lastFoldViewTokens: 0, lastFoldLowTokens: 0, lastFoldAt: 0, foldsThisHour: [], inheritedFrom: null, inheritedAt: 0 });
+		assert.deepEqual(ledger, { version: 2, sessionId: "sx", blocks: [], frontier: null, lastFoldViewTokens: 0, lastFoldLowTokens: 0, lastFoldAt: 0, foldsThisHour: [], inheritedFrom: null, inheritedAt: 0 });
 	});
 });
 
 describe("trigger: tiers and gates", () => {
 	const base = {
-		// Fattened so the 50k-token increment gate trips: ~34 folded
-		// messages x ~1500 tokens each ≈ 51k >= 50k.
-		messages: makeMessages(40).map((m, i) => ({ ...m, content: [{ type: "text", text: "g".repeat(6000) + "-" + i }] })),
+		// Fattened so the 50k-token increment gate trips even with the
+		// task-intent line excluded: ~33 folded messages x ~1525 tokens
+		// each ≈ 50.3k >= 50k.
+		messages: makeMessages(40).map((m, i) => ({ ...m, content: [{ type: "text", text: "g".repeat(6100) + "-" + i }] })),
 		viewTokens: 100_000,
 		windowTokens: 200_000, // 50% usage
 		thresholds: { growthTokens: 22_500, incrementTokens: 50_000, pressurePercent: 75, emergencyPercent: 95, maxFoldsPerHour: 6 },
@@ -375,9 +380,11 @@ describe("trigger: tiers and gates", () => {
 		return computeFoldableRange(messages, { frontier: null }, 6);
 	}
 
-	test("computeFoldableRange respects frontier and protected tail", () => {
+	test("computeFoldableRange respects frontier, task-intent protection, and protected tail", () => {
 		const messages = makeMessages(20);
-		assert.deepEqual(computeFoldableRange(messages, null, 6), { startIdx: 0, endIdx: 13 });
+		// The first user message (task intent) is protected: the range starts
+		// after it (docs/ladder-fold.md).
+		assert.deepEqual(computeFoldableRange(messages, null, 6), { startIdx: 1, endIdx: 13 });
 		const frontierLedger = { frontier: refOf(messages[9], 9) };
 		assert.deepEqual(computeFoldableRange(messages, frontierLedger, 6), { startIdx: 10, endIdx: 13 });
 		assert.equal(computeFoldableRange(makeMessages(5), null, 6), null); // tail covers all
@@ -395,8 +402,8 @@ describe("trigger: tiers and gates", () => {
 		// a frontier already past the head is untouched by the clamp
 		const mid = computeFoldableRange(messages, { frontier: refOf(messages[4], 4) }, 6);
 		assert.deepEqual(mid, { startIdx: 5, endIdx: 14 });
-		// no leading system message keeps the old behavior
-		assert.deepEqual(computeFoldableRange(makeMessages(20), null, 6), { startIdx: 0, endIdx: 13 });
+		// no leading system message: only the task-intent line protects index 0
+		assert.deepEqual(computeFoldableRange(makeMessages(20), null, 6), { startIdx: 1, endIdx: 13 });
 	});
 
 	test("growth tier fires only above BOTH gates", () => {
@@ -556,24 +563,16 @@ describe("summarizer: material render and mechanical fallback", () => {
 	});
 });
 
-describe("banner line", () => {
-	test("renderTrimContextLine is silent when disabled, off, or unmeasured", () => {
-		assert.equal(renderTrimContextLine("agent-1", { enabled: false, mode: "auto", viewTokens: 10_000, windowTokens: 100_000, folds: 0, growthTokens: null, lastModel: null }), "");
-		assert.equal(renderTrimContextLine("agent-1", { enabled: true, mode: "off", viewTokens: 10_000, windowTokens: 100_000, folds: 0, growthTokens: null, lastModel: null }), "");
-		assert.equal(renderTrimContextLine("agent-1", { enabled: true, mode: "auto", viewTokens: null, windowTokens: null, folds: 0, growthTokens: null, lastModel: null }), "");
+describe("model visibility", () => {
+	test("the trim layer registers no systemPrompt context (numbers never reach the model)", () => {
+		const { ctx, contexts } = mockCtxSimple();
+		applyContextTrim(ctx, { trimEnabled: true, trimMode: "auto" });
+		assert.equal(contexts.length, 0, "no model-visible trim context is registered");
 	});
-	test("emits bucketed view + folds + mode note", () => {
-		const line = renderTrimContextLine("agent-1", { enabled: true, mode: "auto", viewTokens: 46_800, windowTokens: 200_000, folds: 2, growthTokens: 23_000, lastModel: { provider: "p", model: "m1" } });
-		assert.match(line, /^\[SWITCHMAN:TRIM\] agent agent-1: /u);
-		assert.match(line, /view ~47k tokens \(23% of window 200k\)/u);
-		assert.match(line, /folds 2/u);
-		assert.match(line, /auto folding active/u);
-		const again = renderTrimContextLine("agent-1", { enabled: true, mode: "auto", viewTokens: 46_800, windowTokens: 200_000, folds: 2, growthTokens: 23_000, lastModel: { provider: "p", model: "m1" } });
-		assert.equal(line, again);
-	});
-	test("advisory mode note", () => {
-		const line = renderTrimContextLine("a", { enabled: true, mode: "advisory", viewTokens: 5_000, windowTokens: 200_000, folds: 0, growthTokens: null, lastModel: null });
-		assert.match(line, /advisory/u);
+	test("the protocol head stays digit-free and states the no-numbers policy", () => {
+		assert.match(TRIM_PROTOCOL_TEXT, /\[SWITCHMAN:TRIM\]/u);
+		assert.doesNotMatch(TRIM_PROTOCOL_TEXT, /\d/u);
+		assert.match(TRIM_PROTOCOL_TEXT, /never reports sizes, percentages, or progress/u);
 	});
 	test("window cap composes as min(resolved, cap)", () => {
 		assert.equal(effectiveWindowTokens(512_000, 150_000), 150_000);
@@ -584,15 +583,26 @@ describe("banner line", () => {
 		assert.equal(effectiveWindowTokens(0, 0), null);
 		assert.equal(effectiveWindowTokens(-5, 150_000), 150_000);
 	});
-	test("banner flags unknown window instead of staying silent", () => {
-		const line = renderTrimContextLine("a", { enabled: true, mode: "auto", viewTokens: 90_000, windowTokens: null, folds: 0, growthTokens: null, lastModel: null });
-		assert.match(line, /view ~90k tokens \(window unknown — pressure tiers off\)/u);
-	});
-	test("protocol head is digit-free and byte-stable", () => {
-		assert.match(TRIM_PROTOCOL_TEXT, /\[SWITCHMAN:TRIM\]/u);
-		assert.doesNotMatch(TRIM_PROTOCOL_TEXT, /\d/u);
-	});
 });
+
+/** Minimal one-shot ctx for registration-shape tests. */
+function mockCtxSimple() {
+	const sections = [];
+	const contexts = [];
+	const ctx = {
+		log: { warn: () => {} },
+		agents: { currentInitiator: () => null },
+		systemPrompt: {
+			section: (s) => sections.push(s),
+			context: (c) => contexts.push(c),
+		},
+		on: () => {},
+		tools: { register: () => {} },
+		get: () => null,
+		inject: () => {},
+	};
+	return { ctx, sections, contexts };
+}
 
 describe("assembly: applyContextTrim with a mock ctx", () => {
 	/** Minimal mock of the host surface (intent-layer test pattern). */
@@ -636,7 +646,7 @@ describe("assembly: applyContextTrim with a mock ctx", () => {
 		trimStateDir: mkdtempSync(join(tmpdir(), "trim-live-")),
 	};
 
-	test("registers prompt section, context line, tools, and the llm listener", () => {
+	test("registers the prompt section, tools, and the llm listener — and NO model-visible context", () => {
 		const mounted = [];
 		const { ctx, sections, contexts, hooks, registeredTools, injects } = mockCtx({
 			llmFiber: { on: (event, fn) => mounted.push([event, fn]), off: () => {}, effect: () => {} },
@@ -645,8 +655,10 @@ describe("assembly: applyContextTrim with a mock ctx", () => {
 		assert.equal(sections.length, 1);
 		assert.equal(sections[0].name, "switchman:trim");
 		assert.equal(sections[0].text(), TRIM_PROTOCOL_TEXT);
-		assert.equal(contexts.length, 1);
-		assert.equal(typeof contexts[0].text({ agent: "agent-1" }), "string");
+		// Model-invisibility invariant (docs/ladder-fold.md): no context
+		// registration — water levels and progress numbers never reach the
+		// model; the human reads decisions.log and the client badge.
+		assert.equal(contexts.length, 0);
 		assert.equal(typeof hooks["agent/status"], "function");
 		assert.ok(registeredTools.some((t) => t.name === "ctx_trim_status"));
 		assert.ok(registeredTools.some((t) => t.name === "ctx_trim_fold"));

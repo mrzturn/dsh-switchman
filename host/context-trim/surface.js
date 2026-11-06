@@ -68,12 +68,29 @@
  * - Never append while a durable compaction/start..compaction/end lock pair
  *   is open for the session (design constraint).
  *
+ * LADDER SHIP (docs/ladder-fold.md): tier ≥ 2 blocks ride the same pair,
+ * but their material is the REPLACEMENT NODES their consumed blocks shipped
+ * (each consumed block's surfaceReplaced marker carries atSeq). The span
+ * from the first to the last replacement node must contain EXACTLY the
+ * consumed replacement nodes — engine folds are frontier-ordered, nothing
+ * can legitimately interleave, and any mismatch tombstones
+ * (ladder-span-mismatch / ladder-span-gone / ladder-consumed-skipped)
+ * instead of guessing. A ladder block whose consumed blocks have not
+ * shipped yet stays pending: they sit EARLIER in the same sweep (ledger
+ * order) and ship before it is reached again on a later sweep.
+ *
  * Everything fails open: a missing agents service / session.append / surface
  * support degrades to today's behavior (wire=raw banner + tally watermark),
  * and every no-op with pending work is logged to decisions.log.
  */
 
 import { refOf, summaryMessageOf } from "./view.js";
+
+/** Ladder-block probe (tier ≥ 2): a distillation whose surface material is
+ * the REPLACEMENT NODES of its consumed blocks, not a raw ref range. */
+function isLadderBlock(block) {
+	return block !== null && typeof block === "object" && (block.tier === 2 || block.tier === 3);
+}
 
 // ---- tool-pair closure ------------------------------------------------------
 
@@ -667,6 +684,159 @@ export function createSurfaceFoldPass(deps = {}) {
 		let headIsSystem = headNodeIsSystem(session, nodes);
 		let shipped = 0;
 		for (const block of pending) {
+			// ---- LADDER BRANCH (tier ≥ 2, docs/ladder-fold.md) --------------
+			// A distillation's surface material is the REPLACEMENT NODES of its
+			// consumed blocks (each carries a surfaceReplaced marker with the
+			// replacement event seq). The span from the first to the last
+			// replacement node must contain EXACTLY those nodes — engine folds
+			// are frontier-ordered, so nothing can legitimately interleave —
+			// and every mismatch tombstones instead of guessing.
+			if (isLadderBlock(block)) {
+				const consumedIds = Array.isArray(block.consumes) ? block.consumes : [];
+				const byId = new Map(blocks.map((entry) => [entry?.id, entry]));
+				const consumed = consumedIds.map((id) => byId.get(id));
+				if (consumed.some((entry) => entry === undefined || entry === null)) {
+					block.surfaceSkip = { reason: "ladder-consumed-skipped", contentGeneration: liveGeneration, at: Date.now() };
+					try {
+						store.persist(ledger);
+					} catch {
+						/* best effort */
+					}
+					skip(sessionId, "ladder-consumed-skipped", via, `block=${block.id}`);
+					continue;
+				}
+				const waiting = consumed.find((entry) => entry.surfaceReplaced === null || entry.surfaceReplaced === undefined);
+				if (waiting !== undefined) {
+					if (tombstoneOf(waiting) !== null) {
+						// A consumed block is hard-skipped on this generation: its
+						// replacement node can never materialize, so the ladder span
+						// can never be exact. Generation-keyed like every skip — a
+						// surface change re-opens both blocks.
+						block.surfaceSkip = { reason: "ladder-consumed-skipped", contentGeneration: liveGeneration, at: Date.now() };
+						try {
+							store.persist(ledger);
+						} catch {
+							/* best effort */
+						}
+						skip(sessionId, "ladder-consumed-skipped", via, `block=${block.id} consumed=${waiting.id}`);
+					}
+					// Otherwise the consumed block is still pending and sits EARLIER
+					// in this loop (ledger order): it ships — or skips — before this
+					// iteration reaches the ladder block again on a later sweep.
+					continue;
+				}
+				const indexOfSeq = new Map(nodes.map((seq, index) => [seq, index]));
+				const atSeqs = [];
+				let unresolved = null;
+				for (const entry of consumed) {
+					const atSeq = Number.isFinite(entry.surfaceReplaced.atSeq) ? entry.surfaceReplaced.atSeq : null;
+					if (atSeq === null || !indexOfSeq.has(atSeq)) {
+						unresolved = entry;
+						break;
+					}
+					atSeqs.push(atSeq);
+				}
+				if (unresolved !== null) {
+					// A consumed replacement node left the live surface (host
+					// compaction shadowed it): the span is unreconstructable.
+					block.surfaceSkip = { reason: "ladder-span-gone", contentGeneration: liveGeneration, at: Date.now() };
+					try {
+						store.persist(ledger);
+					} catch {
+						/* best effort */
+					}
+					skip(sessionId, "ladder-span-gone", via, `block=${block.id} consumed=${unresolved.id}`);
+					continue;
+				}
+				const nodeIndexes = atSeqs.map((seq) => indexOfSeq.get(seq));
+				const ladderFirstIdx = Math.min(...nodeIndexes);
+				const ladderLastIdx = Math.max(...nodeIndexes);
+				const spanSeqs = nodes.slice(ladderFirstIdx, ladderLastIdx + 1);
+				const expectedSeqs = new Set(atSeqs);
+				let spanExact = spanSeqs.length === atSeqs.length && spanSeqs.every((seq) => expectedSeqs.has(seq));
+				if (spanExact) {
+					for (let i = ladderFirstIdx; i <= ladderLastIdx; i++) {
+						const message = nodeMessages[i];
+						if (message === null || message === undefined || typeof message.id !== "string" || !message.id.startsWith("acp_summary_")) {
+							spanExact = false;
+							break;
+						}
+					}
+				}
+				if (!spanExact) {
+					block.surfaceSkip = { reason: "ladder-span-mismatch", contentGeneration: liveGeneration, at: Date.now() };
+					try {
+						store.persist(ledger);
+					} catch {
+						/* best effort */
+					}
+					skip(sessionId, "ladder-span-mismatch", via, `block=${block.id}`);
+					continue;
+				}
+				// Defensive system-head clamp (a summary node can never be node
+				// 0 — T1 folds start after the head — but a drift-hostile guard
+				// costs one comparison).
+				if (headIsSystem && ladderFirstIdx === 0) {
+					block.surfaceSkip = { reason: "system-head", contentGeneration: liveGeneration, at: Date.now() };
+					try {
+						store.persist(ledger);
+					} catch {
+						/* best effort */
+					}
+					skip(sessionId, "system-head", via, `block=${block.id} ladder`);
+					continue;
+				}
+				const ladderStartSeq = nodes[ladderFirstIdx];
+				const ladderEndSeq = nodes[ladderLastIdx];
+				const ladderKey = replacedKey(sessionId, ladderStartSeq, ladderEndSeq, liveGeneration);
+				if (wasReplaced(ladderKey)) continue; // belt over the durable marker
+				try {
+					session.append("compaction/prune", {
+						shadowedRange: { start: ladderStartSeq, end: ladderEndSeq },
+						shadowedSeqs: spanSeqs,
+						shadowedTokenCount: Number.isFinite(block.approxTokens) && block.approxTokens > 0 ? Math.round(block.approxTokens) : spanSeqs.length,
+					});
+					const event = session.append("user/message", replacementMessageOf(block), {
+						surfaceOp: { op: "replace", startSeq: ladderStartSeq, endSeq: ladderEndSeq },
+						sourceEventSeqs: spanSeqs,
+					});
+					block.surfaceReplaced = {
+						startSeq: ladderStartSeq,
+						endSeq: ladderEndSeq,
+						seqs: spanSeqs.slice(),
+						contentGeneration: liveGeneration,
+						atSeq: Number.isFinite(event?.seq) ? event.seq : null,
+						via,
+						at: Date.now(),
+					};
+					delete block.surfaceSkip;
+					rememberReplaced(ladderKey);
+					shipped += 1;
+					// Same post-ship snapshot refresh as the T1 branch: the
+					// shadowed seqs left surface.nodes.
+					nodes = surface.nodes.slice();
+					pairs = derivingPairsOf(session, nodes);
+					nodeMessages = denseMessagesOf(pairs, nodes.length);
+					headIsSystem = headNodeIsSystem(session, nodes);
+					liveGeneration = Number.isFinite(surface.contentGeneration) ? surface.contentGeneration : 0;
+					decisionLog(`session=${sessionId} surface-replace startSeq=${ladderStartSeq} endSeq=${ladderEndSeq} seqs=${spanSeqs.length} tokens=${Number.isFinite(block.approxTokens) ? Math.round(block.approxTokens) : "?"} generation=${liveGeneration} ladder=${block.tier} via=${via}`);
+					try {
+						store.persist(ledger);
+					} catch {
+						/* the in-memory marker still guards this process */
+					}
+				} catch (error) {
+					const message = String(error?.message ?? error).replace(/\s+/g, " ").slice(0, 160);
+					block.surfaceSkip = { reason: `append-rejected:${message}`, contentGeneration: liveGeneration, at: Date.now() };
+					try {
+						store.persist(ledger);
+					} catch {
+						/* best effort */
+					}
+					skip(sessionId, `append-rejected:${message}`, via, `block=${block.id} ladder=${block.tier}`);
+				}
+				continue;
+			}
 			// Resolve the shadow range: stored capture first (validated dense
 			// against the LIVE surface). A stale/incomplete capture — or a
 			// capture-less legacy block — falls back to live location, but ONLY
