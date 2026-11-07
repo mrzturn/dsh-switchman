@@ -165,6 +165,10 @@ All keys live in Settings → dsh-switchman; defaults from `host/config.js`:
 - `npm pack --dry-run` should keep the audited 60-file / ~380 kB tarball shape (~1.26 MB unpacked). `docs/` stays out of the package (it is not in `package.json files`), while the 11 `README.*` translations are always shipped by npm.
 - **Zero runtime dependencies — a hard invariant.** Host-plane packages (`@deepseek-ai/schemastery`, cordis, …) are declared as `peerDependencies` only, and the running DSH satisfies them from its own copy. An ordinary `dependencies` entry is physically installed into the profile workspace (`<profile>/node_modules/…`), where it shadows the host's copy for every other profile-resident plugin — this is exactly what crashed the dshmarket plugin market while 1.7.0 carried schemastery as a dependency (two schemastery instances in one process; the market's schemas no longer matched the host's). `scripts/validate.mjs` fails if a `dependencies` entry ever reappears, so installing, updating, or removing dsh-switchman can never touch what dshmarket or any other community bundle resolves at runtime.
 
+## Acknowledgments
+
+The tiered folding design (T1/T2/T3) was inspired by [billion-context](https://github.com/ranxianglei/billion-context) — thank you for open-sourcing the idea.
+
 ## License
 
 MIT
