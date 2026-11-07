@@ -347,6 +347,7 @@ window.__ModuleLoader__.load({
 			'trimLadderEnabled',
 			'surfaceFold',
 			'trimSideModel',
+			'trimFoldFallbackModel',
 			'trimStateDir',
 			...TRIM_NUMBER_FIELDS.map(({ field }) => field),
 			'teamsMode',
@@ -524,6 +525,9 @@ window.__ModuleLoader__.load({
 				trimSideModel:
 					sanitizeRoute(value?.trimSideModel) ??
 					({ provider: '', model: '' }),
+					trimFoldFallbackModel:
+						sanitizeRoute(value?.trimFoldFallbackModel) ??
+						({ provider: '', model: '' }),
 				trimStateDir: string('trimStateDir'),
 				...Object.fromEntries(
 					TRIM_NUMBER_FIELDS.map((spec) => [spec.field, number(spec)]),
@@ -607,6 +611,7 @@ window.__ModuleLoader__.load({
 				trimLadderEnabled: values.trimLadderEnabled,
 				surfaceFold: values.surfaceFold,
 				trimSideModel: routeKey(values.trimSideModel),
+				trimFoldFallbackModel: routeKey(values.trimFoldFallbackModel),
 				trimStateDir: values.trimStateDir,
 				...Object.fromEntries(
 					TRIM_NUMBER_FIELDS.map(({ field }) => [field, values[field]]),
@@ -905,7 +910,11 @@ window.__ModuleLoader__.load({
 				surfaceFoldLabel: '把折叠写入会话表面',
 				surfaceFoldHelp: '追加宿主风格的替换事件，让折叠在冻结派发下也能到达线上。建议保持开启。',
 				trimSideModelLabel: '摘要模型',
-				trimSideModelHelp: '折叠摘要使用的模型路由；留空 = 会话当前模型。阶梯蒸馏同样使用该路由。',
+				trimSideModelHelp: '折叠摘要使用的模型路由；默认「跟随会话模型」。阶梯蒸馏同样使用该路由。',
+				trimFollowSession: '跟随会话模型',
+				trimFoldFallbackModelLabel: '折叠异常兜底模型',
+				trimFoldFallbackModelHelp: '摘要模型调用失败时改用该模型重试；仍失败则压力折叠退回机械折叠。尽量选择没有冷却、风控或并发限制的模型，避免与主会话共用同一账号。留空 = 无兜底。',
+				trimFallbackUnset: '未设置（失败时直接机械折叠）',
 				trimStateDirLabel: '账本目录',
 				trimStateDirHelp: '留空 = 默认的裁剪状态目录。',
 				trimProtectedTailLabel: '保护尾部（条数）',
@@ -1168,7 +1177,12 @@ window.__ModuleLoader__.load({
 					'Append host-style replace events so folds reach the wire even on frozen dispatches. Leave on.',
 				trimSideModelLabel: 'Summarizer model',
 				trimSideModelHelp:
-					'Route for fold summaries; empty = the session model. Also used by ladder distillations.',
+					'Route for fold summaries; defaults to following the session model. Also used by ladder distillations.',
+				trimFollowSession: 'Follow session model',
+				trimFoldFallbackModelLabel: 'Fold fallback model',
+				trimFoldFallbackModelHelp:
+					'When the summary route fails, the fold retries on this model before degrading a pressure fold to a mechanical one. Prefer a model with headroom on cooldowns, risk control, and concurrency limits — avoid sharing the pinned account with the main session. Empty = no fallback leg.',
+				trimFallbackUnset: 'Unset (failed folds go straight to mechanical)',
 				trimStateDirLabel: 'Ledger directory',
 				trimStateDirHelp: 'Empty = the default per-host trim state directory.',
 				trimProtectedTailLabel: 'Protected tail (messages)',
@@ -1433,7 +1447,11 @@ window.__ModuleLoader__.load({
 				surfaceFoldLabel: '把摺疊寫入會話表面',
 				surfaceFoldHelp: '追加宿主風格的替換事件，讓摺疊在凍結派發下也能到達線上。建議保持開啟。',
 				trimSideModelLabel: '摘要模型',
-				trimSideModelHelp: '摺疊摘要使用的模型路由；留空 = 會話當前模型。階梯蒸餾同樣使用該路由。',
+				trimSideModelHelp: '摺疊摘要使用的模型路由；預設「跟隨對話模型」。階梯蒸餾同樣使用該路由。',
+				trimFollowSession: '跟隨對話模型',
+				trimFoldFallbackModelLabel: '摺疊異常備援模型',
+				trimFoldFallbackModelHelp: '摘要模型呼叫失敗時改用該模型重試；仍失敗則壓力摺疊退回機械摺疊。盡量選擇沒有冷卻、風控或並行限制的模型，避免與主對話共用同一帳號。留空 = 無備援。',
+				trimFallbackUnset: '未設定（失敗時直接機械摺疊）',
 				trimStateDirLabel: '帳本目錄',
 				trimStateDirHelp: '留空 = 預設的裁剪狀態目錄。',
 				trimProtectedTailLabel: '保護尾部（條數）',
@@ -5325,6 +5343,10 @@ window.__ModuleLoader__.load({
 					provider: values.trimSideModel.provider,
 					model: values.trimSideModel.model,
 				},
+				trimFoldFallbackModel: {
+					provider: values.trimFoldFallbackModel.provider,
+					model: values.trimFoldFallbackModel.model,
+				},
 				trimStateDir: values.trimStateDir,
 				...Object.fromEntries(
 					TRIM_NUMBER_FIELDS.map(({ field }) => [field, values[field]]),
@@ -5786,6 +5808,78 @@ window.__ModuleLoader__.load({
 						},
 						...intentModelOptions(route.provider, route.model),
 					),
+				);
+			};
+			/** Trim route rows reuse the intent route picker machinery — the
+			 *  provider/model option lists are session-wide, only the ids and
+			 *  bound field differ. The summarizer row leads with a "follow
+			 *  session model" sentinel standing for the empty route; the
+			 *  fallback row keeps a plain unset option (empty = no fallback). */
+			const TRIM_ROUTE_FOLLOW = '\0follow';
+			const trimProviderOptions = (followMode, current) => [
+				...(followMode
+					? [h('option', { key: 'follow', value: TRIM_ROUTE_FOLLOW }, t('trimFollowSession'))]
+					: [h('option', { value: '' }, t('intentRouteUnset'))]),
+				...intentProviderOptions(current).filter(
+					(opt) => opt && opt.props && opt.props.value !== '',
+				),
+			];
+			const trimModelOptions = (followMode, route, current) => [
+				...(followMode
+					? [h('option', { key: 'follow', value: TRIM_ROUTE_FOLLOW }, t('trimFollowSession'))]
+					: [h('option', { value: '' }, t('intentRouteUnset'))]),
+				...intentModelOptions(route.provider, current).filter(
+					(opt) => opt && opt.props && opt.props.value !== '',
+				),
+			];
+			const trimRouteControl = (field, label, followMode) => {
+				const route = values[field];
+				return h(
+					'div',
+					{ style: { display: 'flex', gap: '6px', minWidth: 0 } },
+					h('select', {
+						...selectProps(
+							`${trimId}-${field}-provider`,
+							followMode && route.provider === ''
+								? TRIM_ROUTE_FOLLOW
+								: route.provider,
+							(next) => {
+								if (followMode && next === TRIM_ROUTE_FOLLOW) {
+									edit(field, { provider: '', model: '' });
+									return;
+								}
+								if (!followMode && next === '') {
+									edit(field, { provider: '', model: '' });
+									return;
+								}
+								const kept = intentModelsFor(next).some(
+									(meta) => meta.model === route.model,
+								);
+								edit(field, {
+									provider: next,
+									model: kept ? route.model : '',
+								});
+							},
+						),
+						'aria-label': `${label} · provider`,
+					}, ...trimProviderOptions(followMode, route.provider)),
+					h('select', {
+						...selectProps(
+							`${trimId}-${field}-model`,
+							followMode && route.model === ''
+								? TRIM_ROUTE_FOLLOW
+								: route.model,
+							(next) => {
+								if (followMode && next === TRIM_ROUTE_FOLLOW) {
+									edit(field, { ...route, model: '' });
+									return;
+								}
+								edit(field, { ...route, model: next });
+							},
+						),
+						disabled: !editable || route.provider === '',
+						'aria-label': `${label} · model`,
+					}, ...trimModelOptions(followMode, route, route.model)),
 				);
 			};
 			/** Reasoning-effort select for one intent route: the model's
@@ -6804,6 +6898,42 @@ window.__ModuleLoader__.load({
 						}),
 						lines: [],
 					}),
+						h(SettingsRow, {
+							key: 'trimSideModel',
+							id: `${trimId}-trimSideModel`,
+							label: t('trimSideModelLabel'),
+							help: t('trimSideModelHelp'),
+							control: trimRouteControl('trimSideModel', t('trimSideModelLabel'), true),
+							lines:
+								values.trimSideModel.provider === '' || values.trimSideModel.model === ''
+									? [{ text: t('trimFollowSession'), invalid: false }]
+									: [
+										{
+											text: t('currentValue', {
+												value: `${values.trimSideModel.provider}/${values.trimSideModel.model}`,
+											}),
+											invalid: false,
+										},
+									],
+						}),
+						h(SettingsRow, {
+							key: 'trimFoldFallbackModel',
+							id: `${trimId}-trimFoldFallbackModel`,
+							label: t('trimFoldFallbackModelLabel'),
+							help: t('trimFoldFallbackModelHelp'),
+							control: trimRouteControl('trimFoldFallbackModel', t('trimFoldFallbackModelLabel'), false),
+							lines:
+								values.trimFoldFallbackModel.provider === '' || values.trimFoldFallbackModel.model === ''
+									? [{ text: t('trimFallbackUnset'), invalid: false }]
+									: [
+										{
+											text: t('currentValue', {
+												value: `${values.trimFoldFallbackModel.provider}/${values.trimFoldFallbackModel.model}`,
+											}),
+											invalid: false,
+										},
+									],
+						}),
 					...TRIM_NUMBER_FIELDS.map((spec) =>
 						h(SettingsRow, {
 							key: spec.field,
