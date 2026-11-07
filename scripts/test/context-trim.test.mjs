@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { refOf, buildView, injectView, ledgerIsStale, segmentBounds, rangeIsSegmentAligned, estimateTokensOf, replaceInPlace, summaryMessageOf, renderSummaryText, refPositions } from "../../host/context-trim/view.js";
 import { createStore, emptyLedger, normalizeBlock } from "../../host/context-trim/state.js";
 import { computeFoldableRange, evaluateTrigger, FOLD_MIN_INTERVAL_MS, EMERGENCY_COOLDOWN_MS } from "../../host/context-trim/trigger.js";
-import { mechanicalSummary, renderMaterial, SUMMARY_SYSTEM_PROMPT, MAX_MATERIAL_CHARS } from "../../host/context-trim/summarizer.js";
+import { mechanicalSummary, renderMaterial, summarizeWithModel, SUMMARY_SYSTEM_PROMPT, MAX_MATERIAL_CHARS, TRUNCATED_SUMMARY_MARK } from "../../host/context-trim/summarizer.js";
 import { createMetrics, extractUsage, promptTokensOf, wrapStreamForMetrics } from "../../host/context-trim/metrics.js";
 import { applyContextTrim, effectiveWindowTokens, TRIM_PROTOCOL_TEXT } from "../../host/context-trim/index.js";
 
@@ -946,4 +946,27 @@ test('ledger round-trip preserves lastFoldLowTokens across reload', () => {
 	const reloaded = createStore({ stateDir: join(dir, 'trim') }).ledgerOf('sess-rt');
 	assert.equal(reloaded.lastFoldLowTokens, 9136);
 	assert.equal(reloaded.lastFoldViewTokens, 91557);
+});
+
+test('summarizer: a length-finished summary is marked truncated, not silently committed (inspection S2)', async () => {
+	const route = { provider: 'p', model: 'm' };
+	const llmFor = (chunks) => ({
+		prepareCall: async () => ({ config: {}, stream: async function* () { yield* chunks; } }),
+	});
+	const marked = await summarizeWithModel(llmFor([
+		{ type: 'text-delta', text: 'Partial summary.' },
+		{ type: 'finish', kind: 'length' },
+	]), route, 'material');
+	assert.ok(marked.startsWith(TRUNCATED_SUMMARY_MARK), 'length finish must carry the truncation mark');
+	assert.ok(marked.includes('Partial summary.'), 'the partial text survives under the mark');
+	const clean = await summarizeWithModel(llmFor([
+		{ type: 'text-delta', text: 'Full summary.' },
+		{ type: 'finish' },
+	]), route, 'material');
+	assert.equal(clean, 'Full summary.', 'a normal finish must stay unmarked');
+	const stillNull = await summarizeWithModel(llmFor([
+		{ type: 'text-delta', text: '   ' },
+		{ type: 'finish', kind: 'length' },
+	]), route, 'material');
+	assert.equal(stillNull, null, 'empty output stays a failure regardless of finish kind');
 });

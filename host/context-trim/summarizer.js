@@ -7,6 +7,9 @@
  *   same waterfall pattern intent classification uses). Guarded by a hard
  *   deadline (AbortController); ANY failure (timeout, error chunk, empty
  *   output) returns null and the caller skips the fold cycle — fail-open.
+ *   A length-finished (output-limit) summary is NOT a failure: it returns
+ *   the text prefixed with TRUNCATED_SUMMARY_MARK so the missing tail
+ *   stays visible (inspection S2).
  *   Used by BOTH the raw T1 folds (renderMaterial) and the ladder T2/T3
  *   distillations (renderLadderMaterial, LADDER_SYSTEM_PROMPT).
  * - mechanicalSummary — the deterministic fallback used by the emergency
@@ -28,6 +31,14 @@ export const SUMMARY_TIMEOUT_MS = 120_000;
 /** Material cap: beyond this the render keeps head+tail and marks the cut
  * (a 1M-token material would burn the side-model call for no fidelity). */
 export const MAX_MATERIAL_CHARS = 400_000;
+
+/** Prefix for a summary whose side-model output ended early (finish=length):
+ * the text otherwise reads as settled fact while its tail is missing — and
+ * ladder T2/T3 distillation builds on summaries as established facts, so
+ * the gap must stay visible on the wire. Prefixed, not rejected: the fold
+ * still relieves pressure, and re-running at the same maxTokens would
+ * truncate again. (inspection S2) */
+export const TRUNCATED_SUMMARY_MARK = "[truncated summary: the summarizer's output hit its limit (finish=length) — content after the cut may be missing] ";
 
 /** System prompt for the side-model summarizer. English per repo docs
  * style; the OUTPUT language follows the summarized material. */
@@ -222,7 +233,7 @@ export async function summarizeWithModel(llm, route, materialText, options = {})
 			(controls) => controls,
 		);
 		let text = "";
-			let finishKind = null;
+		let finishKind = null;
 		// stream options MUST carry the prepared call config — the adapter
 		// dispatch binds credentials/routing from it (same waterfall shape as
 		// the intent classifier; dropping it fails prepare-time integrity).
@@ -245,6 +256,10 @@ export async function summarizeWithModel(llm, route, materialText, options = {})
 		}
 		const summary = text.trim();
 		if (summary === "") { fail?.(`empty-output finish=${finishKind ?? "none"}`); return null; }
+		// A length finish means the tail of the material never got summarized,
+		// yet the text that DID land reads as settled fact — mark it so every
+		// later consumer (view rendering, ladder distillation) sees the gap.
+		if (finishKind === "length") return `${TRUNCATED_SUMMARY_MARK}${summary}`;
 		return summary;
 	} catch (error) {
 		fail?.(`error: ${error?.message ?? error}`);
