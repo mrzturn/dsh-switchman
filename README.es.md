@@ -86,7 +86,7 @@ La cabecera de la sesión da un feedback visual claro: la insignia ⚡ «equipo 
 bash <install-dir>/skills/db-query/scripts/setup.sh
 ```
 
-**Recomendaciones para el clasificador:** para desplegar el modelo de decisión en local, lo recomendable es servir `tev1:4b-mxfp8` con Ollama: elige el tipo de clasificador «endpoint de decisión (systemone)», rellena el endpoint con `http://127.0.0.1:11434/v1/systemone` y pon `tev1:4b-mxfp8` como nombre del modelo. Si vas con el clasificador de chat del catálogo LLM, mejor un modelo pequeño en la nube, o un modelo local pequeño sin capacidad de pensamiento (razonamiento): desactivar el pensamiento reduce a la vez la latencia y la tasa de fallos por timeout de clasificación.
+**Recomendaciones para el clasificador:** para desplegar el modelo de decisión en local, lo recomendable es servir `d3:4b-mxfp8` con Ollama: elige el tipo de clasificador «endpoint de decisión (systemone)», rellena el endpoint con `http://127.0.0.1:11434/v1/systemone` y pon `d3:4b-mxfp8` como nombre del modelo. Si vas con el clasificador de chat del catálogo LLM, mejor un modelo pequeño en la nube, o un modelo local pequeño sin capacidad de pensamiento (razonamiento): desactivar el pensamiento reduce a la vez la latencia y la tasa de fallos por timeout de clasificación.
 
 ## Configuración predeterminada
 

@@ -86,7 +86,7 @@ dsh-switchman은 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harn
 bash <설치-디렉터리>/skills/db-query/scripts/setup.sh
 ```
 
-**분류기 모델 선택 가이드**: 결정 모델을 로컬에서 운영하려면 Ollama로 `tev1:4b-mxfp8`을 실행하는 것을 권장한다. 분류기 유형은 '판정 엔드포인트(systemone)'를 선택하고, 엔드포인트에는 `http://127.0.0.1:11434/v1/systemone`, 모델 이름에는 `tev1:4b-mxfp8`을 입력한다. LLM 카탈로그의 chat 분류기를 쓴다면 클라우드 소형 모델이나 추론 기능이 없는 로컬 소형 모델을 권장한다 — 추론을 끄면 지연과 분류 타임아웃 실패율을 동시에 낮출 수 있다.
+**분류기 모델 선택 가이드**: 결정 모델을 로컬에서 운영하려면 Ollama로 `d3:4b-mxfp8`을 실행하는 것을 권장한다. 분류기 유형은 '판정 엔드포인트(systemone)'를 선택하고, 엔드포인트에는 `http://127.0.0.1:11434/v1/systemone`, 모델 이름에는 `d3:4b-mxfp8`을 입력한다. LLM 카탈로그의 chat 분류기를 쓴다면 클라우드 소형 모델이나 추론 기능이 없는 로컬 소형 모델을 권장한다 — 추론을 끄면 지연과 분류 타임아웃 실패율을 동시에 낮출 수 있다.
 
 ## 기본 설정
 

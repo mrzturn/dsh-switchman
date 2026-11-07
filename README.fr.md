@@ -86,7 +86,7 @@ Un seul modèle ? Ça vaut quand même l'installation — le contrôle du niveau
 bash <install-dir>/skills/db-query/scripts/setup.sh
 ```
 
-**Conseils de choix du classificateur :** pour déployer le modèle de décision en local, le plus simple est de servir `tev1:4b-mxfp8` avec Ollama : choisissez le type de classificateur « endpoint de décision (systemone) », renseignez l'endpoint avec `http://127.0.0.1:11434/v1/systemone` et indiquez `tev1:4b-mxfp8` comme nom de modèle. Avec le classificateur de chat du catalogue LLM, privilégiez un petit modèle cloud, ou un petit modèle local sans capacité de réflexion (raisonnement) : désactiver la réflexion réduit à la fois la latence et le taux d'échecs par timeout de classification.
+**Conseils de choix du classificateur :** pour déployer le modèle de décision en local, le plus simple est de servir `d3:4b-mxfp8` avec Ollama : choisissez le type de classificateur « endpoint de décision (systemone) », renseignez l'endpoint avec `http://127.0.0.1:11434/v1/systemone` et indiquez `d3:4b-mxfp8` comme nom de modèle. Avec le classificateur de chat du catalogue LLM, privilégiez un petit modèle cloud, ou un petit modèle local sans capacité de réflexion (raisonnement) : désactiver la réflexion réduit à la fois la latence et le taux d'échecs par timeout de classification.
 
 ## Configuration par défaut
 

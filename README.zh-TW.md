@@ -86,7 +86,7 @@ dsh-switchman 是一個 [DeepSeek Harness](https://github.com/deepseek-ai/deepse
 bash <安裝目錄>/skills/db-query/scripts/setup.sh
 ```
 
-**分類器選型建議**：若要在本機部署決策模型，建議用 Ollama 執行 `tev1:4b-mxfp8`：分類器類型選「決策端點（systemone）」，端點填 `http://127.0.0.1:11434/v1/systemone`，模型名稱填 `tev1:4b-mxfp8`。若走 LLM 目錄的 chat 分類器，建議選雲端小模型，或不帶思考（推理）能力的本機小模型——關閉思考可同時壓低延遲與分類逾時失敗率。
+**分類器選型建議**：若要在本機部署決策模型，建議用 Ollama 執行 `d3:4b-mxfp8`：分類器類型選「決策端點（systemone）」，端點填 `http://127.0.0.1:11434/v1/systemone`，模型名稱填 `d3:4b-mxfp8`。若走 LLM 目錄的 chat 分類器，建議選雲端小模型，或不帶思考（推理）能力的本機小模型——關閉思考可同時壓低延遲與分類逾時失敗率。
 
 ## 預設配置
 

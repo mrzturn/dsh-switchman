@@ -86,7 +86,7 @@ Worth installing even with a single model — watermark control and tiered verif
 bash <install-dir>/skills/db-query/scripts/setup.sh
 ```
 
-**Classifier model tips:** to run the decision model locally, serve `tev1:4b-mxfp8` with Ollama — set the classifier kind to the decision endpoint (systemone), fill the endpoint with `http://127.0.0.1:11434/v1/systemone`, and set the model name to `tev1:4b-mxfp8`. For the chat classifier from the LLM catalog, prefer a small cloud model, or a small local model without thinking (reasoning) — turning thinking off lowers both latency and the classification-timeout failure rate.
+**Classifier model tips:** to run the decision model locally, serve `d3:4b-mxfp8` with Ollama — set the classifier kind to the decision endpoint (systemone), fill the endpoint with `http://127.0.0.1:11434/v1/systemone`, and set the model name to `d3:4b-mxfp8`. For the chat classifier from the LLM catalog, prefer a small cloud model, or a small local model without thinking (reasoning) — turning thinking off lowers both latency and the classification-timeout failure rate.
 
 ## Default configuration
 

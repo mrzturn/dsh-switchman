@@ -86,7 +86,7 @@ Auch mit nur einem Modell lohnt sich die Installation — Wasserstandskontrolle 
 bash <Installationsverzeichnis>/skills/db-query/scripts/setup.sh
 ```
 
-**Empfehlung zur Klassifikator-Wahl:** Wer das Entscheidungsmodell lokal betreiben will, fährt am besten `tev1:4b-mxfp8` mit Ollama — als Klassifikatortyp „Entscheidungs-Endpunkt (systemone)“ wählen, als Endpunkt `http://127.0.0.1:11434/v1/systemone` und als Modellnamen `tev1:4b-mxfp8` eintragen. Für den Chat-Klassifikator aus dem LLM-Katalog empfiehlt sich ein kleines Cloud-Modell oder ein kleines lokales Modell ohne Thinking- (Reasoning-)Fähigkeit — abgeschaltetes Thinking senkt Latenz und die Timeout-Fehlerrate der Klassifikation zugleich.
+**Empfehlung zur Klassifikator-Wahl:** Wer das Entscheidungsmodell lokal betreiben will, fährt am besten `d3:4b-mxfp8` mit Ollama — als Klassifikatortyp „Entscheidungs-Endpunkt (systemone)“ wählen, als Endpunkt `http://127.0.0.1:11434/v1/systemone` und als Modellnamen `d3:4b-mxfp8` eintragen. Für den Chat-Klassifikator aus dem LLM-Katalog empfiehlt sich ein kleines Cloud-Modell oder ein kleines lokales Modell ohne Thinking- (Reasoning-)Fähigkeit — abgeschaltetes Thinking senkt Latenz und die Timeout-Fehlerrate der Klassifikation zugleich.
 
 ## Standardkonfiguration
 

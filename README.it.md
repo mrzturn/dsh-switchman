@@ -86,7 +86,7 @@ Un solo modello? Vale comunque la pena installarlo — il controllo del livello 
 bash <install-dir>/skills/db-query/scripts/setup.sh
 ```
 
-**Consigli sulla scelta del classificatore:** per far girare il modello di decisione in locale, la scelta consigliata è servire `tev1:4b-mxfp8` con Ollama: imposta il tipo di classificatore su «endpoint di decisione (systemone)», compila l'endpoint con `http://127.0.0.1:11434/v1/systemone` e indica `tev1:4b-mxfp8` come nome del modello. Con il classificatore di chat del catalogo LLM, meglio un piccolo modello cloud, o un piccolo modello locale senza capacità di pensiero (ragionamento): disattivare il pensiero riduce insieme la latenza e il tasso di fallimenti per timeout di classificazione.
+**Consigli sulla scelta del classificatore:** per far girare il modello di decisione in locale, la scelta consigliata è servire `d3:4b-mxfp8` con Ollama: imposta il tipo di classificatore su «endpoint di decisione (systemone)», compila l'endpoint con `http://127.0.0.1:11434/v1/systemone` e indica `d3:4b-mxfp8` come nome del modello. Con il classificatore di chat del catalogo LLM, meglio un piccolo modello cloud, o un piccolo modello locale senza capacità di pensiero (ragionamento): disattivare il pensiero riduce insieme la latenza e il tasso di fallimenti per timeout di classificazione.
 
 ## Configurazione predefinita
 

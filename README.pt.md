@@ -86,7 +86,7 @@ Só um modelo? Ainda vale a pena instalar — o controle do nível de água e a 
 bash <install-dir>/skills/db-query/scripts/setup.sh
 ```
 
-**Dicas de escolha do classificador:** para rodar o modelo de decisão localmente, o recomendado é servir `tev1:4b-mxfp8` com Ollama: escolha o tipo de classificador “endpoint de decisão (systemone)”, preencha o endpoint com `http://127.0.0.1:11434/v1/systemone` e coloque `tev1:4b-mxfp8` como nome do modelo. Se preferir o classificador de chat do catálogo LLM, aposte em um modelo pequeno na nuvem, ou em um modelo local pequeno sem capacidade de pensamento (raciocínio): desligar o pensamento reduz ao mesmo tempo a latência e a taxa de falhas por timeout de classificação.
+**Dicas de escolha do classificador:** para rodar o modelo de decisão localmente, o recomendado é servir `d3:4b-mxfp8` com Ollama: escolha o tipo de classificador “endpoint de decisão (systemone)”, preencha o endpoint com `http://127.0.0.1:11434/v1/systemone` e coloque `d3:4b-mxfp8` como nome do modelo. Se preferir o classificador de chat do catálogo LLM, aposte em um modelo pequeno na nuvem, ou em um modelo local pequeno sem capacidade de pensamento (raciocínio): desligar o pensamento reduz ao mesmo tempo a latência e a taxa de falhas por timeout de classificação.
 
 ## Configuração padrão
 
