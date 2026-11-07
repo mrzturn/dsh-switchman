@@ -726,15 +726,38 @@ export function createSurfaceFoldPass(deps = {}) {
 					continue;
 				}
 				const indexOfSeq = new Map(nodes.map((seq, index) => [seq, index]));
+				// Summary-message id positions on the LIVE surface: the
+				// replacement message (acp_summary_<blockId>, deterministic body)
+				// is content-stable, so a branch/compaction that re-projected the
+				// surface invalidates the stored atSeqs but NOT the identity of
+				// the replacement nodes — the same re-location-not-re-target rule
+				// the T1 stale-capture path follows.
+				// [2026-11-07]-[observed live: a DSH branch rebuilt the surface
+				// projection, orphaning every T1 atSeq and tombstoning the pending
+				// T2 as ladder-span-gone forever]-[id re-location lets the ladder
+				// ship after any surface re-projection; the spanExact id-set check
+				// below keeps it exact.]
+				const idIndexOf = new Map();
+				for (let i = 0; i < nodeMessages.length; i++) {
+					const message = nodeMessages[i];
+					if (message !== null && typeof message === "object" && typeof message.id === "string" && message.id.startsWith("acp_summary_")) {
+						idIndexOf.set(message.id, i);
+					}
+				}
 				const atSeqs = [];
 				let unresolved = null;
 				for (const entry of consumed) {
 					const atSeq = Number.isFinite(entry.surfaceReplaced.atSeq) ? entry.surfaceReplaced.atSeq : null;
-					if (atSeq === null || !indexOfSeq.has(atSeq)) {
+					if (atSeq !== null && indexOfSeq.has(atSeq)) {
+						atSeqs.push(atSeq);
+						continue;
+					}
+					const relocatedIdx = idIndexOf.get(`acp_summary_${entry.id}`);
+					if (relocatedIdx === undefined) {
 						unresolved = entry;
 						break;
 					}
-					atSeqs.push(atSeq);
+					atSeqs.push(nodes[relocatedIdx]);
 				}
 				if (unresolved !== null) {
 					// A consumed replacement node left the live surface (host
@@ -754,6 +777,20 @@ export function createSurfaceFoldPass(deps = {}) {
 				const spanSeqs = nodes.slice(ladderFirstIdx, ladderLastIdx + 1);
 				const expectedSeqs = new Set(atSeqs);
 				let spanExact = spanSeqs.length === atSeqs.length && spanSeqs.every((seq) => expectedSeqs.has(seq));
+				// Id-set exactness: after id re-location the span must contain
+				// EXACTLY the consumed blocks' summary messages — a span that
+				// picked up a stranger's acp_summary node is not this fold's
+				// material (the length check alone cannot tell them apart).
+				if (spanExact) {
+					const expectedIds = new Set(consumed.map((entry) => `acp_summary_${entry.id}`));
+					for (let i = ladderFirstIdx; i <= ladderLastIdx; i++) {
+						const message = nodeMessages[i];
+						if (message === null || message === undefined || typeof message.id !== "string" || !expectedIds.has(message.id)) {
+							spanExact = false;
+							break;
+						}
+					}
+				}
 				if (spanExact) {
 					for (let i = ladderFirstIdx; i <= ladderLastIdx; i++) {
 						const message = nodeMessages[i];
