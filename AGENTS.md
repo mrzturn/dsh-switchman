@@ -30,6 +30,14 @@
 - **容器不变量**：loader 要求**第一个 zstd frame 恰好是 header 行**，其后各帧拼接解码。把整个日志重新压成单帧会报 `corrupt Zstandard session log: first frame is not exactly one header line`——即使事件内容合法也加载不了。修复脚本用 `scripts/session-log-frames.mjs` 让 header 单独成帧，并且验证**最终产物**（含帧布局），不是明文预览。
 - 路径：会话日志在 `~/.dsh/sessions/<workspace-encoded>/<session-id>/session.v4.jsonl.zstd`；`session.lock` 是写租约残留，0 字节不代表锁死。
 
+## 发版流程：GitHub Actions 自动发版（不要本地 npm publish）
+
+- **发版 = GitHub 工作流自动完成，本地永远不要跑 `npm publish`**（本地无凭证，跑了必失败）。
+- 流程：确认 `package.json` 的 version 与 `CHANGELOG.md` 就绪 → 创建 GitHub Release（tag 形如 `v1.11.0`，**tag 必须与 package.json version 严格一致**，工作流第一步就校验）→ 工作流在 `release-publish` environment 等人工批准 → 批准后自动 npm publish（OIDC trusted publishing，无需 NPM_TOKEN）。
+- 工作流文件：`.github/workflows/publish.yml`（release published 事件触发；仅 `target_commitish == 'main'` 的 release 会发布，dev 分支 release 被忽略）。工作流内会跑 `validate.mjs` 与 pack 形状检查（docs/ 不得进包）。
+- 创建 Release 用 `gh`（已登录）：`gh release create v<version> --target main --title "..." --notes-file <双语 notes 文件>`。发布后到 Actions 页面（或 `gh run watch`）等 environment 批准。
+- 常见坑：tag 打在了非 main 提交上 → 工作流直接跳过；忘改 package.json version → 校验步失败。发版前先确认工作区干净、main 已推送。
+
 ## 零运行时依赖不变量（dshmarket 冲突事故，2026-10）
 
 - **本包永远不得声明普通 `dependencies`。** 宿主平面包（`@deepseek-ai/schemastery`、cordis、dsh-*）一律 `peerDependencies`，运行时由 DSH 自带副本满足（app-boot 的 profile 解析：profile 内 importer 的本地 node_modules 命中优先于宿主解析表 → 普通依赖会被装进 `<profile>/node_modules/@deepseek-ai/` 并对**所有** profile 驻留包遮蔽宿主副本）。
