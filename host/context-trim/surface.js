@@ -635,12 +635,25 @@ export function createSurfaceFoldPass(deps = {}) {
 		if (typeof sessionId !== "string" || sessionId === "") return 0;
 		const ledger = store.ledgerOf(sessionId);
 		const blocks = Array.isArray(ledger.blocks) ? ledger.blocks : [];
+		// [2026-11-07]-[hintless sweeps used a null generation, so
+		// generation-keyed tombstones could NEVER re-open]-[the idle sweep
+		// passes no sessionHint: every tombstone (incomplete-seqs,
+		// tool-pair-unclosed, append-rejected, ...) was filtered out forever
+		// even after the surface changed (inspection P1-8). Fall back to the
+		// live session's generation when the hint does not carry one.]
 		const generation = (() => {
 			try {
-				return Number.isFinite(sessionHint?.surface?.contentGeneration) ? sessionHint.surface.contentGeneration : null;
+				if (Number.isFinite(sessionHint?.surface?.contentGeneration)) return sessionHint.surface.contentGeneration;
 			} catch {
-				return null;
+				/* fall through to the live lookup */
 			}
+			try {
+				const live = surfaceCapable(sessionHint) ? sessionHint : sessionOf(sessionId);
+				if (live !== null && typeof live === "object" && Number.isFinite(live.surface?.contentGeneration)) return live.surface.contentGeneration;
+			} catch {
+				/* unreadable session: null, fail-open */
+			}
+			return null;
 		})();
 		const pending = blocks.filter((block) => {
 			if (block?.surfaceReplaced !== null && block?.surfaceReplaced !== undefined) return false;
