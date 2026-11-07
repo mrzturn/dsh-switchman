@@ -130,6 +130,7 @@ bash <インストールディレクトリ>/skills/db-query/scripts/setup.sh
 | `trimProtectedTail` | `6` | 最後の N メッセージは決して fold されない。 |
 | `trimMaxFoldsPerHour` | `6` | ローリング1時間あたりのサイドモデル fold ペース上限（緊急段は対象外）。 |
 | `trimSideModel` | 未設定 | サマリを書くサイドモデルのルート。空欄 = セッションの現在モデルを継承。 |
+| `trimFoldFallbackModel` | 未設定 | サマリのサイドモデルが失敗したときに折り畳みが再試行するルート。プレッシャー段でも失敗すると機械折り畳みに縮退。空欄 = フォールバックなし。クールダウン・リスク制御・同時実行に余裕のあるルートを推奨。 |
 | `trimStateDir` | 未設定 | fold 状態ディレクトリの上書き。空欄 = `<dshHome>/.dsh-switchman/state/trim/`。 |
 | `surfaceFold` | `true` | コミット済みの fold をセッション表面へ出荷します（shadow-price 計量イベント + `surfaceOp` replace イベントのペア）。OFF はスプライスのみの view を維持。 |
 

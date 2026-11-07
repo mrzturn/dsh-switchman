@@ -130,6 +130,7 @@ Tutte le chiavi stanno in Impostazioni → dsh-switchman; i valori predefiniti v
 | `trimProtectedTail` | `6` | Gli ultimi N messaggi non vengono mai ripiegati. |
 | `trimMaxFoldsPerHour` | `6` | Tetto di cadenza dei fold per ora mobile per il modello secondario (quelli di emergenza ne sono esenti). |
 | `trimSideModel` | non impostata | Route del modello secondario che scrive i riassunti. Vuota = eredita il modello attuale della sessione. |
+| `trimFoldFallbackModel` | non impostata | Route di ripiego quando il modello secondario dei riassunti fallisce; un fold di pressione degrada quindi a meccanico. Vuota = nessun fallback. Scegli una route con margine su cooldown, risk control e concorrenza. |
 | `trimStateDir` | non impostata | Sostituisce la directory dello stato dei fold. Vuota = `<dshHome>/.dsh-switchman/state/trim/`. |
 | `surfaceFold` | `true` | Spedisce i fold confermati sulla superficie della sessione (coppia di eventi: misurazione shadow-price + replace `surfaceOp`). OFF mantiene la vista a solo splice. |
 

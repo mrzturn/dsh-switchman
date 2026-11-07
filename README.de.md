@@ -130,6 +130,7 @@ Alle Schlüssel liegen unter Einstellungen → dsh-switchman; Defaults aus `host
 | `trimProtectedTail` | `6` | Die letzten N Nachrichten werden nie gefaltet. |
 | `trimMaxFoldsPerHour` | `6` | Fold-Takt-Obergrenze pro rollierender Stunde für Nebenmodell-Folds (Notfall-Folds ausgenommen). |
 | `trimSideModel` | nicht gesetzt | Route des zusammenfassenden Nebenmodells. Leer = das aktuelle Session-Modell erben. |
+| `trimFoldFallbackModel` | nicht gesetzt | Route, mit der der Fold den Zusammenfassungs-Versuch wiederholt; scheitert auch sie, degradiert ein Pressure-Fold zu mechanischem Folding. Leer = kein Fallback. Route mit Spielraum bei Cooldowns, Risikokontrolle und Concurrency wählen. |
 | `trimStateDir` | nicht gesetzt | Überschreibt das Fold-Zustandsverzeichnis. Leer = `<dshHome>/.dsh-switchman/state/trim/`. |
 | `surfaceFold` | `true` | Liefert committete Folds auf die Session-Oberfläche aus (Shadow-Price-Messereignis + `surfaceOp`-Replace-Ereignispaar). OFF behält die rein gesplicte View. |
 

@@ -130,6 +130,7 @@ bash <安裝目錄>/skills/db-query/scripts/setup.sh
 | `trimProtectedTail` | `6` | 最後 N 則訊息永不折疊。 |
 | `trimMaxFoldsPerHour` | `6` | 每滾動小時 side model 折疊的節奏上限（緊急級豁免）。 |
 | `trimSideModel` | 未設定 | 寫摘要的 side model 路由。留空 = 繼承對話目前模型。 |
+| `trimFoldFallbackModel` | 未設定 | 摘要 side model 失敗時摺疊改用的重試路由；壓力檔仍失敗則退回機械摺疊。留空 = 無備援。盡量選擇冷卻、風控與並行餘量充足的路由。 |
 | `trimStateDir` | 未設定 | 折疊狀態目錄覆蓋。留空 = `<dshHome>/.dsh-switchman/state/trim/`。 |
 | `surfaceFold` | `true` | 把已提交的 fold 送上對話表面（shadow-price 計量事件 + `surfaceOp` replace 事件對）。關閉則維持僅拼接的 view。 |
 

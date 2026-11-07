@@ -130,6 +130,7 @@ bash <설치-디렉터리>/skills/db-query/scripts/setup.sh
 | `trimProtectedTail` | `6` | 마지막 N개 메시지는 절대 fold되지 않는다. |
 | `trimMaxFoldsPerHour` | `6` | 롤링 1시간당 사이드 모델 fold 케이던스 상한(비상 단계는 제외). |
 | `trimSideModel` | 미설정 | 요약을 쓰는 사이드 모델 라우트. 비어 있으면 세션의 현재 모델을 상속. |
+| `trimFoldFallbackModel` | 미설정 | 요약 사이드 모델 실패 시 폴드가 재시도하는 라우트. 프레셔 단계에서도 실패하면 기계 폴드로 강등. 비어 있으면 폴백 없음. 쿨다운·리스크 컨트롤·동시 실행에 여유가 있는 라우트 권장. |
 | `trimStateDir` | 미설정 | fold 상태 디렉터리 재정의. 비어 있으면 `<dshHome>/.dsh-switchman/state/trim/`. |
 | `surfaceFold` | `true` | 커밋된 fold를 세션 표면으로 발송(shadow-price 계량 이벤트 + `surfaceOp` replace 이벤트 쌍). OFF는 스플라이스 전용 view를 유지. |
 

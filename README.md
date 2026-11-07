@@ -130,6 +130,7 @@ All keys live in Settings → dsh-switchman; defaults from `host/config.js`:
 | `trimProtectedTail` | `6` | The last N messages are never folded. |
 | `trimMaxFoldsPerHour` | `6` | Side-model fold cadence cap per rolling hour (emergency folds are exempt). |
 | `trimSideModel` | unset | Route for the summary side model. Empty = inherit the session's current model. |
+| `trimFoldFallbackModel` | unset | Route the fold retries on when the summary side model fails; a pressure fold then degrades to a mechanical one. Empty = no fallback leg. Pick a route with headroom on cooldowns, risk control, and concurrency limits. |
 | `trimStateDir` | unset | Fold-state directory override. Empty = `<dshHome>/.dsh-switchman/state/trim/`. |
 | `surfaceFold` | `true` | Ship committed folds onto the session surface (shadow-price + `surfaceOp` replace event pair). OFF keeps the splice-only view. |
 

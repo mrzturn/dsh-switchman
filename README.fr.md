@@ -130,6 +130,7 @@ Toutes les clés vivent dans Réglages → dsh-switchman ; les valeurs par défa
 | `trimProtectedTail` | `6` | Les N derniers messages ne sont jamais repliés. |
 | `trimMaxFoldsPerHour` | `6` | Plafond de cadence des folds par heure glissante pour le modèle annexe (les folds d'urgence en sont exemptés). |
 | `trimSideModel` | non définie | Route du modèle annexe qui écrit les résumés. Vide = hériter du modèle courant de la session. |
+| `trimFoldFallbackModel` | non définie | Route de relance quand le modèle annexe de résumé échoue ; un fold de pression dégrade alors en mécanique. Vide = pas de repli. Choisir une route avec de la marge sur cooldowns, contrôle de risque et concurrence. |
 | `trimStateDir` | non défini | Redéfinit le répertoire d'état des folds. Vide = `<dshHome>/.dsh-switchman/state/trim/`. |
 | `surfaceFold` | `true` | Expédie les folds validés sur la surface de session (paire d'événements : mesure shadow-price + remplacement `surfaceOp`). Désactivé, la vue reste en splice seul. |
 

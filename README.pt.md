@@ -130,6 +130,7 @@ Todas as chaves ficam em Configurações → dsh-switchman; os padrões vêm de 
 | `trimProtectedTail` | `6` | As últimas N mensagens nunca são dobradas. |
 | `trimMaxFoldsPerHour` | `6` | Teto de cadência de folds por hora rolante para o modelo secundário (os de emergência ficam fora). |
 | `trimSideModel` | não definida | Rota do modelo secundário que escreve os resumos. Vazia = herdar o modelo atual da sessão. |
+| `trimFoldFallbackModel` | não definida | Rota de nova tentativa quando o modelo secundário de resumos falha; um fold de pressão degrada então para mecânico. Vazia = sem fallback. Escolha uma rota com folga em cooldowns, controle de risco e concorrência. |
 | `trimStateDir` | não definido | Sobrepõe o diretório do estado de folds. Vazio = `<dshHome>/.dsh-switchman/state/trim/`. |
 | `surfaceFold` | `true` | Envia os folds confirmados para a superfície da sessão (par de eventos: medição shadow-price + replace com `surfaceOp`). OFF mantém a view apenas com splices. |
 
