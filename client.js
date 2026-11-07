@@ -970,7 +970,7 @@ window.__ModuleLoader__.load({
 				intentClassifierEndpointLabel: '决策端点',
 				intentClassifierEndpointHelp: '分类器类型为「决策端点」时直接调用的 /v1/systemone 完整 URL（不经 llm 提供方）',
 				intentSystemoneModelLabel: '决策端点模型',
-				intentSystemoneModelHelp: '发送到决策端点的 model 参数（如 tev1:4b-mxfp8），自由填写，无需存在于模型供应商列表',
+				intentSystemoneModelHelp: '发送到决策端点的 model 参数（如 d3:4b-mxfp8），自由填写，无需存在于模型供应商列表',
 				intentEndpointUnset: '未设置',
 				intentCandidatesLabel: '候选模型',
 				intentCandidatesHelp:
@@ -1239,7 +1239,7 @@ window.__ModuleLoader__.load({
 				intentClassifierEndpointLabel: 'Decision endpoint',
 				intentClassifierEndpointHelp: 'Full /v1/systemone URL called directly when the classifier kind is the decision endpoint (no llm provider)',
 				intentSystemoneModelLabel: 'Decision endpoint model',
-				intentSystemoneModelHelp: 'Model name sent to the decision endpoint (e.g. tev1:4b-mxfp8); free text, no provider entry needed',
+				intentSystemoneModelHelp: 'Model name sent to the decision endpoint (e.g. d3:4b-mxfp8); free text, no provider entry needed',
 				intentEndpointUnset: 'Not set',
 				intentCandidatesLabel: 'Candidates',
 				intentCandidatesHelp:
@@ -1495,7 +1495,7 @@ window.__ModuleLoader__.load({
 				intentClassifierEndpointLabel: '決策端點',
 				intentClassifierEndpointHelp: '分類器類型為「決策端點」時直接呼叫的 /v1/systemone 完整 URL（不經 llm 提供方）',
 				intentSystemoneModelLabel: '決策端點模型',
-				intentSystemoneModelHelp: '傳送到決策端點的 model 參數（如 tev1:4b-mxfp8），自由填寫，無需存在於模型供應商清單',
+				intentSystemoneModelHelp: '傳送到決策端點的 model 參數（如 d3:4b-mxfp8），自由填寫，無需存在於模型供應商清單',
 				intentEndpointUnset: '未設定',
 				intentCandidatesLabel: '候選模型',
 				intentCandidatesHelp:
@@ -1719,7 +1719,7 @@ window.__ModuleLoader__.load({
 				intentClassifierEndpointLabel: '判定エンドポイント',
 				intentClassifierEndpointHelp: '分類器の種類が判定エンドポイントのとき直接呼び出す /v1/systemone の完全 URL（LLM プロバイダ不要）',
 				intentSystemoneModelLabel: '決定エンドポイントのモデル',
-				intentSystemoneModelHelp: '決定エンドポイントへ送る model パラメータ（例: tev1:4b-mxfp8）。自由入力で、プロバイダー一覧への登録は不要',
+				intentSystemoneModelHelp: '決定エンドポイントへ送る model パラメータ（例: d3:4b-mxfp8）。自由入力で、プロバイダー一覧への登録は不要',
 				intentEndpointUnset: '未設定',
 				intentCandidatesLabel: '候補モデル',
 				intentCandidatesHelp:
@@ -1945,7 +1945,7 @@ window.__ModuleLoader__.load({
 				intentClassifierEndpointLabel: '판정 엔드포인트',
 				intentClassifierEndpointHelp: '분류기 종류가 판정 엔드포인트일 때 직접 호출하는 /v1/systemone 전체 URL(LLM 공급자 불필요)',
 				intentSystemoneModelLabel: '결정 엔드포인트 모델',
-				intentSystemoneModelHelp: '결정 엔드포인트로 보내는 model 매개변수(예: tev1:4b-mxfp8). 자유 입력이며 공급자 목록에 없어도 됨',
+				intentSystemoneModelHelp: '결정 엔드포인트로 보내는 model 매개변수(예: d3:4b-mxfp8). 자유 입력이며 공급자 목록에 없어도 됨',
 				intentEndpointUnset: '미설정',
 				intentCandidatesLabel: '후보 모델',
 				intentCandidatesHelp:
@@ -2172,7 +2172,7 @@ window.__ModuleLoader__.load({
 				intentClassifierEndpointLabel: 'Entscheidungs-Endpunkt',
 				intentClassifierEndpointHelp: 'Vollständige /v1/systemone-URL, die direkt aufgerufen wird, wenn der Klassifikator-Typ der Entscheidungs-Endpunkt ist (ohne LLM-Provider)',
 				intentSystemoneModelLabel: 'Modell des Entscheidungsendpunkts',
-				intentSystemoneModelHelp: 'Modelname, der an den Entscheidungsendpunkt gesendet wird (z. B. tev1:4b-mxfp8); freier Text, kein Anbieter-Eintrag nötig',
+				intentSystemoneModelHelp: 'Modelname, der an den Entscheidungsendpunkt gesendet wird (z. B. d3:4b-mxfp8); freier Text, kein Anbieter-Eintrag nötig',
 				intentEndpointUnset: 'Nicht festgelegt',
 				intentCandidatesLabel: 'Kandidaten',
 				intentCandidatesHelp:
@@ -2402,7 +2402,7 @@ window.__ModuleLoader__.load({
 				intentClassifierEndpointLabel: 'Endpoint de decisión',
 				intentClassifierEndpointHelp: 'URL /v1/systemone completa que se llama directamente cuando el tipo de clasificador es el endpoint de decisión (sin proveedor LLM)',
 				intentSystemoneModelLabel: 'Modelo del endpoint de decisión',
-				intentSystemoneModelHelp: 'Parámetro model que se envía al endpoint de decisión (p. ej. tev1:4b-mxfp8); texto libre, no necesita estar en la lista de proveedores',
+				intentSystemoneModelHelp: 'Parámetro model que se envía al endpoint de decisión (p. ej. d3:4b-mxfp8); texto libre, no necesita estar en la lista de proveedores',
 				intentEndpointUnset: 'Sin establecer',
 				intentCandidatesLabel: 'Candidatos',
 				intentCandidatesHelp:
@@ -2632,7 +2632,7 @@ window.__ModuleLoader__.load({
 				intentClassifierEndpointLabel: 'Endpoint de décision',
 				intentClassifierEndpointHelp: 'URL /v1/systemone complète appelée directement quand le type de classificateur est l\'endpoint de décision (sans fournisseur LLM)',
 				intentSystemoneModelLabel: 'Modèle du point de décision',
-				intentSystemoneModelHelp: 'Paramètre model envoyé au point de décision (p. ex. tev1:4b-mxfp8) ; texte libre, inutile qu\'il figure dans la liste des fournisseurs',
+				intentSystemoneModelHelp: 'Paramètre model envoyé au point de décision (p. ex. d3:4b-mxfp8) ; texte libre, inutile qu\'il figure dans la liste des fournisseurs',
 				intentEndpointUnset: 'Non défini',
 				intentCandidatesLabel: 'Candidats',
 				intentCandidatesHelp:
@@ -2862,7 +2862,7 @@ window.__ModuleLoader__.load({
 				intentClassifierEndpointLabel: 'Endpoint di decisione',
 				intentClassifierEndpointHelp: 'URL /v1/systemone completa chiamata direttamente quando il tipo di classificatore è l\'endpoint di decisione (senza provider LLM)',
 				intentSystemoneModelLabel: 'Modello dell\'endpoint di decisione',
-				intentSystemoneModelHelp: 'Parametro model inviato all\'endpoint di decisione (es. tev1:4b-mxfp8); testo libero, non deve stare nell\'elenco dei provider',
+				intentSystemoneModelHelp: 'Parametro model inviato all\'endpoint di decisione (es. d3:4b-mxfp8); testo libero, non deve stare nell\'elenco dei provider',
 				intentEndpointUnset: 'Non impostato',
 				intentCandidatesLabel: 'Candidati',
 				intentCandidatesHelp:
@@ -3092,7 +3092,7 @@ window.__ModuleLoader__.load({
 				intentClassifierEndpointLabel: 'Endpoint de decisão',
 				intentClassifierEndpointHelp: 'URL /v1/systemone completa chamada diretamente quando o tipo de classificador é o endpoint de decisão (sem provedor LLM)',
 				intentSystemoneModelLabel: 'Modelo do endpoint de decisão',
-				intentSystemoneModelHelp: 'Parâmetro model enviado ao endpoint de decisão (ex.: tev1:4b-mxfp8); texto livre, não precisa estar na lista de provedores',
+				intentSystemoneModelHelp: 'Parâmetro model enviado ao endpoint de decisão (ex.: d3:4b-mxfp8); texto livre, não precisa estar na lista de provedores',
 				intentEndpointUnset: 'Não definido',
 				intentCandidatesLabel: 'Candidatos',
 				intentCandidatesHelp:
@@ -3321,7 +3321,7 @@ window.__ModuleLoader__.load({
 				intentClassifierEndpointLabel: 'Endpoint решений',
 				intentClassifierEndpointHelp: 'Полный URL /v1/systemone, вызываемый напрямую, когда тип классификатора — endpoint решений (без LLM-провайдера)',
 				intentSystemoneModelLabel: 'Модель endpoint решений',
-				intentSystemoneModelHelp: 'Параметр model, отправляемый на endpoint решений (напр. tev1:4b-mxfp8); свободный текст, запись в списке провайдеров не нужна',
+				intentSystemoneModelHelp: 'Параметр model, отправляемый на endpoint решений (напр. d3:4b-mxfp8); свободный текст, запись в списке провайдеров не нужна',
 				intentEndpointUnset: 'Не задано',
 				intentCandidatesLabel: 'Кандидаты',
 				intentCandidatesHelp:
@@ -6306,6 +6306,33 @@ window.__ModuleLoader__.load({
 							lines: [],
 						}),
 						h(SettingsRow, {
+							key: 'intentClassifierKind',
+							id: `${intentId}-kind`,
+							label: t('intentClassifierKindLabel'),
+							help: t('intentClassifierKindHelp'),
+							control: h(
+								'select',
+								selectProps(
+									`${intentId}-kind`,
+									values.intentClassifierKind,
+									(kind) => {
+										if (INTENT_KINDS.includes(kind))
+											edit('intentClassifierKind', kind);
+									},
+								),
+								...INTENT_KINDS.map((kind) =>
+									h(
+										'option',
+										{ key: kind, value: kind },
+										t(
+											`intentClassifierKind${kind[0].toUpperCase()}${kind.slice(1)}`,
+										),
+									),
+								),
+							),
+							lines: [],
+						}),
+						h(SettingsRow, {
 							key: 'intentClassifierRoute',
 							hidden: values.intentClassifierKind === 'systemone',
 							id: `${intentId}-classifier-route`,
@@ -6351,33 +6378,6 @@ window.__ModuleLoader__.load({
 							lines: [],
 						}),
 						h(SettingsRow, {
-							key: 'intentClassifierKind',
-							id: `${intentId}-kind`,
-							label: t('intentClassifierKindLabel'),
-							help: t('intentClassifierKindHelp'),
-							control: h(
-								'select',
-								selectProps(
-									`${intentId}-kind`,
-									values.intentClassifierKind,
-									(kind) => {
-										if (INTENT_KINDS.includes(kind))
-											edit('intentClassifierKind', kind);
-									},
-								),
-								...INTENT_KINDS.map((kind) =>
-									h(
-										'option',
-										{ key: kind, value: kind },
-										t(
-											`intentClassifierKind${kind[0].toUpperCase()}${kind.slice(1)}`,
-										),
-									),
-								),
-							),
-							lines: [],
-						}),
-						h(SettingsRow, {
 							key: 'intentClassifierEndpoint',
 							hidden: values.intentClassifierKind !== 'systemone',
 							id: `${intentId}-classifier-endpoint`,
@@ -6414,7 +6414,7 @@ window.__ModuleLoader__.load({
 							control: h('input', {
 								type: 'text',
 								value: values.intentClassifierSystemoneModel,
-								placeholder: 'tev1:4b-mxfp8',
+								placeholder: 'd3:4b-mxfp8',
 								onChange: (event) =>
 									edit('intentClassifierSystemoneModel', event.target.value),
 								disabled: !editable,

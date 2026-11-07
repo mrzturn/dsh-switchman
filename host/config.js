@@ -197,7 +197,7 @@ export const Config = z.object({
 	 *  kind fails open to the fallback chain. */
 	intentClassifierEndpoint: z.string().default("").volatile(),
 	/** Model name sent to the decision endpoint for kind "systemone"
-	 *  (free text, e.g. tev1:4b-mxfp8). Independent of the llm provider
+	 *  (free text, e.g. d3:4b-mxfp8). Independent of the llm provider
 	 *  catalog — no provider registration needed. Empty = unset; that
 	 *  kind fails open to the fallback chain. */
 	intentClassifierSystemoneModel: z.string().default("").volatile(),
