@@ -831,16 +831,26 @@ function applyContextWatch(ctx, config) {
 						readString(config.wmDenyMode) !== "deny" &&
 						Array.isArray(result?.content)
 					) {
-						return {
-							kind: "accept",
-							content: [
-								...result.content,
-								{
-									type: "text",
-									text: `[SWITCHMAN:WATERMARK] read budget exceeded this turn (used ${Math.round(entry.used)}/${Math.round(ceiling)} tokens) — further reads may be denied; wrap up or delegate the remaining reading.`,
-								},
-							],
-						};
+						// [2026-11-07]-[the warning branch used to return without
+						// calling next()]-[that short-circuited every post-execute
+						// handler downstream of the watermark (trim fork-link
+						// accounting, subagent model annotation) on exactly the
+						// turns that read the most. Run the pipeline first, then
+						// append the warning to whatever the pipeline accepted.]
+						return (async () => {
+							const downstream = await next();
+							const base = downstream !== null && typeof downstream === "object" && downstream.kind === "accept" && Array.isArray(downstream.content) ? downstream : result;
+							return {
+								kind: "accept",
+								content: [
+									...base.content,
+									{
+										type: "text",
+										text: `[SWITCHMAN:WATERMARK] read budget exceeded this turn (used ${Math.round(entry.used)}/${Math.round(ceiling)} tokens) — further reads may be denied; wrap up or delegate the remaining reading.`,
+									},
+								],
+							};
+						})();
 					}
 				}
 			}
