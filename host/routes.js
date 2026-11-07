@@ -463,9 +463,27 @@ export function coerceValues(input) {
 	return values;
 }
 
-/** Deep-equal on the plain-JSON value shapes this module exchanges. */
-function sameValues(a, b) {
-	return JSON.stringify(a) === JSON.stringify(b);
+/** Stable JSON text: object keys sorted at every depth. snapshotOf and
+ *  coerceValues build the same fields in DIFFERENT insertion orders
+ *  (e.g. trimStateDir sits 7th in a snapshot but near the tail after
+ *  coercion), so a raw stringify compared key order, not content —
+ *  every fenced save 409'd ("settings changed elsewhere") even with no
+ *  intervening writer (2026-11-07 settings-save bug). */
+function canonicalJson(value) {
+	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+	if (value !== null && typeof value === "object")
+		return `{${Object.keys(value)
+			.sort()
+			.map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+			.join(",")}}`;
+	return JSON.stringify(value) ?? "undefined";
+}
+
+/** Deep-equal on the plain-JSON value shapes this module exchanges;
+ *  key-order insensitive (see canonicalJson). Exported for the smoke
+ *  suite alongside coerceValues — the fence predicate IS the contract. */
+export function sameValues(a, b) {
+	return canonicalJson(a) === canonicalJson(b);
 }
 
 /** Enumerate the model catalog from the host session controller. */

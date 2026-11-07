@@ -10,7 +10,8 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { coerceValues, snapshotOf } from "../../host/routes.js";
+import { coerceValues, sameValues, snapshotOf } from "../../host/routes.js";
+import { mergeIntentCandidates } from "../../host/intent-presets.js";
 
 /** A fully-populated values object (every field coerceValues requires). */
 function fullValues(overrides = {}) {
@@ -150,4 +151,67 @@ test("snapshotOf exposes the trim fields with config-backed values", () => {
 	assert.equal(snapshot.trimLadderT3MinBlocks, 3);
 	// A coerced snapshot re-coerces cleanly (the fence compares coerced forms).
 	assert.notEqual(coerceValues(snapshot), null, "GET snapshot is POST-coercible");
+});
+
+test("fence equality is key-order insensitive (2026-11-07 phantom-409)", () => {
+	const config = {
+		trimMode: { get: () => "advisory" },
+		trimEnabled: { get: () => true },
+		trimStateDir: { get: () => "/tmp/trim" },
+		trimGrowthTokens: { get: () => 1_000 },
+	};
+	const snapshot = snapshotOf(config);
+	const coerced = coerceValues(snapshot);
+	assert.notEqual(coerced, null);
+	// The two construction orders genuinely differ (trimStateDir: 7th vs
+	// tail), which is exactly what broke the old stringify comparison.
+	assert.notEqual(
+		JSON.stringify(coerced),
+		JSON.stringify(snapshot),
+		"precondition: raw stringify distinguishes the shapes",
+	);
+	// …yet the fence predicate must accept — content is identical. Both
+	// sides go through the SAME merge the PUT handler applies (routes.js
+	// fence), which also normalizes the derived candidate labels.
+	// Fence shape exactly as the PUT handler builds it: both sides re-merged
+	// through mergeIntentCandidates before comparison.
+	const fenceLeft = {
+		...coerced,
+		intentCandidates: mergeIntentCandidates(coerced.intentCandidates),
+	};
+	const fenceRight = {
+		...snapshot,
+		intentCandidates: mergeIntentCandidates(snapshot.intentCandidates),
+	};
+	assert.equal(sameValues(fenceLeft, fenceRight), true, "fence accepts key-order delta");
+	// Order-insensitivity must not weaken the guard: real content deltas
+	// still conflict.
+	assert.equal(sameValues({ ...coerced, wmHardTokens: (coerced.wmHardTokens ?? 0) + 1 }, snapshot), false, "fence rejects value delta");
+	assert.equal(sameValues({ ...coerced, trimEnabled: !coerced.trimEnabled }, snapshot), false, "fence rejects boolean delta");
+	// The current side of the PUT handler always carries intentCandidates,
+	// so a payload missing the field is a genuine conflict.
+	const mergedLeft = { ...coerced, intentCandidates: undefined, wmHardTokens: coerced.wmHardTokens };
+	delete mergedLeft.intentCandidates;
+	assert.equal(sameValues(mergedLeft, snapshot), false, "missing field still conflicts");
+	// Pinned guard properties (reviewer 2026-11-07): canonicalJson must keep
+	// arrays order-sensitive and compare nested fields — relaxing either
+	// would let real edits through the fence. Built on the merged baseline
+	// (fenceLeft ≙ fenceRight) so the ONLY delta is the one under test; the
+	// raw coerced/snapshot candidate arrays differ in content (derived
+	// labels) and would make these asserts vacuously false.
+	assert.ok(fenceLeft.intentCandidates.length >= 2, "precondition: at least two candidates");
+	const reordered = {
+		...fenceLeft,
+		intentCandidates: [
+			fenceLeft.intentCandidates[1],
+			fenceLeft.intentCandidates[0],
+			...fenceLeft.intentCandidates.slice(2),
+		],
+	};
+	assert.equal(sameValues(reordered, fenceRight), false, "fence rejects candidate order delta");
+	const nested = {
+		...fenceLeft,
+		intentCandidates: fenceLeft.intentCandidates.map((c, i) => (i === 0 ? { ...c, id: c.id + "-renamed" } : c)),
+	};
+	assert.equal(sameValues(nested, fenceRight), false, "fence rejects nested field delta");
 });
