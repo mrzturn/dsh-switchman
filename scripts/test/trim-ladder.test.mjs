@@ -324,6 +324,24 @@ test("raw tiers outrank a ready ladder; ladder fires when raw has nothing", () =
 	assert.equal(rawQuiet.tier, "ladder-2");
 });
 
+test("load: a hand-edged double-consumption ledger is treated as corrupt", () => {
+	const dir = mkdtempSync(join(tmpdir(), "ladder-double-"));
+	const id = "double-consume-session";
+	// T1 x2 + two T2 blocks consuming the SAME T1 — the invariant violation
+	writeFileSync(join(dir, `${id}.json`), JSON.stringify({
+		version: 2, sessionId: id, blocks: [
+			{ id: "t1a", kind: "summary", tier: 1, refRange: { firstId: "u1", lastId: "a2" }, count: 4, approxTokens: 100, summary: "A", createdAt: 1, active: false, consumes: [] },
+			{ id: "t1b", kind: "summary", tier: 1, refRange: { firstId: "u3", lastId: "a4" }, count: 4, approxTokens: 100, summary: "B", createdAt: 2, active: true, consumes: [] },
+			{ id: "t2x", kind: "summary", tier: 2, refRange: null, count: 1, approxTokens: 100, summary: "X", createdAt: 3, active: true, consumes: ["t1a"] },
+			{ id: "t2y", kind: "summary", tier: 2, refRange: null, count: 1, approxTokens: 100, summary: "Y", createdAt: 4, active: true, consumes: ["t1a", "t1b"] },
+		],
+		frontier: "a4", lastFoldViewTokens: 0, lastFoldLowTokens: 0, lastFoldAt: 0, foldsThisHour: [], inheritedFrom: null, inheritedAt: 0,
+	}));
+	const store = createStore({ stateDir: dir, warn: () => {} });
+	assert.equal(store.ledgerOf(id).blocks.length, 0, "double-consumption resets the ledger");
+	assert.ok(existsSync(join(dir, `${id}.json.corrupt`)), "the file is moved aside for forensics");
+});
+
 test("emergency-cooldown cut-in: a ready ladder fires inside the cooldown window", () => {
 	// usage stays above the emergency line; the mechanical tier is cooling
 	// down; the ready ladder must not starve behind the cooldown row

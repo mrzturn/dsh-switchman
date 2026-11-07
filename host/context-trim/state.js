@@ -159,6 +159,18 @@ function upgradeLedgerFile(parsed, sessionId) {
 	if (parsed.version === LEDGER_VERSION) {
 		const blocks = parsed.blocks.map(normalizeStoredBlock);
 		if (blocks.some((block) => block === null)) return null;
+		// [2026-11-07]-[cross-block single-consumption invariant]-[commit
+		// enforces one-consumption-per-block, but a hand-edited ledger can
+		// double-consume a T1 — applyLadderTier then splices OVERLAPPING
+		// runs and corrupts the view. Load-time validation treats such a
+		// file as corrupt (inspection P1-7).]
+		const consumed = new Set();
+		for (const block of blocks) {
+			for (const id of block.consumes ?? []) {
+				if (consumed.has(id)) return null;
+				consumed.add(id);
+			}
+		}
 		return { ledger: hydrateLedger(sessionId, parsed, blocks), migrated: false };
 	}
 	if (parsed.version !== 1) return null;
