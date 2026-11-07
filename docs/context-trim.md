@@ -259,7 +259,7 @@ Operators diagnose from these rows:
 | --- | --- | --- |
 | dispatch | `view-applied applied=<n> foldedMsgs=<n> view=<n> blocks=<n> injected=<outcome> [wire=<n>]` | per `llm/stream` dispatch; `applied` counts blocks located in THIS re-send |
 | fold decision | `via=<idle\|stream> action=<none\|fold\|emergency> tier=<tier\|-> reason=<…> view=<n> [wire=<n>] window=<n\|null>` | why a cycle did or did not run |
-| fold outcome | `outcome=<folded:<tier>:<msgs> msgs (~<n> tokens) \| summary-unavailable \| commit-rejected:<reason> \| no-capture \| empty-slice> tier=<tier>` | what the cycle did |
+| fold outcome | `outcome=<folded:<tier>:<msgs> msgs (~<n> tokens) \| summary-unavailable \| reload-aborted \| commit-rejected:<reason> \| no-capture \| empty-slice> tier=<tier>` | what the cycle did |
 | gate | `action=none reason=injection-unavailable view=<n>` | neither the splice nor the surface channel can reach the wire |
 | ship | `surface-replace startSeq=<n> endSeq=<n> seqs=<n> tokens=<n> generation=<n> via=<turn-stopping\|idle>` | a fold block reached the surface |
 | ship skip | `surface-replace skipped reason=<…> via=<…> [block=<id>]` | deduplicated; reasons listed above |

@@ -970,3 +970,27 @@ test('summarizer: a length-finished summary is marked truncated, not silently co
 	]), route, 'material');
 	assert.equal(stillNull, null, 'empty output stays a failure regardless of finish kind');
 });
+
+test('summarizer: DSH-shaped max-tokens finish marks truncation; aborted finish fails closed', async () => {
+	const route = { provider: 'p', model: 'm' };
+	const llmFor = (chunks) => ({
+		prepareCall: async () => ({ config: {}, stream: async function* () { yield* chunks; } }),
+	});
+	// Real adapters never emit a top-level kind: finish rides as
+	// { type:'finish', reason:{kind} } with kind 'max-tokens' for cutoffs.
+	const marked = await summarizeWithModel(llmFor([
+		{ type: 'text-delta', text: 'Cut summary.' },
+		{ type: 'finish', reason: { kind: 'max-tokens' } },
+	]), route, 'material');
+	assert.ok(marked.startsWith(TRUNCATED_SUMMARY_MARK), 'max-tokens finish must carry the truncation mark');
+	const clean = await summarizeWithModel(llmFor([
+		{ type: 'text-delta', text: 'Full summary.' },
+		{ type: 'finish', reason: { kind: 'stop' } },
+	]), route, 'material');
+	assert.equal(clean, 'Full summary.', 'a reason.kind stop must stay unmarked');
+	const aborted = await summarizeWithModel(llmFor([
+		{ type: 'text-delta', text: 'Died mid-stream.' },
+		{ type: 'finish', reason: { kind: 'aborted', failure: { message: 'disposed' } } },
+	]), route, 'material');
+	assert.equal(aborted, null, 'an aborted finish is a failure, never a summary');
+});

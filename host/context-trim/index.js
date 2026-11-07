@@ -280,6 +280,28 @@ export function applyContextTrim(ctx, config) {
 		}
 	};
 
+	// Reload/teardown marker: HMR disposes and remounts this section on every
+	// plugin edit (the profile's node_modules entry is a dev symlink into this
+	// checkout). An in-flight fold whose llm stream is cut by the dispose ends
+	// as a clean zero-chunk stream — inside the summarizer that is
+	// indistinguishable from a genuine empty model reply. Cycles record their
+	// start time; a dispose at/after that time reclassifies the outcome as
+	// reload-aborted so it neither climbs the failure ladder nor reads as a
+	// model failure in decisions.log.
+	let disposedAt = 0;
+	try {
+		// cordis emits no "dispose" event: self-teardown arrives as
+		// "internal/plugin" carrying OUR fiber with its uid CLEARED — uid is a
+		// positive counter at construction (vendor/cordis fiber.ts:239) and is
+		// set to null right before the disposal emit (:274-275; the DISPOSED
+		// state is defined as uid === null at :581). Same guard DSH ships in
+		// mcp-manager:249 and client-ui-cot-translation mount.ts:123.
+		ctx.on("internal/plugin", (fiber) => { if (fiber === ctx.fiber && fiber.uid === null) disposedAt = Date.now(); });
+	} catch {
+		/* lifecycle events unavailable on this ctx — flag stays 0, behavior unchanged */
+	}
+	const disposedSince = (since) => disposedAt !== 0 && disposedAt >= since;
+
 	// Per-process pipeline state (process-wide by design: ledgers persist on
 	// disk per session, metrics/captures live per session in memory).
 	const store = createStore({ stateDir: readString(config, "trimStateDir", null) ?? undefined, warn });
@@ -678,7 +700,7 @@ export function applyContextTrim(ctx, config) {
 
 	/** Run one fold cycle for a session (called at the idle boundary ONLY).
 	 * Returns a short outcome string for logging. */
-	async function runFoldCycle(sessionId, decision) {
+	async function runFoldCycle(sessionId, decision, cycleStartedAt) {
 		const capture = captures.get(sessionId);
 		if (capture === undefined) return "no-capture";
 		const { protectedTail } = thresholdsNow();
@@ -695,9 +717,9 @@ export function applyContextTrim(ctx, config) {
 			const approxTokens = consumed.reduce((sum, block) => sum + (Number.isFinite(block.approxTokens) && block.approxTokens > 0 ? block.approxTokens : 0), 0);
 			const summary = await summarizeWithModel(llm, route, renderLadderMaterial(consumed), {
 				systemPrompt: LADDER_SYSTEM_PROMPT,
-				onFail: (why) => decisionLog(`session=${sessionId} summary-fail why=${why} ladder=${decision.tier}`),
+				onFail: (why) => decisionLog(`session=${sessionId} summary-fail why=${why} blocks=${consumed.length} ~${approxTokens}t ladder=${decision.tier}`),
 			});
-			if (summary === null) return "summary-unavailable"; // skip cycle, fail-open
+			if (summary === null) return disposedSince(cycleStartedAt) ? "reload-aborted" : "summary-unavailable"; // skip cycle, fail-open; a dispose cut is not a model failure
 			const result = store.commitFold(
 				sessionId,
 				{ consumes: decision.consumes.slice(), summary, kind: "summary", tier: decision.tier === "ladder-3" ? 3 : 2, approxTokens },
@@ -734,9 +756,9 @@ export function applyContextTrim(ctx, config) {
 			const llm = ctx.get("llm", false);
 			const route = sideRouteFor(sessionId);
 			summary = await summarizeWithModel(llm, route, renderMaterial(capture.messages, startIdx, endIdx, refOf), {
-				onFail: (why) => decisionLog(`session=${sessionId} summary-fail why=${why}`),
+				onFail: (why) => decisionLog(`session=${sessionId} summary-fail why=${why} msgs=${count} ~${approxTokens}t`),
 			});
-			if (summary === null) return "summary-unavailable"; // skip cycle, fail-open
+			if (summary === null) return disposedSince(cycleStartedAt) ? "reload-aborted" : "summary-unavailable"; // skip cycle, fail-open; a dispose cut is not a model failure
 		}
 		const positions = refPositions(capture.messages);
 		const result = store.commitFold(
@@ -786,6 +808,10 @@ export function applyContextTrim(ctx, config) {
 			return;
 		}
 		inFlight.add(sessionId);
+		const cycleStartedAt = Date.now();
+		// Hoisted for the catch below: a dispose-cut throw may land before the
+		// trigger ever ran, and the catch must not touch a dead binding.
+		let decision = null;
 		try {
 			const { protectedTail, ...thresholds } = thresholdsNow();
 			const ledger = store.ledgerOf(sessionId);
@@ -797,7 +823,7 @@ export function applyContextTrim(ctx, config) {
 			// stayed silent. Unknown tally → exactly today's behavior.
 			const wireTokens = wireTokensOf(sessionId);
 			const pressureTokens = wireTokens !== null ? Math.max(capture.viewTokens, wireTokens) : capture.viewTokens;
-			const decision = evaluateTrigger({
+			decision = evaluateTrigger({
 				foldable,
 				messages: capture.messages,
 				viewTokens: pressureTokens,
@@ -812,7 +838,7 @@ export function applyContextTrim(ctx, config) {
 			});
 			decisionLog(`session=${sessionId} via=${via} action=${decision.action} tier=${decision.tier ?? "-"} reason=${decision.reason || "-"} view=${Math.round(capture.viewTokens)}${wireTokens === null ? "" : ` wire=${wireTokens}`} window=${windowTokens ?? "null"}`);
 			if (decision.action === "none") return;
-			const outcome = await runFoldCycle(sessionId, decision);
+			const outcome = await runFoldCycle(sessionId, decision, cycleStartedAt);
 			// Failure ladder: commit resets it; a summarize/commit failure
 			// climbs it (the no-backoff loop this closes — those outcomes
 			// advance no cadence gate on their own). A ladder run whose
@@ -823,11 +849,16 @@ export function applyContextTrim(ctx, config) {
 			// Outcome lands in the decision log too: warn() has no reachable
 			// sink on some hosts, and the commit/fail boundary is exactly what
 			// live diagnosis needs.
-			decisionLog(`session=${sessionId} outcome=${outcome} tier=${decision.tier}`);
+			decisionLog(`session=${sessionId} outcome=${outcome} tier=${decision.tier ?? "-"}`);
 			warn(`[context-trim] ${sessionId}: ${outcome} (${decision.reason})`);
 		} catch (error) {
-			recordFoldFailure(sessionId); // a thrown cycle counts as failed too
-			warn(`[context-trim] fold cycle failed: ${error?.message ?? error}`);
+			// A dispose mid-cycle throws through here too (ctx/service teardown) —
+			// that is a reload cut, not a model failure: log it and skip the ladder.
+			if (disposedSince(cycleStartedAt)) decisionLog(`session=${sessionId} outcome=reload-aborted tier=${decision?.tier ?? "-"}`);
+			else {
+				recordFoldFailure(sessionId); // a thrown cycle counts as failed too
+				warn(`[context-trim] fold cycle failed: ${error?.message ?? error}`);
+			}
 		} finally {
 			inFlight.delete(sessionId);
 		}

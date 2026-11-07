@@ -28,6 +28,7 @@ function mockCtx({ llmFiber = null } = {}) {
 	let currentSessionId = "";
 	const ctx = {
 		log: { warn: () => {} },
+		fiber: { uid: 42 },
 		agents: { currentInitiator: () => ({ session: { id: currentSessionId } }) },
 		systemPrompt: {
 			section: (s) => sections.push(s),
@@ -532,4 +533,56 @@ test("zero-fold side-dispatch hole: tiny auxiliary dispatches skip even with no 
 	await send(aux.slice());
 	await send(aux.slice());
 	assert.match(readFileSync(join(stateDir, "decisions.log"), "utf8"), /side-dispatch budget exhausted/u, "third tiny dispatch accepted via the skip budget");
+});
+
+test("reload cut: a real cordis teardown mid-fold logs reload-aborted and never arms the backoff ladder", async (t) => {
+	mock.timers.enable({ now: Date.now() });
+	t.after(() => mock.timers.reset());
+	let listener = null;
+	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
+	let releaseStream = null;
+	let prepareCalls = 0;
+	const llm = {
+		resolveModelInfo: async () => ({ context: { contextWindow: 100_000 } }),
+		prepareCall: async () => {
+			prepareCalls += 1;
+			return { stream: async function* () { await new Promise((resolve) => { releaseStream = resolve; }); } };
+		},
+	};
+	const { ctx, hooks } = mockCtx({ llmFiber: fiber });
+	ctx.get = () => llm;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-reload-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	const outcomes = () => readFileSync(join(stateDir, "decisions.log"), "utf8").split("\n").filter((line) => line.includes("outcome="));
+
+	// The plugin must subscribe to the REAL cordis teardown event — a guard
+	// pinned to a phantom event name passes vacuously and fixes nothing.
+	assert.equal(typeof hooks["internal/plugin"], "function", "plugin must subscribe to internal/plugin");
+
+	// Grow past the pressure gate, then idle: the fold starts and blocks
+	// inside the never-yielding stream, mid-flight like a real reload.
+	const store = [];
+	for (let i = 1; i <= 8; i++) {
+		store.push({ role: "user", content: [{ type: "text", text: `t${i}u ` + "F".repeat(12_000) }] });
+		store.push({ role: "assistant", content: [{ type: "text", text: `t${i}a ` + "F".repeat(12_000) }] });
+	}
+	const stream = listener({ sessionId: "rel-1", messages: store.slice(), provider: "p", model: "m" }, async function* () { yield { type: "finish", usage: { input_tokens: 1 } }; });
+	for await (const chunk of stream) void chunk;
+	hooks["agent/status"]({ status: "idle", agent: { session: { id: "rel-1" } } });
+	assert.equal(await poll(() => releaseStream !== null), true, "fold cycle entered the llm stream");
+
+	// HMR disposal, faithful to vendor/cordis fiber.ts:274-275: uid clears,
+	// THEN internal/plugin fires with our own fiber.
+	ctx.fiber.uid = null;
+	hooks["internal/plugin"](ctx.fiber);
+	releaseStream(); // the cut stream ends as a clean zero-chunk stream
+
+	assert.equal(await poll(() => outcomes().some((line) => line.includes("outcome=reload-aborted"))), true, "reload cut logged as reload-aborted");
+	// No ladder step was armed: the very next idle re-attempts immediately —
+	// the second cycle enters the llm call within microtasks, whereas an
+	// armed 60s backoff would hold it behind mock.timers until ticked.
+	hooks["agent/status"]({ status: "idle", agent: { session: { id: "rel-1" } } });
+	assert.equal(await poll(() => prepareCalls === 2), true, "no backoff after a reload cut — retry fires on the next idle");
+	assert.ok(outcomes().length === 1 && outcomes()[0].includes("outcome=reload-aborted tier="), "the cut cycle reads reload-aborted with a tier field, never summary-unavailable");
 });

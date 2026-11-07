@@ -250,16 +250,26 @@ export async function summarizeWithModel(llm, route, materialText, options = {})
 		for await (const chunk of call.stream(streamOptions)) {
 			if (chunk?.type === "text-delta" && typeof chunk.text === "string") text += chunk.text;
 			else if (chunk?.type === "finish") {
-				finishKind = chunk.kind ?? null;
-				if (chunk.kind === "error" || chunk.kind === "aborted") { fail?.(`stream-${chunk.kind}`); return null; }
+				// The translator's clean stop is { type:'finish', reason:{kind:'stop'} } —
+				// no top-level kind. Read the nested reason first so clean EOFs log
+				// finish=stop (not finish=none), and treat abort/error finishes as
+				// explicit failures in either shape.
+				const topKind = chunk.kind ?? null;
+				finishKind = chunk.reason?.kind ?? topKind;
+				if (topKind === "error" || topKind === "aborted" || finishKind === "error" || finishKind === "aborted") {
+					fail?.(`stream-${finishKind}`);
+					return null;
+				}
 			}
 		}
 		const summary = text.trim();
 		if (summary === "") { fail?.(`empty-output finish=${finishKind ?? "none"}`); return null; }
-		// A length finish means the tail of the material never got summarized,
-		// yet the text that DID land reads as settled fact — mark it so every
-		// later consumer (view rendering, ladder distillation) sees the gap.
-		if (finishKind === "length") return `${TRUNCATED_SUMMARY_MARK}${summary}`;
+		// A length/max-tokens finish means the tail of the material never got
+		// summarized, yet the text that DID land reads as settled fact — mark it
+		// so every later consumer (view rendering, ladder distillation) sees the
+		// gap. DSH's FinishReasonMap has no "length" kind: adapters map
+		// finish_reason=length to kind "max-tokens" (llm-deepseek translate).
+		if (finishKind === "length" || finishKind === "max-tokens") return `${TRUNCATED_SUMMARY_MARK}${summary}`;
 		return summary;
 	} catch (error) {
 		fail?.(`error: ${error?.message ?? error}`);

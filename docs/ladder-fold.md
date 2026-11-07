@@ -199,6 +199,8 @@ changes only at tier crossings instead of every 5k-token bucket step.
 - fold decision rows carry `tier=ladder-2|ladder-3` and
   `reason=ladder mass ~<n> >= <threshold> blocks=<n>`.
 - outcome rows: `outcome=folded:ladder-2:<n> blocks (~<n> tokens)`.
+- outcome rows may also read `outcome=reload-aborted`: a dev reload (HMR
+  dispose) cut the cycle mid-fold; it arms no ladder step.
 - ship rows gain `ladder=tier` (`surface-replace startSeq=… ladder=2 …`).
 - new ship-skip reasons: `ladder-consumed-skipped`, `ladder-span-mismatch`,
   `ladder-span-gone`, plus commit rejections `ladder-*` surfacing through
