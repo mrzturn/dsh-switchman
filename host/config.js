@@ -139,7 +139,10 @@ export const Config = z.object({
 	wmHardTokens: z.number().min(2000).default(95000).volatile(),
 	/** Force watermark: handover document + compaction (tokens). */
 	wmForceTokens: z.number().min(3000).default(150000).volatile(),
-	/** Per-call read budget for read/glob/grep (tokens). */
+	/** Per-TURN read budget (inspection C16 — the name predates the turn
+	 *  accounting): read/glob/grep/bash results accumulate against it within
+	 *  one turn; the account resets after 15 idle minutes and the pre/post
+	 *  gates act at 2.4× this value (CEILING_MULTIPLE in context-watch.js). */
 	wmReadBudgetTokens: z.number().min(200).default(3000).volatile(),
 	/** Hard-tier behavior: cap reads and advise, or deny outright. */
 	wmDenyMode: z.union(["cap", "deny"]).default("cap").volatile(),
