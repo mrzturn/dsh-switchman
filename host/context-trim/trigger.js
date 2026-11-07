@@ -144,7 +144,37 @@ export function evaluateTrigger(input) {
 			const usagePct = (input.viewTokens / windowTokens) * 100;
 			if (usagePct >= emergencyPercent) {
 				const lastEmergencyAt = Number.isFinite(input?.lastEmergencyAt) ? input.lastEmergencyAt : 0;
-				if (now - lastEmergencyAt < EMERGENCY_COOLDOWN_MS) return { ...none, reason: "emergency-cooldown" };
+				if (now - lastEmergencyAt < EMERGENCY_COOLDOWN_MS) {
+					// [2026-11-07]-[fix ladder starvation under sustained emergency
+					// pressure]-[when usage stays above the emergency line the 90 s
+					// cooldown returned "none" every boundary and the lower-priority
+					// ladder never ran — the summary population grew unbounded,
+					// defeating T2/T3's aging goal. During cooldown a READY ladder
+					// is the only side-model path that can relieve pressure, so it
+					// cuts in here; every other case keeps the exact
+					// "emergency-cooldown" row. Inlined on purpose: the main ladder
+					// section below keeps its original position and semantics.]
+					const runs = input?.ladderRuns ?? {};
+					const t3R = bestLadderRun(runs.t3, Number.isInteger(thresholds.ladderT3MinBlocks) && thresholds.ladderT3MinBlocks > 0 ? thresholds.ladderT3MinBlocks : 2);
+					const t2R = bestLadderRun(runs.t2, Number.isInteger(thresholds.ladderT2MinBlocks) && thresholds.ladderT2MinBlocks > 0 ? thresholds.ladderT2MinBlocks : 3);
+					const t3M = Number.isFinite(thresholds.ladderT3Tokens) && thresholds.ladderT3Tokens > 0 ? thresholds.ladderT3Tokens : 6_000;
+					const t2M = Number.isFinite(thresholds.ladderT2Tokens) && thresholds.ladderT2Tokens > 0 ? thresholds.ladderT2Tokens : 8_000;
+					const pick = t3R !== null && t3R.mass >= t3M && (t2R === null || t2R.mass < t2M || t3R.mass >= t2R.mass) ? t3R
+						: (t2R !== null && t2R.mass >= t2M ? t2R : null);
+					if (pick !== null && now - lastFoldAt >= LADDER_MIN_INTERVAL_MS && !hourlyBlocked) {
+						return {
+							action: "fold",
+							kind: "ladder",
+							tier: pick === t3R ? "ladder-3" : "ladder-2",
+							reason: `ladder mass ~${Math.round(pick.mass)} blocks=${pick.consumes.length} (emergency-cooldown cut-in)`,
+							startIdx: -1,
+							endIdx: -1,
+							incrementTokens: 0,
+							consumes: pick.consumes.slice(),
+						};
+					}
+					return { ...none, reason: "emergency-cooldown" };
+				}
 				return { action: "emergency", kind: "raw", tier: "emergency", reason: `usage ${usagePct.toFixed(1)}% >= ${emergencyPercent}%`, startIdx, endIdx, incrementTokens, consumes: null };
 			}
 		}

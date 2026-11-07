@@ -324,6 +324,38 @@ test("raw tiers outrank a ready ladder; ladder fires when raw has nothing", () =
 	assert.equal(rawQuiet.tier, "ladder-2");
 });
 
+test("emergency-cooldown cut-in: a ready ladder fires inside the cooldown window", () => {
+	// usage stays above the emergency line; the mechanical tier is cooling
+	// down; the ready ladder must not starve behind the cooldown row
+	// ([2026-11-07] starvation fix).
+	const hot = evaluateTrigger({
+		...ladderBase,
+		viewTokens: 29_000,
+		windowTokens: 30_000,
+		thresholds: { ...ladderBase.thresholds, emergencyPercent: 90 },
+		foldable: { startIdx: 2, endIdx: 9 },
+		now: 130_000,
+		lastEmergencyAt: 129_700,
+	});
+	assert.equal(hot.action, "fold");
+	assert.equal(hot.kind, "ladder");
+	assert.equal(hot.tier, "ladder-2");
+	assert.match(hot.reason, /cut-in/u);
+	// no ready run → the exact historical cooldown row stays
+	const quiet = evaluateTrigger({
+		...ladderBase,
+		viewTokens: 29_000,
+		windowTokens: 30_000,
+		thresholds: { ...ladderBase.thresholds, emergencyPercent: 90 },
+		foldable: { startIdx: 2, endIdx: 9 },
+		now: 130_000,
+		lastEmergencyAt: 129_700,
+		lastFoldAt: 129_999,
+	});
+	assert.equal(quiet.action, "none");
+	assert.equal(quiet.reason, "emergency-cooldown");
+});
+
 test("ladder T3 wins over T2 when it reclaims more; cadence gates apply", () => {
 	// deeper tier with the larger mass wins (the larger reclaim)
 	const deeper = evaluateTrigger({ ...ladderBase, ladderRuns: { t2: [{ consumes: ["b1", "b2", "b3"], mass: 1_500, count: 3 }], t3: [{ consumes: ["t2a", "t2b"], mass: 1_600, count: 2 }] } });
