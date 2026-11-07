@@ -161,7 +161,14 @@ export function evaluateTrigger(input) {
 					const t2M = Number.isFinite(thresholds.ladderT2Tokens) && thresholds.ladderT2Tokens > 0 ? thresholds.ladderT2Tokens : 8_000;
 					const pick = t3R !== null && t3R.mass >= t3M && (t2R === null || t2R.mass < t2M || t3R.mass >= t2R.mass) ? t3R
 						: (t2R !== null && t2R.mass >= t2M ? t2R : null);
-					if (pick !== null && now - lastFoldAt >= LADDER_MIN_INTERVAL_MS && !hourlyBlocked) {
+					// The 120 s LADDER_MIN_INTERVAL_MS is NOT applied here on
+					// purpose: the emergency fold that opened this cooldown just
+					// advanced lastFoldAt, so the interval (120 s) always exceeds
+					// the remaining cooldown (90 s) and the cut-in could never
+					// fire — a structural starvation loop (observed live). Inside
+					// the cooldown the hourly cap is the only cadence gate; the
+					// cooldown itself is the spacing.
+					if (pick !== null && !hourlyBlocked) {
 						return {
 							action: "fold",
 							kind: "ladder",

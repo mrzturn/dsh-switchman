@@ -336,6 +336,11 @@ test("emergency-cooldown cut-in: a ready ladder fires inside the cooldown window
 		foldable: { startIdx: 2, endIdx: 9 },
 		now: 130_000,
 		lastEmergencyAt: 129_700,
+		// lastFoldAt 5 s ago: the 120 s ladder interval has NOT passed — the
+		// cooldown cut-in must ignore it (the emergency fold that opened this
+		// cooldown just advanced lastFoldAt; interval >= remaining cooldown
+		// always, so gating on it would re-create the starvation loop).
+		lastFoldAt: 125_000,
 	});
 	assert.equal(hot.action, "fold");
 	assert.equal(hot.kind, "ladder");
@@ -351,6 +356,7 @@ test("emergency-cooldown cut-in: a ready ladder fires inside the cooldown window
 		now: 130_000,
 		lastEmergencyAt: 129_700,
 		lastFoldAt: 129_999,
+		ladderRuns: { t2: [], t3: [] },
 	});
 	assert.equal(quiet.action, "none");
 	assert.equal(quiet.reason, "emergency-cooldown");
