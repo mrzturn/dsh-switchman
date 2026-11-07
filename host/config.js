@@ -260,14 +260,13 @@ export const Config = z.object({
 	 *  next model call reasons over). */
 	trimProtectedTail: z.number().min(0).max(100).default(6).volatile(),
 	/** Side-model fold cadence cap per rolling hour (emergency mechanical
-	 *  folds are exempt; they have their own cooldown). 12 covers a full-speed
-	 *  session's theoretical fold rate (~50k increment per fold at 5-10k
-	 *  tok/min growth ⇒ 6-12 folds/hour) and leaves headroom for ladder
-	 *  folds, which share this cap — 6 made heavy sessions hit the ceiling
-	 *  and degrade to mechanical emergency folds (observed live during the
-	 *  ladder test: 17 emergency folds in one hour while growth was
-	 *  starved). */
-	trimMaxFoldsPerHour: z.number().min(1).max(60).default(12).volatile(),
+	 *  folds are exempt; they have their own cooldown). 16 covers continuous
+	 *  full-rate generation: at ~170 tok/s output a session grows ~612k
+	 *  raw tokens/hour ⇒ 12.2 folds/hour of pure T1 demand (one 50k
+	 *  increment fold every ~4.9 min), leaving 12 starved and zero ladder
+	 *  share; 16 fits the T1 demand plus 2-3 ladder folds plus headroom
+	 *  (observed live: at 12, growth consumed the whole budget). */
+	trimMaxFoldsPerHour: z.number().min(1).max(60).default(16).volatile(),
 	/** Route for the side-model summarizer (L3). Empty = inherit the
 	 *  session's current model. */
 	trimSideModel: IntentRouteSchema.default({ provider: "", model: "" }).volatile(),

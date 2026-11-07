@@ -217,7 +217,7 @@ any fold; they fire only when the raw tiers stay quiet.
 | Emergency tier | usage ≥ 95% (142.5k of 150k) | `trigger.js:88`, `config.js:247` | mechanical fold, no side-model call |
 | Emergency cooldown | 90 s | `trigger.js:31` `EMERGENCY_COOLDOWN_MS` | also applies to a rejected emergency commit |
 | Min interval, side-model folds | 60 s | `trigger.js:28` `FOLD_MIN_INTERVAL_MS` | |
-| Hourly cap | 6 side-model folds per rolling hour | `trigger.js:101-102`, `config.js:257` | emergency exempt: evaluated before the cap AND before the 60 s min-interval (it has its own 90 s cooldown) |
+| Hourly cap | 16 side-model folds per rolling hour | `trigger.js:101-102`, `config.js:257` | emergency exempt: evaluated before the cap AND before the 60 s min-interval (it has its own 90 s cooldown) |
 | Protected tail | 6 messages | `trigger.js:40`, `config.js:254` | never folded |
 | Window | model-resolved (150000 for deepseek-flash), capped by `trimWindowTokens` (0 ⇒ `wmForceTokens`) | `index.js:204`, `index.js:455-483` | `null` disables pressure/emergency tiers |
 | Fold-failure backoff | 60 s × 2^(n−1), 15 min ceiling | `index.js:323-324` | failures advance no cadence gate |
@@ -280,7 +280,7 @@ all.
   rest of the session. Its summary still renders in the view, but nothing ships,
   so on a frozen-dispatch session those tokens stay on the wire: the fold was
   paid for and its relief is lost. Expected, not a bug.
-- **Hourly cap + emergency exemption.** At most 12 side-model folds per hour, with
+- **Hourly cap + emergency exemption.** At most 16 side-model folds per hour, with
   the emergency tier exempt from that cap; under very heavy use the prompt can
   spike to the emergency line (142.5k of a 150k window) before a fold lands.
 - **Growth-anchor unit mix.** `lastFoldLowTokens` is stored in VIEW units while
