@@ -51,6 +51,33 @@ export const SUMMARY_SYSTEM_PROMPT = [
 	"- Output ONLY the summary text.",
 ].join("\n");
 
+/** Flat text body of one message (content blocks joined, unserializable
+ * values tolerated). Shared by renderMaterial and the zero-material
+ * rescue path. */
+function renderMessageBody(message) {
+	const content = message?.content;
+	if (typeof content === "string") return content;
+	if (Array.isArray(content)) {
+		const chunks = [];
+		for (const block of content) {
+			if (block !== null && typeof block === "object" && typeof block.text === "string") chunks.push(block.text);
+			else {
+				try {
+					chunks.push(JSON.stringify(block ?? null));
+				} catch {
+					chunks.push("[unserializable]");
+				}
+			}
+		}
+		return chunks.join("\n");
+	}
+	try {
+		return JSON.stringify(message ?? null);
+	} catch {
+		return "[unserializable]";
+	}
+}
+
 /** Render the fold material for one message range: labeled, ref-stamped
  * blocks. Deterministic (same slice, same bytes) — refs come from refOf so
  * id-less messages stay stable across re-sends. */
@@ -62,29 +89,7 @@ export function renderMaterial(messages, startIdx, endIdx, refOf) {
 		const message = messages[i];
 		const ref = refOf(message, i);
 		const role = typeof message?.role === "string" ? message.role : "unknown";
-		let text;
-		const content = message?.content;
-		if (typeof content === "string") text = content;
-		else if (Array.isArray(content)) {
-			const chunks = [];
-			for (const block of content) {
-				if (block !== null && typeof block === "object" && typeof block.text === "string") chunks.push(block.text);
-				else {
-					try {
-						chunks.push(JSON.stringify(block ?? null));
-					} catch {
-						chunks.push("[unserializable]");
-					}
-				}
-			}
-			text = chunks.join("\n");
-		} else {
-			try {
-				text = JSON.stringify(message ?? null);
-			} catch {
-				text = "[unserializable]";
-			}
-		}
+		const text = renderMessageBody(message);
 		if (Array.isArray(message?.tool_calls) && message.tool_calls.length > 0) {
 			try {
 				text += `\n[tool_calls] ${JSON.stringify(message.tool_calls)}`;
@@ -101,7 +106,20 @@ export function renderMaterial(messages, startIdx, endIdx, refOf) {
 		parts.push(head + body);
 		chars += head.length + body.length;
 	}
-	if (truncated) parts.push(`--- [...material truncated after ${chars} chars; ${endIdx - startIdx + 1 - parts.length} messages dropped from this render...] ---\n`);
+	if (truncated) {
+		// [2026-11-07]-[a single over-ceiling message used to render ZERO
+		// material]-[parts stayed empty, the side model was asked to compress
+		// nothing, and the giant message got permanently replaced by a
+		// content-free summary. Keep the FIRST message's head plus a capped
+		// prefix so the summary at least carries what the message is.]
+		if (parts.length === 0 && startIdx <= endIdx) {
+			const first = messages[startIdx];
+			const firstRef = refOf(first, startIdx);
+			const role = typeof first?.role === "string" ? first.role : "unknown";
+			parts.push(`--- [m${firstRef}] (${role}) ---\n${renderMessageBody(first).slice(0, 2_000)}\n\n`);
+		}
+		parts.push(`--- [...material truncated after ${chars} chars; ${endIdx - startIdx + 1 - parts.length} messages dropped from this render...] ---\n`);
+	}
 	return parts.join("");
 }
 
