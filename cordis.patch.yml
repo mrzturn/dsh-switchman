@@ -28,11 +28,13 @@
 #
 # Provenance & maintenance: the four `plugins` lists below are copied verbatim
 # from @deepseek-ai/dsh-web-app presets/{standard,ptc,minimal,cordis}.patch.yml
-# (dsh 0.2.1-rc.1: time-context + tool-schedule + the disabled tool-plugin-market
-# row joined every list, the subagent rows lost `backgroundMode` under the
-# unified activation lifecycles, the ralph/codex/claude-code rows left the
-# presets, minimal gained image-only fs tools and a compaction group, and the
-# plan-mode text was reworded). A Loader override replaces the target row's
+# (dsh 0.2.2-rc.1: tool-fs ships `applyPatch: false`, tool-fs-search ships
+# `sampleOverCapGlobResults: false`, the subagent spawn row carries
+# `modelSelection` + `modelDiscovery` (the 0.2.1 unified-activation shape),
+# tool-plugin-manager/market disabled guards use `!!js "!ctx.get('profileContext')"`
+# expression strings, and no list-agents row ships; dsh 0.2.1-rc.1 had added
+# time-context + tool-schedule, dropped `backgroundMode`, and reworded the
+# plan-mode text). A Loader override replaces the target row's
 # `config` wholesale, so every field is restated here. After a DSH upgrade that
 # changes the shipped presets, re-sync these lists from the new preset files,
 # then reinstall this bundle; scripts/validate.mjs compares this patch against
@@ -45,7 +47,7 @@
 # scope, and a second instance makes session composition throw
 # `tool "list_subagent_models" is already registered in this scope` — breaking
 # creation of ALL new sessions and the recomposition of old ones. The shipped
-# presets (verified against installed dsh-web-app 0.2.0-rc.2, the fork's
+# presets (verified against installed dsh-web-app 0.2.2-rc.1, the fork's
 # 0.2.1-alpha.1, and 0.2.1-rc.1) enable it on the spawn row only; fork-side
 # explicit routing is not a factory capability.
 #
