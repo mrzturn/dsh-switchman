@@ -523,7 +523,11 @@ export function applyContextTrim(ctx, config) {
 		// some dispatch options are frozen on top of that. injectView picks the
 		// best strategy per dispatch and fails open; the view-applied line
 		// records which strategy was used.
-		const injected = injectView(options, messages, view);
+		// [2026-11-07]-[trimMode "off" means measure only]-[the view build runs
+		// for the meter, but the fold must not reach the wire — inspection
+		// report P0-2: off previously still spliced the folded view into the
+		// dispatch.]
+		const injected = modeNow() !== "off" ? injectView(options, messages, view) : "nothing-to-apply";
 		const viewTokens = estimateTokensOf(view.messages);
 		const blocksCount = Array.isArray(ledger.blocks) ? ledger.blocks.length : 0;
 		// Wire truth in the row: the most recent provider prompt size (from the
@@ -772,7 +776,7 @@ export function applyContextTrim(ctx, config) {
 	// diagnostics live in decisions.log (view-applied / decision / outcome
 	// rows) and the client badge.
 	try {
-		ctx.systemPrompt?.section?.({ name: "switchman:trim", order: 10450, interpolate: false, text: () => TRIM_PROTOCOL_TEXT });
+		ctx.systemPrompt?.section?.({ name: "switchman:trim", order: 10450, interpolate: false, text: () => (enabledNow() && modeNow() !== "off" ? TRIM_PROTOCOL_TEXT : "") });
 	} catch (error) {
 		warn(`[context-trim] systemPrompt.section failed: ${error?.message ?? error}`);
 	}
@@ -873,6 +877,7 @@ export function applyContextTrim(ctx, config) {
 			async execute() {
 				const sessionId = sessionIdOf({});
 				if (sessionId === null) return "No session context available.";
+				if (!enabledNow()) return "Context trimming is disabled for this deployment.";
 				const ledger = store.ledgerOf(sessionId);
 				const capture = captures.get(sessionId);
 				const { protectedTail } = thresholdsNow();
@@ -921,6 +926,7 @@ export function applyContextTrim(ctx, config) {
 			async execute(args) {
 				const sessionId = sessionIdOf({});
 				if (sessionId === null) return "No session context available.";
+				if (!enabledNow() || modeNow() === "off") return "Context trimming is disabled for this deployment.";
 				const capture = captures.get(sessionId);
 				if (capture === undefined) return "No captured history yet — fold is unavailable until the next model call.";
 				const positions = refPositions(capture.messages);
