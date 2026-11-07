@@ -129,8 +129,14 @@ export const Config = z.object({
 	// --- Phase 3: context watermark control --------------------------------
 	/** Soft watermark: advisory banner + delegation nudge (tokens). */
 	wmSoftTokens: z.number().min(1000).default(80000).volatile(),
-	/** Hard watermark: read budget tightens, wrap-up advised (tokens). */
-	wmHardTokens: z.number().min(2000).default(120000).volatile(),
+	/** Hard watermark: read budget tightens, wrap-up advised (tokens). 95k
+	 *  aligns with the trim pressure line (60% of the 150k window): past
+	 *  this point the fold engine is already folding, so per-call read
+	 *  budgets must tighten at the SAME boundary — agent sessions grow in
+	 *  PULSES (one large file read = tens of thousands of tokens injected
+	 *  at once, faster than any fold can commit), and the read budget is
+	 *  the only preventive valve on the pulse source. */
+	wmHardTokens: z.number().min(2000).default(95000).volatile(),
 	/** Force watermark: handover document + compaction (tokens). */
 	wmForceTokens: z.number().min(3000).default(150000).volatile(),
 	/** Per-call read budget for read/glob/grep (tokens). */
