@@ -559,6 +559,21 @@ describe("summarizer: material render and mechanical fallback", () => {
 		assert.match(one, /message 0 seed 0/u);
 	});
 
+	test("renderMaterial appends tool_calls to the material body", () => {
+		const messages = [
+			{
+				role: "assistant",
+				content: "running the check",
+				tool_calls: [{ id: "call_1", type: "function", function: { name: "ls", arguments: "{}" } }],
+			},
+			{ role: "user", content: "plain message" },
+		];
+		const material = renderMaterial(messages, 0, 1, refOf);
+		assert.match(material, /\[tool_calls\]/u);
+		assert.match(material, /"call_1"/u);
+		assert.match(material, /message: plain message|plain message/u);
+	});
+
 	test("renderMaterial truncates beyond the cap", () => {
 		const messages = [{ role: "user", content: "y".repeat(MAX_MATERIAL_CHARS + 10) }];
 		const material = renderMaterial(messages, 0, 0, refOf);

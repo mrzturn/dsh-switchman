@@ -100,7 +100,7 @@ export function renderMaterial(messages, startIdx, endIdx, refOf) {
 		const message = messages[i];
 		const ref = refOf(message, i);
 		const role = typeof message?.role === "string" ? message.role : "unknown";
-		const text = renderMessageBody(message);
+		let text = renderMessageBody(message);
 		if (Array.isArray(message?.tool_calls) && message.tool_calls.length > 0) {
 			try {
 				text += `\n[tool_calls] ${JSON.stringify(message.tool_calls)}`;
