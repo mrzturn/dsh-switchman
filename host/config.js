@@ -245,7 +245,14 @@ export const Config = z.object({
 	/** Emergency tier (tier c): forced MECHANICAL fold (no side-model call)
 	 *  at this percent of the window; cooldown-gated. */
 	trimEmergencyPercent: z.number().min(1).max(100).default(95).volatile(),
-	/** Effective-window cap for the tier math: tier points are computed
+	/** [2026-11-07]-[growth/increment constants are absolute tokens
+	 *  calibrated for the default 150k effective window]-[scaling
+	 *  trimWindowTokens down without scaling trimGrowthTokens /
+	 *  trimIncrementTokens proportionally makes the growth tier unreachable
+	 *  (a 30k window can never accumulate a 50k increment; observed live:
+	 *  growth fired once while emergency fired 17 times). Rule of thumb:
+	 *  increment ≈ window/3, growth ≈ increment × 0.45.]
+	 *  Effective-window cap for the tier math: tier points are computed
 	 *  against min(model-resolved window, cap). 0 = auto (cap follows
 	 *  wmForceTokens, so folds always fire ahead of the handover tier). */
 	trimWindowTokens: z.number().min(0).default(0).volatile(),
