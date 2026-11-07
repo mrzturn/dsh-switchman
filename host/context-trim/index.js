@@ -555,8 +555,17 @@ export function applyContextTrim(ctx, config) {
 		// history below the floor, so the guard must not stick: after
 		// SIDE_DISPATCH_SKIP_BUDGET consecutive skips the dispatch is accepted
 		// as main, which re-arms capture/baseline on the compacted history.
-		const sideCandidate = inFlight.has(sessionId)
-			|| (view.applied === 0 && messages.length < SIDE_DISPATCH_MIN_MESSAGES && (blocksCount > 0 || captures.has(sessionId) || trimViewBySession.has(sessionId)));
+		// [2026-11-07]-[fold-span dispatches are self-noise, not side
+		// candidates]-[an in-flight fold cycle's own summarizer re-sends used
+		// to consume the side-dispatch skip budget: three consecutive span
+		// dispatches got "budget exhausted — accepting as main" and polluted
+		// the capture/baseline (the 2026-11-04 regression path). They now
+		// bypass unconditionally — never counted, never main.]
+		if (inFlight.has(sessionId)) {
+			decisionLog(`session=${sessionId} fold-span dispatch skipped view=${Math.round(viewTokens)} msgs=${messages.length}`);
+			return { sessionId, viewTokens, sideDispatch: true };
+		}
+		const sideCandidate = view.applied === 0 && messages.length < SIDE_DISPATCH_MIN_MESSAGES && (blocksCount > 0 || captures.has(sessionId) || trimViewBySession.has(sessionId));
 		const skipCount = sideDispatchSkipsBySession.get(sessionId) ?? 0;
 		if (sideCandidate && skipCount < SIDE_DISPATCH_SKIP_BUDGET) {
 			sideDispatchSkipsBySession.set(sessionId, skipCount + 1);
