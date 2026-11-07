@@ -930,8 +930,15 @@ function applyContextWatch(ctx, config) {
 	ctx.commands.register({
 		name: "ctx-handover",
 		description: "Trigger a full context handover for this session now (document + compaction + continuation).",
+		// Signal deliberately dropped (inspection W20): a turn-scoped
+		// AbortSignal shared by every /compact retry turns a user cancel into
+		// six straight failures walking the full ~530 s backoff ladder with a
+		// misleading error text — the same reason the ctx_handover TOOL path
+		// drops its turn signal. sessionCompact fabricates a fresh un-aborted
+		// signal when none arrives; user cancel lets compaction finish, like
+		// the tool path.
 		handler: (invocation) =>
-			runHandover(invocation?.agent, sessionIdOf(invocation?.agent), invocation?.commandId, invocation?.signal, "manual"),
+			runHandover(invocation?.agent, sessionIdOf(invocation?.agent), invocation?.commandId, undefined, "manual"),
 	});
 
 	// --- E. ctx_handover: the agent-callable front door to the same
