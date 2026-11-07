@@ -440,7 +440,24 @@ describe("trigger: tiers and gates", () => {
 		assert.equal(fire.tier, "pressure");
 	});
 
-	test("emergency tier fires at 95%, mechanical path, cooldown-gated", () => {
+	test("frontier only advances: an advisory middle-range fold must not drag it backward", () => {
+	const store = createStore({ stateDir: mkdtempSync(join(tmpdir(), "frontier-")) });
+	const messages = Array.from({ length: 12 }, (_, i) => ({ id: `m${i}`, role: "user", content: [{ type: "text", text: `m${i} ` + "x".repeat(40) }] }));
+	const positions = refPositions(messages);
+	// engine folds the tail range first (frontier = m10)
+	const tail = store.commitFold("s", { refRange: { firstId: "m8", lastId: "m10" }, count: 3, approxTokens: 300, summary: "tail fold", tier: 1 }, positions);
+	assert.ok(tail.ok);
+	assert.equal(store.ledgerOf("s").frontier, "m10");
+	// advisory folds a MIDDLE range before the frontier
+	const middle = store.commitFold("s", { refRange: { firstId: "m1", lastId: "m3" }, count: 3, approxTokens: 300, summary: "middle fold", tier: 1 }, positions);
+	assert.ok(middle.ok, "middle range is disjoint and legal");
+	assert.equal(store.ledgerOf("s").frontier, "m10", "frontier must not regress to m3");
+	// computeFoldableRange still starts after the frontier (not after m3)
+	const foldable = computeFoldableRange(messages, store.ledgerOf("s"), 1);
+	assert.ok(foldable === null || foldable.startIdx > 10, "foldable span must stay ahead of the frontier");
+});
+
+test("emergency tier fires at 95%, mechanical path, cooldown-gated", () => {
 		const fire = evaluateTrigger({ ...base, viewTokens: 195_000, foldable: foldable() }); // 97.5%
 		assert.equal(fire.action, "emergency");
 		assert.equal(fire.tier, "emergency");

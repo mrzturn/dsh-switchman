@@ -445,7 +445,23 @@ export function createStore(options = {}) {
 			}
 		}
 		ledger.blocks.push(block);
-		ledger.frontier = block.refRange.lastId;
+		// [2026-11-07]-[frontier only ever advances]-[an advisory fold of a
+		// MIDDLE range must not drag the boundary backward: computeFoldableRange
+		// would re-propose already-folded spans and every raw fold would stall
+		// on overlaps-existing-fold until an epoch reset (inspection report
+		// P0-1). Position comparison when a posMap is available; without one
+		// the historical unconditional assignment stands — engine folds always
+		// pass a posMap.]
+		let advanceFrontier = true;
+		if (posMap !== null) {
+			const positions = posMap instanceof Map ? posMap : refPositions(posMap);
+			const lastList = positions.get(block.refRange.lastId);
+			const frontierList = typeof ledger.frontier === "string" ? positions.get(ledger.frontier) : undefined;
+			if (lastList !== undefined && frontierList !== undefined && frontierList.length > 0) {
+				advanceFrontier = lastList[lastList.length - 1] > frontierList[frontierList.length - 1];
+			}
+		}
+		if (advanceFrontier) ledger.frontier = block.refRange.lastId;
 		ledger.lastFoldAt = now;
 		ledger.foldsThisHour = ledger.foldsThisHour.filter((ts) => now - ts < 3_600_000);
 		ledger.foldsThisHour.push(now);
