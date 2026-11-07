@@ -14,3 +14,6 @@ node_modules/
 
 # local agent notes (not for publish)
 AGENT.md
+
+# harness session cache (this workspace)
+.zcode/
