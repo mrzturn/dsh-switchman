@@ -1,12 +1,12 @@
 /** dsh-switchman context-trim stream metrics.
  *
- * Meter duality (design §8): trim thresholds run on VIEW-estimated tokens
- * (buildView output, the meter the fold logic controls), while the
- * watermark keeps its STORED-token meter — the two signals are kept
- * separate on purpose. This module wraps the llm/stream result generator
- * so every provider response is sampled for usage (input/cached/output)
- * without ever breaking the stream: sampling errors are swallowed, the
- * chunk always flows through untouched.
+ * Meter duality (design §8): the trim pressure tiers and the watermark read
+ * the SAME wire-domain meter — max(outbound view estimate, the last sampled
+ * provider prompt) — while growth cadence stays on the view alone (the
+ * meter the fold logic controls). This module supplies the wire half: it
+ * wraps the llm/stream result generator so every provider response is
+ * sampled for usage (input/cached/output) without ever breaking the stream:
+ * sampling errors are swallowed, the chunk always flows through untouched.
  */
 
 /** Extract usage fields from a stream chunk. Returns

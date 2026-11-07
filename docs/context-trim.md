@@ -47,9 +47,11 @@ dispatches. The watermark, reading the view, sat far below the force tier: no
 forced handover ever fired, on a session that genuinely needed one.
 
 Rule: a view that never reaches the wire must not drive the watermark.
-`recentTrimViewTokensOf()` (the watermark's view source) returns the view
-estimate only when all of the following hold; otherwise it returns `null` and
-the watermark falls back to the provider-reported tally (which keeps the force
+`recentTrimPromptTokensOf()` (the watermark's meter source) returns the
+watermark's wire-domain meter — `max(view estimate, last sampled
+main-dispatch prompt)`, the same number the trim pressure tiers evaluate —
+only when all of the following hold; otherwise it returns `null` and the
+watermark falls back to the provider-reported tally (which keeps the force
 tier and the auto-handover working):
 
 - the entry exists and is fresher than `TRIM_VIEW_MAX_AGE_MS` (10 minutes);
@@ -61,6 +63,26 @@ after frozen ones re-arms the fold trigger, but the watermark keeps falling back
 to the tally until a full TTL passes with no `none` (real sessions mix — one
 logged 46 `none` next to 14 `swapped`). The gate itself is fail-open: any
 malformed entry degrades to `null`, i.e. tally-based metering.
+
+### The wire-domain meter (why max, not the bare view)
+
+The watermark's meter is `max(view, wire)` — deliberately the SAME expression
+the trim pressure tiers evaluate in `maybeFold`. Each pure source has one
+bias: the bare view never counts the system/tool sections (a
+session-shape-dependent mass; live decision-log pairs drift −5k…+6k between
+view and wire in steady state), so a view-only watermark tightens every
+protective tier late by exactly that mass — and the `wmHardTokens` 95k ≙
+trim-pressure 90k alignment silently loses its meaning in units. The stored
+tally is wire-domain but never re-prices splice-level folds (it keeps
+counting material the model no longer receives), so it is only the
+gate-rejected fallback, never a max operand. The 2026-11-04 incident above is
+the view-only bias in extremity; `max(view, wire)` is the structural answer
+(inspection P1-3, adjudicated 2026-11-07). The wire half is sampled from
+accepted MAIN dispatches only (`noteTrimWireTokens`): side dispatches sample
+usage on the same session id, and a tiny inherited-id prompt must never LOWER
+the wire floor below the main history's real prompt. The bare-view accessor
+`recentTrimViewTokensOf()` remains exported (gate primitive, diagnostics,
+tests); the watermark no longer reads it.
 
 Whether folding pauses is a SEPARATE, durable capability question
 (`host/context-trim/index.js:690`). A cycle is skipped with
@@ -309,11 +331,14 @@ all.
   splice path alone.
 - **Meter duality, old split.** The original porting notes proposed keeping the
   watermark on the STORED tally forever and using view estimates only for trim
-  triggers. Superseded: the watermark now reads the outbound view (so folding
-  relieves the watermark), with the wire-truth gate as the correctness
-  backstop — view reads are allowed only while the view provably reaches the
-  wire, otherwise the tally takes over. Stored tallies still bound disk/context
-  pressure but no longer drive tiers.
+  triggers. Superseded: the watermark reads the trim layer's wire-domain meter
+  `max(view, last sampled main prompt)` (so folding relieves the watermark AND
+  the system/tool mass is no longer lost), with the wire-truth gate as the
+  correctness backstop — meter reads are allowed only while the view provably
+  reaches the wire, otherwise the tally takes over. Stored tallies still bound
+  disk/context pressure but no longer drive tiers. (An intermediate state —
+  watermark on the bare view alone — is also superseded: it under-tightened
+  every tier by the system/tool mass; see "The wire-domain meter" above.)
 - **Splice as the only shipping path.** v1.9.1 shipped the contract and gate
   with folds effectively meter-only on frozen dispatches; v1.10.0 added surface
   replace as the shipping path. Design work on "ship folds through `llm/stream`

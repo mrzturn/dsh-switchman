@@ -14,7 +14,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mock, test } from "node:test";
-import { applyContextTrim, recentTrimInjectOf, recentTrimViewTokensOf } from "../../host/context-trim/index.js";
+import { applyContextTrim, recentTrimInjectOf, recentTrimPromptTokensOf, recentTrimViewTokensOf } from "../../host/context-trim/index.js";
 import { measureNow } from "../../host/context-watch.js";
 import { estimateTokensOf, refOf, refPositions } from "../../host/context-trim/view.js";
 
@@ -217,6 +217,42 @@ test("meter duality: watermark prefers the fresh trim view over the stored tally
 	assert.equal(measureNow(meterCtx, { session: { id: "unknown-session" } }), 150_000);
 });
 
+test("meter duality, wire domain: the watermark reads max(view, last main wire)", async (t) => {
+	let listener = null;
+	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
+	const { ctx } = mockCtx({ llmFiber: fiber });
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-dual-wire-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	const meterCtx = { tokenMeter: { measure: () => ({ totalTokens: 150_000 }) } };
+
+	// A main dispatch whose provider prompt is far larger than the view
+	// estimate — the system/tool mass the view never counts. The watermark
+	// must read the wire (the trim pressure meter's second operand), not the
+	// view and not the stale stored tally (inspection P1-3).
+	const messages = Array.from({ length: 8 }, (_, i) => ({ role: i % 2 === 0 ? "user" : "assistant", content: [{ type: "text", text: "V".repeat(2_000) }] }));
+	const stream = listener({ sessionId: "dualw-1", messages, provider: "p", model: "m" }, async function* () {
+		yield { type: "finish", usage: { input_tokens: 120_000 } }; });
+	for await (const chunk of stream) void chunk;
+	const view = recentTrimViewTokensOf("dualw-1");
+	assert.ok(Number.isFinite(view) && view > 0 && view < 120_000, "sanity: the view estimate sits below the wire");
+	assert.equal(recentTrimPromptTokensOf("dualw-1"), 120_000);
+	assert.equal(measureNow(meterCtx, { session: { id: "dualw-1" } }), 120_000);
+
+	// A side dispatch (tiny inherited-id call) samples usage on the same
+	// session id but must never LOWER the wire floor: the registry keeps the
+	// main dispatch's real prompt and the watermark stays on it.
+	const side = listener({ sessionId: "dualw-1", messages: [{ role: "user", content: [{ type: "text", text: "title" }] }, { role: "assistant", content: [{ type: "text", text: "ok" }] }], provider: "p", model: "m" }, async function* () {
+		yield { type: "finish", usage: { input_tokens: 10 } }; });
+	for await (const chunk of side) void chunk;
+	assert.equal(recentTrimPromptTokensOf("dualw-1"), 120_000, "side dispatch must not lower the wire floor");
+	assert.equal(measureNow(meterCtx, { session: { id: "dualw-1" } }), 120_000);
+
+	// TTL honored on the wire half too: a stale entry falls back to the tally.
+	assert.equal(recentTrimPromptTokensOf("dualw-1", -1), null);
+	assert.equal(recentTrimViewTokensOf("dualw-1", -1), null);
+});
+
 test("side-dispatch guard: tiny inherited-id calls never clobber the meters", async (t) => {
 	let listener = null;
 	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
@@ -328,6 +364,7 @@ test("wire-truth gate: frozen dispatches switch the watermark to the tally and p
 	await send(Object.freeze({ sessionId: "wire-1", messages: Object.freeze(store.slice()), provider: "p", model: "m" }));
 	assert.equal(recentTrimInjectOf("wire-1"), "none");
 	assert.equal(recentTrimViewTokensOf("wire-1"), null, "bridge must fall back to the tally");
+	assert.equal(recentTrimPromptTokensOf("wire-1"), null, "the wire-domain bridge obeys the same gate");
 	assert.equal(measureNow(meterCtx, { session: { id: "wire-1" } }), 150_000);
 
 	// The wire-truth state is human diagnostics now (decisions.log), never
@@ -350,6 +387,7 @@ test("wire-truth gate: frozen dispatches switch the watermark to the tally and p
 	await send(dispatch(store.slice()));
 	assert.equal(recentTrimInjectOf("wire-1"), "in-place");
 	assert.equal(recentTrimViewTokensOf("wire-1"), null, "bridge stays on the tally right after a none");
+	assert.equal(recentTrimPromptTokensOf("wire-1"), null, "the sticky gate binds the wire-domain bridge too");
 });
 
 test("side-dispatch budget: a shrunken post-compaction history is re-accepted as main", async (t) => {

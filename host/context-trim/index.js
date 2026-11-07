@@ -48,13 +48,16 @@ import { childSessionIdOf } from "../subagent-model.js";
  * agent/status and assembleContextFor's context.agent are both the object
  * form). Mirrors the host/context-watch.js:122 precedent. Returns null when
  * nothing usable is present. */
-// ---- cross-layer view registry (meter duality, design §8) ------------------
-// Latest outbound-view token estimate per session, refreshed on EVERY
-// llm/stream call. host/context-watch.js prefers this over the token meter's
-// stored tally while it is fresh, so the watermark tracks what the model
-// actually sees after billion-context folding instead of over-triggering
-// handovers off a stale stored measure.
+// ---- cross-layer meter registries (meter duality, design §8) ---------------
+// Per session: the latest outbound-view token estimate plus the last sampled
+// provider prompt, refreshed on every ACCEPTED main llm/stream call (the
+// side-dispatch guard keeps auxiliary calls out of both). host/context-watch.js
+// reads the wire-domain bridge over these (recentTrimPromptTokensOf:
+// max(view, wire)) so the watermark meters on the same boundary as the trim
+// pressure tiers; the wire-truth gate decides when neither registry may drive
+// it and the stored tally takes over.
 const trimViewBySession = new Map(); // sessionId -> { viewTokens, at, inject, lastNoneAt }
+const trimWireBySession = new Map(); // sessionId -> { promptTokens, at } — last sampled provider prompt of an accepted MAIN dispatch (side calls never write; a tiny inherited-id usage sample must not lower the watermark's wire floor)
 /** Freshness TTL for the in-memory view/injection registry (watermark and
  *  banner display only). NEVER a fold gate: gating folds on "did the surface
  *  channel ship recently" deadlocks resumed sessions (2026-11-05). The fold
@@ -78,30 +81,84 @@ const SIDE_DISPATCH_SKIP_BUDGET = 2;
  *  accepted main dispatch). */
 const sideDispatchSkipsBySession = new Map();
 
+/** Shared wire-truth gate (docs/context-trim.md): the view-registry entry for
+ * one session when the recent dispatch stream provably carried the view —
+ * null when missing, stale, injected "none", or inside the sticky lastNoneAt
+ * window (mixed sessions exist — one real session logged 46 none + 14
+ * swapped). Observed 2026-11-04: a view that never reaches the wire must not
+ * drive the watermark (view ~80k vs a 176k wire while the force tier stayed
+ * silent and the auto-handover never fired). Both watermark accessors read
+ * through this gate; itself fail-open. */
+function gatedViewEntry(sessionId, maxAgeMs) {
+	if (typeof sessionId !== "string" || sessionId === "") return null;
+	const entry = trimViewBySession.get(sessionId);
+	if (entry === undefined) return null;
+	if (Date.now() - entry.at > maxAgeMs) return null;
+	if (entry.inject === "none") return null;
+	if (Number.isFinite(entry.lastNoneAt) && entry.lastNoneAt > 0 && Date.now() - entry.lastNoneAt < maxAgeMs) return null;
+	return entry;
+}
+
 /** Most recent outbound-view token estimate for a session, or null when
- * missing, non-positive, older than maxAgeMs — or when the recent dispatch
- * stream could not carry the view (injected "none": frozen options AND
- * messages, so the model still receives the raw history and the provider
- * tally is the only truthful meter). The gate is deliberately sticky: a
- * single mutable dispatch right after frozen ones re-arms maybeFold, but
- * the WATERMARK keeps falling back to the tally until no "none" occurred
- * within the TTL window (mixed sessions exist — one real session logged 46
- * none + 14 swapped). Read by the watermark layer (meter duality); itself
- * fail-open. */
+ * missing, non-positive, or gate-rejected. The bare-view half of the meter
+ * duality bridge — kept for diagnostics and as the gate primitive; the
+ * watermark layer reads the wire-domain accessor below. */
 export function recentTrimViewTokensOf(sessionId, maxAgeMs = TRIM_VIEW_MAX_AGE_MS) {
 	try {
-		if (typeof sessionId !== "string" || sessionId === "") return null;
-		const entry = trimViewBySession.get(sessionId);
-		if (entry === undefined) return null;
-		if (Date.now() - entry.at > maxAgeMs) return null;
-		// Wire-truth gate: a view that never reaches the wire must not drive
-		// the watermark (observed 2026-11-04: view ~80k vs a 176k wire while
-		// the force tier stayed silent and the auto-handover never fired).
-		if (entry.inject === "none") return null;
-		if (Number.isFinite(entry.lastNoneAt) && entry.lastNoneAt > 0 && Date.now() - entry.lastNoneAt < maxAgeMs) return null;
-		return Number.isFinite(entry.viewTokens) && entry.viewTokens > 0 ? entry.viewTokens : null;
+		const entry = gatedViewEntry(sessionId, maxAgeMs);
+		return entry !== null && Number.isFinite(entry.viewTokens) && entry.viewTokens > 0 ? entry.viewTokens : null;
 	} catch {
 		return null;
+	}
+}
+
+/** Meter-duality bridge, wire domain (design §8): the same number the trim
+ * pressure tiers evaluate in maybeFold — Math.max(outbound view estimate,
+ * the last sampled provider prompt) — or null when the gate rejects or
+ * neither component is fresh. The watermark layer reads THIS (not the bare
+ * view) so its soft/hard/force tiers and the read budget sit on the same
+ * boundary as the fold engine: the view estimate never counts the
+ * system/tool sections (a session-shape-dependent mass — live decision-log
+ * pairs drift −5k…+6k between view and wire in steady state), so a
+ * view-only watermark tightens every protective tier late by exactly that
+ * mass, and the wmHardTokens-95k ≙ trim-pressure-90k alignment (c453b91)
+ * is silently defeated. The wire half comes from accepted MAIN dispatches
+ * only (noteTrimWireTokens below). Same sticky gate as the view bridge;
+ * fail-open — null means the caller falls back to the stored tally. */
+export function recentTrimPromptTokensOf(sessionId, maxAgeMs = TRIM_VIEW_MAX_AGE_MS) {
+	try {
+		const entry = gatedViewEntry(sessionId, maxAgeMs);
+		if (entry === null) return null;
+		let best = 0;
+		if (Number.isFinite(entry.viewTokens) && entry.viewTokens > 0) best = entry.viewTokens;
+		const wire = trimWireBySession.get(sessionId);
+		if (wire !== undefined && Date.now() - wire.at <= maxAgeMs && Number.isFinite(wire.promptTokens) && wire.promptTokens > best) best = wire.promptTokens;
+		return best > 0 ? best : null;
+	} catch {
+		return null;
+	}
+}
+
+/** Record the provider prompt size (uncached + cacheRead + cacheWrite) of one
+ * usage sample from an ACCEPTED main dispatch. Side dispatches (fold-span
+ * re-sends, title generation, web-search summaries) sample usage on the same
+ * session id but must never reach this registry: their tiny prompts would
+ * LOWER the watermark's wire floor below the main history's real prompt —
+ * exactly the pollution the side-dispatch guard keeps out of the view
+ * registry. Fail-open, bounded like the view registry. */
+function noteTrimWireTokens(sessionId, usage) {
+	try {
+		if (typeof sessionId !== "string" || sessionId === "") return;
+		const promptTokens = promptTokensOf({
+			lastInputTokens: usage.inputTokens,
+			cachedTokens: usage.cachedTokens,
+			cacheWriteTokens: usage.cacheWriteTokens,
+		});
+		if (promptTokens === null) return;
+		trimWireBySession.set(sessionId, { promptTokens, at: Date.now() });
+		if (trimWireBySession.size > 200) trimWireBySession.delete(trimWireBySession.keys().next().value);
+	} catch {
+		/* observability must never throw */
 	}
 }
 
@@ -990,10 +1047,14 @@ export function applyContextTrim(ctx, config) {
 
 	function streamListener(options, next) {
 		let viewTokens = null;
+		let mainDispatch = false;
 		try {
 			if (enabledNow()) {
 				const applied = applyViewToOptions(options);
-				if (applied !== null) viewTokens = applied.viewTokens;
+				if (applied !== null) {
+					viewTokens = applied.viewTokens;
+					mainDispatch = applied.sideDispatch !== true;
+				}
 			}
 		} catch (error) {
 			decisionLog(`view-build-failed why=${error?.message ?? error}`);
@@ -1007,7 +1068,10 @@ export function applyContextTrim(ctx, config) {
 			if (wrappedSession === null) return result;
 			return wrapStreamForMetrics(result, (chunk) => {
 				const usage = extractUsage(chunk);
-				if (usage !== null) metrics.recordUsage(wrappedSession, usage);
+				if (usage !== null) {
+					metrics.recordUsage(wrappedSession, usage);
+					if (mainDispatch) noteTrimWireTokens(wrappedSession, usage);
+				}
 			});
 		} catch (error) {
 			warn(`[context-trim] stream wrap failed: ${error?.message ?? error}`);

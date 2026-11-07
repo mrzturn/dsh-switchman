@@ -53,7 +53,7 @@ import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { clearHandover, handoverOf, recordHandover } from "./handover-state.js";
 import { enumerateLiveSubagents, sessionRecordPath, sessionRecordsDir } from "./subagents.js";
-import { recentTrimViewTokensOf } from "./context-trim/index.js";
+import { recentTrimPromptTokensOf } from "./context-trim/index.js";
 
 /** Tools whose result text is accounted against the per-turn read budget. */
 const ACCOUNT_TOOLS = new Set(["read", "glob", "grep", "bash"]);
@@ -146,15 +146,21 @@ export function measureNow(ctx, agent) {
 	try {
 		const measurement = agent?.session ? ctx.tokenMeter?.measure?.(agent.session) : undefined;
 		const used = Number.isFinite(measurement?.totalTokens) ? measurement.totalTokens : null;
-		// Meter duality (design §8): prefer the trim layer's fresh outbound-view
-		// estimate when present — billion-context can fold far more away than the
-		// meter's stored tally admits, and the watermark must track what the
-		// model actually sees. Strictly additive + fail-open: any trim failure
-		// falls back to the stored measure.
+		// Meter duality (design §8): prefer the trim layer's wire-domain meter —
+		// max(fresh outbound view, last sampled MAIN-dispatch prompt), the same
+		// number the trim pressure tiers evaluate — when present. Each pure
+		// source has one bias: the stored tally is wire-domain but never
+		// re-prices splice-level folds (it keeps counting material the model no
+		// longer receives — high bias), while the bare view never counts the
+		// system/tool sections (low bias). max(view, wire) fixes both and puts
+		// the watermark tiers (soft/hard/force + read budget) on the SAME
+		// boundary as the fold engine — wmHardTokens 95k ≙ trim pressure 90k
+		// (c453b91) holds in units, not just in numbers. Strictly additive +
+		// fail-open: any trim failure falls back to the stored measure.
 		try {
 			const sessionId = agent?.session?.id ?? (typeof agent?.id === "string" ? agent.id : null);
-			const viewTokens = sessionId === null ? null : recentTrimViewTokensOf(sessionId);
-			if (viewTokens !== null) return viewTokens;
+			const promptTokens = sessionId === null ? null : recentTrimPromptTokensOf(sessionId);
+			if (promptTokens !== null) return promptTokens;
 		} catch {
 			// fall through to the stored measure
 		}
