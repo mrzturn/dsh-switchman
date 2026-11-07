@@ -132,7 +132,7 @@ export function evaluateTrigger(input) {
 	// Side-model folds (pressure + growth + ladder) share the cadence gates.
 	const lastFoldAt = Number.isFinite(input?.lastFoldAt) ? input.lastFoldAt : 0;
 	const hourly = Array.isArray(input?.foldsThisHour) ? input.foldsThisHour.filter((ts) => now - ts < 3_600_000).length : 0;
-	const maxFoldsPerHour = Number.isInteger(thresholds.maxFoldsPerHour) && thresholds.maxFoldsPerHour > 0 ? thresholds.maxFoldsPerHour : 6;
+	const maxFoldsPerHour = Number.isInteger(thresholds.maxFoldsPerHour) && thresholds.maxFoldsPerHour > 0 ? thresholds.maxFoldsPerHour : 12;
 	const hourlyBlocked = hourly >= maxFoldsPerHour;
 
 	if (foldable !== null && incrementTokens >= 1) {

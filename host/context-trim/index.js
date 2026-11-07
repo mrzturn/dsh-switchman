@@ -402,7 +402,7 @@ export function applyContextTrim(ctx, config) {
 		pressurePercent: readNumber(config, "trimPressurePercent", 60),
 		emergencyPercent: readNumber(config, "trimEmergencyPercent", 95),
 		protectedTail: Math.max(0, Math.round(readNumber(config, "trimProtectedTail", 6))),
-		maxFoldsPerHour: readNumber(config, "trimMaxFoldsPerHour", 6),
+		maxFoldsPerHour: readNumber(config, "trimMaxFoldsPerHour", 12),
 		ladderT2Tokens: readNumber(config, "trimLadderT2Tokens", 8_000),
 		ladderT2MinBlocks: readNumber(config, "trimLadderT2MinBlocks", 3),
 		ladderT3Tokens: readNumber(config, "trimLadderT3Tokens", 6_000),

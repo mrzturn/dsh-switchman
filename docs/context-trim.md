@@ -280,7 +280,7 @@ all.
   rest of the session. Its summary still renders in the view, but nothing ships,
   so on a frozen-dispatch session those tokens stay on the wire: the fold was
   paid for and its relief is lost. Expected, not a bug.
-- **Hourly cap + emergency exemption.** At most 6 side-model folds per hour, with
+- **Hourly cap + emergency exemption.** At most 12 side-model folds per hour, with
   the emergency tier exempt from that cap; under very heavy use the prompt can
   spike to the emergency line (142.5k of a 150k window) before a fold lands.
 - **Growth-anchor unit mix.** `lastFoldLowTokens` is stored in VIEW units while
