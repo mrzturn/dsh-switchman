@@ -1009,3 +1009,25 @@ test('summarizer: DSH-shaped max-tokens finish marks truncation; aborted finish 
 	]), route, 'material');
 	assert.equal(aborted, null, 'an aborted finish is a failure, never a summary');
 });
+
+test('summarizer: a terminal error finish surfaces the adapter failure detail in onFail', async () => {
+	let seen = null;
+	const llm = { prepareCall: async () => ({ config: {}, stream: async function* () {
+		yield { type: 'finish', reason: { kind: 'error', failure: { message: 'upstream 1005 exceed quota limit', code: 'QUOTA', status: 200 } } };
+	} }) };
+	const out = await summarizeWithModel(llm, { provider: 'p', model: 'm' }, 'material', { onFail: (why) => { seen = why; } });
+	assert.equal(out, null, 'an error finish is never a summary');
+	assert.match(seen, /^stream-error \(upstream 1005 exceed quota limit\)$/u, 'the failure message rides the why string');
+	// code-only failures still carry something; whitespace/newlines collapse
+	let seen2 = null;
+	const llm2 = { prepareCall: async () => ({ config: {}, stream: async function* () {
+		yield { type: 'finish', kind: 'error', failure: { message: 'line1\nline2   spaced', code: 'X' } };
+	} }) };
+	await summarizeWithModel(llm2, { provider: 'p', model: 'm' }, 'material', { onFail: (why) => { seen2 = why; } });
+	assert.equal(seen2, 'stream-error (line1 line2 spaced)', 'top-level failure shape also read, whitespace collapsed');
+	// no failure object -> bare finishKind, unchanged
+	let seen3 = null;
+	const llm3 = { prepareCall: async () => ({ config: {}, stream: async function* () { yield { type: 'finish', kind: 'error' }; } }) };
+	await summarizeWithModel(llm3, { provider: 'p', model: 'm' }, 'material', { onFail: (why) => { seen3 = why; } });
+	assert.equal(seen3, 'stream-error', 'missing failure detail keeps the bare why');
+});

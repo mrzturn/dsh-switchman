@@ -211,6 +211,19 @@ export function mechanicalSummary(messages, startIdx, endIdx, refOf) {
 	return lines.join("\n");
 }
 
+/** One-line suffix carrying the adapter's failure detail: DSH terminal
+ * finishes ride { reason: { kind, failure: { message, code, status? } } } —
+ * without this the decisions.log only ever sees finishKind, and upstream
+ * rejections (quota/concurrency/risk) stay invisible. Single-lined, capped. */
+function describeFailure(chunk) {
+	const failure = chunk?.reason?.failure ?? chunk?.failure ?? null;
+	const raw = typeof failure?.message === "string" && failure.message !== ""
+		? failure.message
+		: (typeof failure?.code === "string" && failure.code !== "" ? failure.code : "");
+	if (raw === "") return "";
+	return ` (${raw.replace(/\s+/gu, " ").trim().slice(0, 300)})`;
+}
+
 /** Side-model summary. llm: the dsh llm service (receiver-bound methods);
  * route: { provider, model } | null (null → caller skips); materialText:
  * renderMaterial output; options.systemPrompt overrides the default
@@ -257,7 +270,7 @@ export async function summarizeWithModel(llm, route, materialText, options = {})
 				const topKind = chunk.kind ?? null;
 				finishKind = chunk.reason?.kind ?? topKind;
 				if (topKind === "error" || topKind === "aborted" || finishKind === "error" || finishKind === "aborted") {
-					fail?.(`stream-${finishKind}`);
+					fail?.(`stream-${finishKind}${describeFailure(chunk)}`);
 					return null;
 				}
 			}
