@@ -314,6 +314,19 @@ export function createStore(options = {}) {
 		if (summary === "") return { ok: false, reason: "invalid-block" };
 		const ledger = ledgerOf(sessionId);
 		const byId = new Map(ledger.blocks.map((block) => [block.id, block]));
+		// Crash-retry idempotency: an exact replay of an already-committed
+		// ladder block (same id + tier + consumes) returns the committed
+		// block as success instead of rejecting — the commit already
+		// happened, so a retry must be a no-op, never a second append.
+		const candidateId = typeof candidate.id === "string" && candidate.id !== "" ? candidate.id : null;
+		if (candidateId !== null) {
+			const existing = byId.get(candidateId);
+			if (existing !== undefined && existing.kind === "summary" && existing.tier === tier
+				&& Array.isArray(existing.consumes) && existing.consumes.length === consumes.length
+				&& existing.consumes.every((id, i) => id === consumes[i])) {
+				return { ok: true, ledger, block: existing, duplicate: true };
+			}
+		}
 		// Every consumed id must exist, be active, and sit one tier below.
 		let approxTokens = 0;
 		const indexes = [];
@@ -342,6 +355,11 @@ export function createStore(options = {}) {
 			let prevEnd = null;
 			for (const id of consumes) {
 				const block = byId.get(id);
+				// Ladder blocks carry no raw span (refRange null) — their
+				// adjacency is already guaranteed by ledger consecutiveness,
+				// so a tier-3 run of T2 blocks skips the view check entirely
+				// instead of crashing on a missing span.
+				if (block.refRange === null || block.refRange === undefined) continue;
 				const located = locateT1Range(positions, block.refRange, block.count);
 				if (located.reason !== undefined) break; // stale capture: skip the check, structural holds
 				if (prevEnd !== null && located.firstIdx !== prevEnd + 1) return { ok: false, reason: "ladder-not-adjacent" };
