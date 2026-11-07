@@ -25,7 +25,7 @@
  * Config fields (host/config.js, all volatile): trimEnabled, trimMode
  * ("off"|"advisory"|"auto"), trimGrowthTokens, trimIncrementTokens,
  * trimPressurePercent, trimEmergencyPercent, trimWindowTokens,
- * trimProtectedTail, trimMaxFoldsPerHour, trimSideModel, trimStateDir,
+ * trimProtectedTail, trimMaxFoldsPerHour, trimSideModel, trimFoldFallbackModel, trimStateDir,
  * trimLadderEnabled, trimLadderT2Tokens, trimLadderT2MinBlocks,
  * trimLadderT3Tokens, trimLadderT3MinBlocks.
  */
@@ -698,6 +698,19 @@ export function applyContextTrim(ctx, config) {
 		return null;
 	}
 
+	/** Resolve the fold-fallback route (trimFoldFallbackModel): the second
+	 * chance when the side/session route fails, and the last model stop
+	 * before a raw pressure fold degrades to mechanical. Null = no fallback. */
+	function foldFallbackRouteFor() {
+		return readRoute(config, "trimFoldFallbackModel");
+	}
+
+	/** True when two resolved routes name the same provider+model (a fallback
+	 * identical to the primary route would only double the failure latency). */
+	function sameRoute(a, b) {
+		return a !== null && b !== null && a.provider === b.provider && a.model === b.model;
+	}
+
 	/** Run one fold cycle for a session (called at the idle boundary ONLY).
 	 * Returns a short outcome string for logging. */
 	async function runFoldCycle(sessionId, decision, cycleStartedAt) {
@@ -714,11 +727,16 @@ export function applyContextTrim(ctx, config) {
 			if (consumed.length !== decision.consumes.length) return "ladder-consumed-missing";
 			const llm = ctx.get("llm", false);
 			const route = sideRouteFor(sessionId);
+			const fallback = foldFallbackRouteFor();
 			const approxTokens = consumed.reduce((sum, block) => sum + (Number.isFinite(block.approxTokens) && block.approxTokens > 0 ? block.approxTokens : 0), 0);
-			const summary = await summarizeWithModel(llm, route, renderLadderMaterial(consumed), {
+			const summarize = (r, tag) => summarizeWithModel(llm, r, renderLadderMaterial(consumed), {
 				systemPrompt: LADDER_SYSTEM_PROMPT,
-				onFail: (why) => decisionLog(`session=${sessionId} summary-fail why=${why} blocks=${consumed.length} ~${approxTokens}t ladder=${decision.tier}`),
+				onFail: (why) => decisionLog(`session=${sessionId} summary-fail route=${tag} why=${why} blocks=${consumed.length} ~${approxTokens}t ladder=${decision.tier}`),
 			});
+			let summary = route !== null ? await summarize(route, "side") : null;
+			if (summary === null && fallback !== null && !sameRoute(fallback, route)) summary = await summarize(fallback, "fallback");
+			// Ladder folds never degrade to mechanical (docs/ladder-fold.md):
+			// after both routes fail the cycle stays fail-open with backoff.
 			if (summary === null) return disposedSince(cycleStartedAt) ? "reload-aborted" : "summary-unavailable"; // skip cycle, fail-open; a dispose cut is not a model failure
 			const result = store.commitFold(
 				sessionId,
@@ -742,6 +760,7 @@ export function applyContextTrim(ctx, config) {
 		const approxTokens = estimateTokensOf(slice);
 		let summary = null;
 		let kind = "summary";
+		let degraded = false; // set when a PRESSURE fold falls back to mechanical
 		if (decision.action === "emergency") {
 			// Emergency cooldown timestamp set BEFORE the cycle: a commitFold
 			// rejection (e.g. duplicate-range) must cool the emergency tier
@@ -755,9 +774,24 @@ export function applyContextTrim(ctx, config) {
 		} else {
 			const llm = ctx.get("llm", false);
 			const route = sideRouteFor(sessionId);
-			summary = await summarizeWithModel(llm, route, renderMaterial(capture.messages, startIdx, endIdx, refOf), {
-				onFail: (why) => decisionLog(`session=${sessionId} summary-fail why=${why} msgs=${count} ~${approxTokens}t`),
+			const fallback = foldFallbackRouteFor();
+			const material = renderMaterial(capture.messages, startIdx, endIdx, refOf);
+			const summarize = (r, tag) => summarizeWithModel(llm, r, material, {
+				onFail: (why) => decisionLog(`session=${sessionId} summary-fail route=${tag} why=${why} msgs=${count} ~${approxTokens}t`),
 			});
+			summary = route !== null ? await summarize(route, "side") : null;
+			if (summary === null && fallback !== null && !sameRoute(fallback, route)) summary = await summarize(fallback, "fallback");
+			// Last resort for PRESSURE folds only: relief beats fidelity when
+			// the window is nearly gone; growth folds stay fail-open (a
+			// mechanical growth fold would burn fold budget on junk). The
+			// outcome row marks the degrade so the log shows why no model
+			// summary landed.
+			if (summary === null && decision.tier === "pressure") {
+				if (disposedSince(cycleStartedAt)) return "reload-aborted";
+				summary = mechanicalSummary(capture.messages, startIdx, endIdx, refOf);
+				kind = "mechanical";
+				degraded = true;
+			}
 			if (summary === null) return disposedSince(cycleStartedAt) ? "reload-aborted" : "summary-unavailable"; // skip cycle, fail-open; a dispose cut is not a model failure
 		}
 		const positions = refPositions(capture.messages);
@@ -777,7 +811,7 @@ export function applyContextTrim(ctx, config) {
 		const lowLedger = store.ledgerOf(sessionId);
 		const lowView = estimateTokensOf(buildView(capture.messages, lowLedger, { protectedTail }).messages);
 		store.recordFoldBaseline(sessionId, capture.viewTokens, lowView);
-		return `folded:${decision.tier}:${count} msgs (~${approxTokens} tokens)`;
+		return `folded:${decision.tier}:${count} msgs (~${approxTokens} tokens)${degraded ? " fallback=mechanical" : ""}`;
 	}
 
 	/** Idle-boundary hook (also re-used by the stream-path fallback): decide

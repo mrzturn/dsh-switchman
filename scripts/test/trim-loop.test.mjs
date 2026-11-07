@@ -163,16 +163,23 @@ test("full loop: auto folds commit across raw re-sends; pairs intact; banner ren
 	// growth numbers never reach the model; the human reads decisions.log.
 	assert.equal(contexts.length, 0, "no model-visible trim context is registered");
 
-	// Fail-open: a summarizer that rejects must skip the fold silently.
+	// Pressure degrade: with no fallback route configured, a PRESSURE fold
+	// whose summary route fails degrades to a mechanical fold — relief beats
+	// fidelity near the window edge. Growth folds keep the old fail-open
+	// (pinned by the backoff test below).
 	prepareBroken = true;
 	const before = handle.store.ledgerOf("loop-1").blocks.length;
 	for (let i = 0; i < 4; i++) await turnStep();
 	mock.timers.tick(61_000);
 	hooks["agent/status"]({ status: "idle", agent: { session: { id: "loop-1" } } });
-	await poll(() => false, 20);
-	assert.equal(handle.store.ledgerOf("loop-1").blocks.length, before, "no fold on summary failure");
+	assert.equal(await poll(() => handle.store.ledgerOf("loop-1").blocks.length === before + 1), true, "pressure fold degrades to mechanical");
+	const degraded = handle.store.ledgerOf("loop-1").blocks.at(-1);
+	assert.equal(degraded.kind, "mechanical", "the degraded block is mechanical");
+	assert.match(degraded.summary, /^Mechanical fold of /u);
+	const outcomes = () => readFileSync(join(stateDir, "decisions.log"), "utf8").split("\n").filter((line) => line.includes("outcome="));
+	assert.ok(outcomes().some((line) => line.includes("outcome=folded:pressure:") && line.includes("fallback=mechanical")), "the degrade is visible in the outcome row");
 	const after3 = await turnStep();
-	assert.ok(Array.isArray(after3));
+	assert.ok(after3.length < store.length, "the mechanical fold reshapes the view too");
 });
 
 test("meter duality: watermark prefers the fresh trim view over the stored tally", async (t) => {
@@ -462,10 +469,12 @@ test("failure backoff: a failing cycle cools down exponentially instead of re-fi
 	ctx.get = () => llm;
 	const stateDir = mkdtempSync(join(tmpdir(), "trim-backoff-"));
 	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
-	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir, trimPressurePercent: 201, trimEmergencyPercent: 201 });
 	const outcomes = () => readFileSync(join(stateDir, "decisions.log"), "utf8").split("\n").filter((line) => line.includes("outcome="));
 
-	// Grow past the pressure gate, then idle: one attempt, one failure row.
+	// Grow past the growth gate (pressure/emergency disabled in this test's
+	// config): growth is the fail-open tier — a pressure fold would now
+	// degrade to mechanical, commit, and clear the ladder this test pins.
 	const store = [];
 	for (let i = 1; i <= 8; i++) {
 		store.push({ role: "user", content: [{ type: "text", text: `t${i}u ` + "F".repeat(12_000) }] });
@@ -585,4 +594,52 @@ test("reload cut: a real cordis teardown mid-fold logs reload-aborted and never 
 	hooks["agent/status"]({ status: "idle", agent: { session: { id: "rel-1" } } });
 	assert.equal(await poll(() => prepareCalls === 2), true, "no backoff after a reload cut — retry fires on the next idle");
 	assert.ok(outcomes().length === 1 && outcomes()[0].includes("outcome=reload-aborted tier="), "the cut cycle reads reload-aborted with a tier field, never summary-unavailable");
+});
+
+test("fold fallback model: a failing side route retries the fallback before any degrade", async (t) => {
+	mock.timers.enable({ now: Date.now() });
+	t.after(() => mock.timers.reset());
+	let listener = null;
+	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
+	const attempts = [];
+	const llm = {
+		resolveModelInfo: async () => ({ context: { contextWindow: 100_000 } }),
+		prepareCall: async ({ model }) => {
+			attempts.push(model);
+			if (model === "m") throw new Error("pinned upstream rejects the side call");
+			return { stream: async function* () { yield { type: "text-delta", text: "Fallback summary." }; yield { type: "finish" }; } };
+		},
+	};
+	const { ctx, hooks } = mockCtx({ llmFiber: fiber });
+	ctx.get = () => llm;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-fallback-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, {
+		...config, trimStateDir: stateDir,
+		trimFoldFallbackModel: { provider: "fb", model: "fallback-m" },
+	});
+
+	const store = [];
+	for (let i = 1; i <= 8; i++) {
+		store.push({ role: "user", content: [{ type: "text", text: `t${i}u ` + "F".repeat(12_000) }] });
+		store.push({ role: "assistant", content: [{ type: "text", text: `t${i}a ` + "F".repeat(12_000) }] });
+	}
+	const stream = listener({ sessionId: "fb-1", messages: store.slice(), provider: "p", model: "m" }, async function* () { yield { type: "finish", usage: { input_tokens: 1 } }; });
+	for await (const chunk of stream) void chunk;
+	hooks["agent/status"]({ status: "idle", agent: { session: { id: "fb-1" } } });
+
+	assert.equal(await poll(() => handle.store.ledgerOf("fb-1").blocks.length === 1), true, "the fallback route rescues the fold");
+	const block = handle.store.ledgerOf("fb-1").blocks[0];
+	assert.equal(block.kind, "summary", "no mechanical degrade when the fallback succeeds");
+	assert.equal(block.summary, "Fallback summary.");
+	// The session model is inherited as the side route first; the configured
+	// fallback route is the second (and only other) stop.
+	assert.deepEqual(attempts, ["m", "fallback-m"]);
+	const fails = readFileSync(join(stateDir, "decisions.log"), "utf8").split("\n").filter((line) => line.includes("summary-fail"));
+	assert.equal(fails.length, 1, "exactly one failure row");
+	assert.ok(fails[0].includes("route=side"), "the side failure is tagged with its route");
+	assert.ok(fails[0].includes("pinned upstream rejects the side call"), "the thrown error message surfaces in the log");
+	const outcomes = readFileSync(join(stateDir, "decisions.log"), "utf8").split("\n").filter((line) => line.includes("outcome=folded:pressure:"));
+	assert.equal(outcomes.length, 1, "the fold commits on the pressure tier");
+	assert.ok(!outcomes[0].includes("fallback=mechanical"), "no degrade marker when the model fallback lands");
 });

@@ -147,7 +147,7 @@ const INTENT_NUMBER_FIELDS = [
 /** Intent route references: unlike pool routes they round-trip the "unset"
  *  {provider:"", model:""} pair, so they validate against the loosened
  *  cleanIntentRoute (both keys must be strings; either may be empty). */
-const INTENT_ROUTE_FIELDS = ["intentClassifierRoute", "intentFallbackRoute", "trimSideModel"];
+const INTENT_ROUTE_FIELDS = ["intentClassifierRoute", "intentFallbackRoute", "trimSideModel", "trimFoldFallbackModel"];
 /** Intent candidate list (route + optional effort/note per entry). */
 const INTENT_CANDIDATE_FIELDS = ["intentCandidates"];
 

@@ -279,6 +279,12 @@ export const Config = z.object({
 	/** Route for the side-model summarizer (L3). Empty = inherit the
 	 *  session's current model. */
 	trimSideModel: IntentRouteSchema.default({ provider: "", model: "" }).volatile(),
+	/** Route for the fold-fallback summarizer. When the primary side route
+	 *  (trimSideModel or the inherited session model) fails, raw folds retry
+	 *  on this route before degrading to a mechanical fold; ladder folds
+	 *  retry but never go mechanical. Pick a route with headroom on cooldown,
+	 *  risk-control, and concurrency limits. Empty = no fallback leg. */
+	trimFoldFallbackModel: IntentRouteSchema.default({ provider: "", model: "" }).volatile(),
 	/** T1/T2/T3 ladder folding (docs/ladder-fold.md): master switch for the
 	 *  T2/T3 distillation tiers. T1 raw-range folds are governed by
 	 *  trimMode; the ladder only adds the summary-maintenance tiers. */
