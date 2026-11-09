@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 格式参照 Keep a Changelog;版本遵循语义化版本。
 
+## [Unreleased]
+
+### English
+
+#### Changed
+
+- Trim defaults rebalanced for marathon-session profiles: `trimGrowthTokens` 22500 → 12000, `trimIncrementTokens` 50000 → 20000, `trimPressurePercent` 60 → 45, `trimProtectedTail` 6 → 4, `trimMaxFoldsPerHour` 16 → 30. Applied consistently across the host schema defaults (`host/config.js`), the `TRIM_NUMBER_FIELDS` mirrors (`host/routes.js`, `client.js` — `trimMaxFoldsPerHour`'s mirror def had drifted to 6, now aligned), and the context-trim `readNumber` fallbacks. Folding now arms at ~45% of the window with a ~2 min growth cadence instead of starving behind repeated below-threshold skips.
+
 ## [1.11.0] — 2026-11-07
 
 ### English

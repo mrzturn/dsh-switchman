@@ -270,13 +270,13 @@ window.__ModuleLoader__.load({
 		 *  coerced server-side but never sent here fails every fenced
 		 *  write (and vice versa). */
 		const TRIM_NUMBER_FIELDS = [
-			{ field: 'trimGrowthTokens', min: 1000, def: 22500 },
-			{ field: 'trimIncrementTokens', min: 1000, def: 50000 },
-			{ field: 'trimPressurePercent', min: 5, max: 100, def: 60 },
+			{ field: 'trimGrowthTokens', min: 1000, def: 12000 },
+			{ field: 'trimIncrementTokens', min: 1000, def: 20000 },
+			{ field: 'trimPressurePercent', min: 5, max: 100, def: 45 },
 			{ field: 'trimEmergencyPercent', min: 5, max: 100, def: 95 },
 			{ field: 'trimWindowTokens', min: 0, def: 0 },
-			{ field: 'trimProtectedTail', min: 0, max: 100, def: 6 },
-			{ field: 'trimMaxFoldsPerHour', min: 1, max: 60, def: 6 },
+			{ field: 'trimProtectedTail', min: 0, max: 100, def: 4 },
+			{ field: 'trimMaxFoldsPerHour', min: 1, max: 60, def: 30 },
 			{ field: 'trimLadderT2Tokens', min: 1000, def: 8000 },
 			{ field: 'trimLadderT2MinBlocks', min: 2, max: 200, def: 3 },
 			{ field: 'trimLadderT3Tokens', min: 1000, def: 6000 },

@@ -244,13 +244,13 @@ export const Config = z.object({
 	trimMode: z.union(["off", "advisory", "auto"]).default("auto").volatile(),
 	/** Growth gate (tier a): fold when the outbound-view estimate grew this
 	 *  much since the last fold. */
-	trimGrowthTokens: z.number().min(1000).default(22500).volatile(),
+	trimGrowthTokens: z.number().min(1000).default(12000).volatile(),
 	/** Growth gate companion: the contiguous compressible increment must
 	 *  also reach this many estimated tokens (chars/4 heuristic). */
-	trimIncrementTokens: z.number().min(1000).default(50000).volatile(),
+	trimIncrementTokens: z.number().min(1000).default(20000).volatile(),
 	/** Pressure tier (tier b): fold when view usage reaches this percent of
 	 *  the context window (requires a resolvable window; otherwise skipped). */
-	trimPressurePercent: z.number().min(1).max(100).default(60).volatile(),
+	trimPressurePercent: z.number().min(1).max(100).default(45).volatile(),
 	/** Emergency tier (tier c): forced MECHANICAL fold (no side-model call)
 	 *  at this percent of the window; cooldown-gated. */
 	trimEmergencyPercent: z.number().min(1).max(100).default(95).volatile(),
@@ -260,22 +260,22 @@ export const Config = z.object({
 	 *  trimIncrementTokens proportionally makes the growth tier unreachable
 	 *  (a 30k window can never accumulate a 50k increment; observed live:
 	 *  growth fired once while emergency fired 17 times). Rule of thumb:
-	 *  increment ≈ window/3, growth ≈ increment × 0.45.]
+	 *  increment ≈ window/7.5, growth ≈ increment × 0.6.]
 	 *  Effective-window cap for the tier math: tier points are computed
 	 *  against min(model-resolved window, cap). 0 = auto (cap follows
 	 *  wmForceTokens, so folds always fire ahead of the handover tier). */
 	trimWindowTokens: z.number().min(0).default(0).volatile(),
 	/** Last N messages of a history are never folded (the live tail the
 	 *  next model call reasons over). */
-	trimProtectedTail: z.number().min(0).max(100).default(6).volatile(),
+	trimProtectedTail: z.number().min(0).max(100).default(4).volatile(),
 	/** Side-model fold cadence cap per rolling hour (emergency mechanical
-	 *  folds are exempt; they have their own cooldown). 16 covers continuous
-	 *  full-rate generation: at ~170 tok/s output a session grows ~612k
-	 *  raw tokens/hour ⇒ 12.2 folds/hour of pure T1 demand (one 50k
-	 *  increment fold every ~4.9 min), leaving 12 starved and zero ladder
-	 *  share; 16 fits the T1 demand plus 2-3 ladder folds plus headroom
-	 *  (observed live: at 12, growth consumed the whole budget). */
-	trimMaxFoldsPerHour: z.number().min(1).max(60).default(16).volatile(),
+	/** Side-model fold cadence cap per rolling hour (emergency mechanical
+	 *  folds are exempt; they have their own cooldown). 30 ≈ the T1 fold
+	 *  demand of continuous full-rate generation: at ~170 tok/s output a
+	 *  session grows ~612k raw tokens/hour ⇒ ~30.6 folds/hour of pure T1
+	 *  demand (one 20k increment fold every ~2 min); at the old cap of 16
+	 *  growth consumed the whole budget and ladder starved. */
+	trimMaxFoldsPerHour: z.number().min(1).max(60).default(30).volatile(),
 	/** Route for the side-model summarizer (L3). Empty = inherit the
 	 *  session's current model. */
 	trimSideModel: IntentRouteSchema.default({ provider: "", model: "" }).volatile(),

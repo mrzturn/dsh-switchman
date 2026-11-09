@@ -476,12 +476,12 @@ export function applyContextTrim(ctx, config) {
 		return mode === "off" || mode === "advisory" || mode === "auto" ? mode : "auto";
 	};
 	const thresholdsNow = () => ({
-		growthTokens: readNumber(config, "trimGrowthTokens", 22_500),
-		incrementTokens: readNumber(config, "trimIncrementTokens", 50_000),
-		pressurePercent: readNumber(config, "trimPressurePercent", 60),
+		growthTokens: readNumber(config, "trimGrowthTokens", 12_000),
+		incrementTokens: readNumber(config, "trimIncrementTokens", 20_000),
+		pressurePercent: readNumber(config, "trimPressurePercent", 45),
 		emergencyPercent: readNumber(config, "trimEmergencyPercent", 95),
-		protectedTail: Math.max(0, Math.round(readNumber(config, "trimProtectedTail", 6))),
-		maxFoldsPerHour: readNumber(config, "trimMaxFoldsPerHour", 16),
+		protectedTail: Math.max(0, Math.round(readNumber(config, "trimProtectedTail", 4))),
+		maxFoldsPerHour: readNumber(config, "trimMaxFoldsPerHour", 30),
 		ladderT2Tokens: readNumber(config, "trimLadderT2Tokens", 8_000),
 		ladderT2MinBlocks: readNumber(config, "trimLadderT2MinBlocks", 3),
 		ladderT3Tokens: readNumber(config, "trimLadderT3Tokens", 6_000),
