@@ -12,10 +12,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Changed
 
-- Trim defaults rebalanced for marathon-session profiles: `trimGrowthTokens` 22500 → 12000, `trimIncrementTokens` 50000 → 20000, `trimPressurePercent` 60 → 45, `trimProtectedTail` 6 → 4, `trimMaxFoldsPerHour` 16 → 30. Applied consistently across the host schema defaults (`host/config.js`), the `TRIM_NUMBER_FIELDS` mirrors (`host/routes.js`, `client.js` — `trimMaxFoldsPerHour`'s mirror def had drifted to 6, now aligned), and the context-trim `readNumber` fallbacks. Folding now arms at ~45% of the window with a ~2 min growth cadence instead of starving behind repeated below-threshold skips.
+- Trim defaults rebalanced for marathon-session profiles: `trimIncrementTokens` 50000 → 25000, `trimPressurePercent` 60 → 65, `trimProtectedTail` 6 → 10, `trimMaxFoldsPerHour` 16 → 30 (`trimGrowthTokens` stays 22500). Applied consistently across the host schema defaults (`host/config.js`), the `TRIM_NUMBER_FIELDS` mirrors (`host/routes.js`, `client.js` — `trimMaxFoldsPerHour`'s mirror def had drifted to 6, now aligned), the context-trim `readNumber` fallbacks (`trigger.js` hourly-cap fallback included), and the doc references (`docs/context-trim.md` recalibrated: the steady-state sawtooth is now wire ≈ 40–44k ↔ 64–97.5k, one fold per ~25k of raw growth). The 22500 growth gate keeps the paper's effective-minimum anchor, the halved increment floor doubles the fold cadence, the 65% pressure line pins the ceiling, and the higher hourly cap keeps sustained generation from starving.
+- **Explicit-first dispatch doctrine** (session-ffd9d6ac lesson: every child inherited the session model because "dispatch implicitly" read as a coequal shortcut): the `[SWITCHMAN:POOLS]` block now renders a `session route:` line — read from the agent loop's assemble context (`modelSelection`, fail-open when absent) — so an implicit dispatch is visibly not a lane dispatch; the fallback guidance now demands explicit-first dispatch and a declared `IMPLICIT-DOWNGRADED` after a denied attempt or a `list_subagent_models` confirmation, and the persona suffix's 子路由两通道 clause carries the same rule. Covered by `scripts/test/dispatch-pools.test.mjs`.
+- The teams section adds the child_message channel rule: subagent child ids are not teammate ids — `send_message` answers "active teammate … not found" for them, which is not evidence the child died; bridge via `child_message` instead of re-dispatching.
+
+#### Fixed
+
+- Subagent children now ship committed folds mid-run: the stream fallback chains a surface sweep after its throttled fold check (`via=stream`), so sessions whose dispatches are host-frozen (children see exactly one idle — at task end) stop carrying raw history until they finish. Fold blocks already committed mid-run; what was missing was the ship.
+- Watermark calibration hygiene: the settings page's `WM_NUMBER_FIELDS` mirror (`client.js`) kept `wmHardTokens` def 120000 from the pre-95k era, so a malformed stored value fell back to a default the host no longer ships — aligned to 95000; the stale `95k ≙ trim-pressure 90k` comments (`host/config.js`, `host/context-trim/index.js`, `host/context-watch.js`, `docs/context-trim.md`) and the render-kit mock (`docs/render-kit/page.html`) now describe the recalibrated 65% / 97.5k pressure line.
+
+### 中文
+
+#### 变更
+
+- Trim 默认值按长会话画像再平衡：`trimIncrementTokens` 50000 → 25000、`trimPressurePercent` 60 → 65、`trimProtectedTail` 6 → 10、`trimMaxFoldsPerHour` 16 → 30（`trimGrowthTokens` 保持 22500）。宿主 schema 默认值（`host/config.js`）、`TRIM_NUMBER_FIELDS` 镜像（`host/routes.js`、`client.js`——`trimMaxFoldsPerHour` 的镜像定义此前漂移为 6，现已对齐）、context-trim 的 `readNumber` 兜底值（含 `trigger.js` 的每小时上限兜底）与文档引用（`docs/context-trim.md` 已重新校准：稳态锯齿现为 wire ≈ 40–44k ↔ 64–97.5k，每 ~25k 原始增量折叠一次）全部同步。22500 增长门保留论文的有效最小值锚点，增量下限减半使折叠节奏翻倍，65% 压力线钉住天花板，更高的每小时上限避免持续生成被饿死。
+- **派发纪律改为「显式优先」**（session-ffd9d6ac 教训：九次派发全部隐式继承主会话模型，泳道落空）：`[SWITCHMAN:POOLS]` 块新增 `session route:` 行（读自 agent loop 组装上下文的 `modelSelection`，缺失不渲染，fail-open），隐式派发拿到什么路由一目了然；兜底措辞收紧为「显式是默认，隐式仅限显式被拒或 `list_subagent_models` 确认之后，且必须声明 `IMPLICIT-DOWNGRADED`」，persona suffix 的子路由两通道条款同步收紧。新增 `scripts/test/dispatch-pools.test.mjs` 覆盖。
+- 团队节新增 child_message 通道规则：subagent 子会话 id 不是 teammate id——`send_message` 对它必报「active teammate … not found」，该报错不代表子会话死亡，应改走 `child_message` 桥接而非重派。
+
+#### 修复
+
+- 子代理会话现在能中途 ship 已提交的折叠块：stream 兜底路径在其节流的折叠检查后串上 surface sweep（`via=stream`）——派发被宿主冻结的会话（子会话只在任务结束才有唯一一次 idle）不再全程携带原始历史直到干完活。折叠块本来就会中途提交，缺的只是 ship 通道。
+- 水位校准口径清理：设置页 `WM_NUMBER_FIELDS` 镜像（`client.js`）保留了 95k 调整之前的 `wmHardTokens` def 120000，损坏的存量值会回退到宿主早已不发的默认值——已对齐 95000；`95k ≙ 压力线 90k` 的过期注释（`host/config.js`、`host/context-trim/index.js`、`host/context-watch.js`、`docs/context-trim.md`）与 render-kit 演示数据（`docs/render-kit/page.html`）已改述再平衡后的 65% / 97.5k 压力线。
 
 ## [1.11.0] — 2026-11-07
-
 ### English
 
 #### Added

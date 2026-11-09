@@ -102,7 +102,7 @@ bash <安裝目錄>/skills/db-query/scripts/setup.sh
 
 **意圖識別**（預設不可用，需設定分類器 + 至少一個候選 + 打開主開關）：`intentEnabled` = 關（關閉時 Auto 入口隱藏，已選 Auto 的對話走備援鏈）；分類器路由未設定；分類器類型 `chat`；候選清單空（預置分類需填模型才參與路由）；快取視窗 `300` 秒 / 切換信心閾值 `80` / 分類逾時 `60000` ms；歷史 `6` 則 / `2400` 字元；`intentContextWindow` = `200000`。
 
-**上下文裁剪**：`trimEnabled` = 開；`trimMode` = `auto`（全自動）；增長閘門 `22500` token + 增量 `50000` token；壓力 `60%` / 緊急 `95%`；保護尾部 `6` 則；折疊節奏上限每小時 `6` 次；side model 未設定（繼承對話模型）——詳見下文「自動上下文裁剪」一節。
+**上下文裁剪**：`trimEnabled` = 開；`trimMode` = `auto`（全自動）；增長閘門 `22500` token + 增量 `25000` token；壓力 `65%` / 緊急 `95%`；保護尾部 `10` 則；折疊節奏上限每小時 `30` 次；side model 未設定（繼承對話模型）——詳見下文「自動上下文裁剪」一節。
 
 **開箱要點**：① 意圖識別開箱不可用是有意設計，三步開啟（分類器、候選、開關）；② Auto 有效視窗開箱即為 200000——護欄保證 0.8×視窗 ≥ force 級（150000），核心壓縮線（160000）永遠在平滑交接線（150000）之後；③ 開箱最有感的是水位三件套：80k 提醒委派 / 95k 收斂讀取 / 150k 自動交接（寫文件+壓縮），無須任何設定。
 
@@ -123,12 +123,12 @@ bash <安裝目錄>/skills/db-query/scripts/setup.sh
 | `trimEnabled` | `true` | 總開關。關閉後折疊與度量全部停用（監聽器退化為純透傳）。 |
 | `trimMode` | `auto` | `off` 只測量 / `advisory` 模型自折 / `auto` 系統自動折。 |
 | `trimGrowthTokens` | `22500` | 增長閘門：出站 view 自上次 fold 以來增長到該值即觸發折疊。 |
-| `trimIncrementTokens` | `50000` | 閘門搭檔：連續可壓縮增量也須達到該規模。 |
-| `trimPressurePercent` | `60` | 壓力級：view 用量達到上下文視窗該百分比即折疊。 |
+| `trimIncrementTokens` | `25000` | 閘門搭檔：連續可壓縮增量也須達到該規模。 |
+| `trimPressurePercent` | `65` | 壓力級：view 用量達到上下文視窗該百分比即折疊。 |
 | `trimEmergencyPercent` | `95` | 緊急級：到該百分比強制機械折疊（無 side model 呼叫）。 |
 | `trimWindowTokens` | `0` | 視窗上限：壓力與緊急檔按 min(模型視窗, 上限) 計算。`0` = 跟隨 `wmForceTokens`。 |
-| `trimProtectedTail` | `6` | 最後 N 則訊息永不折疊。 |
-| `trimMaxFoldsPerHour` | `6` | 每滾動小時 side model 折疊的節奏上限（緊急級豁免）。 |
+| `trimProtectedTail` | `10` | 最後 N 則訊息永不折疊。 |
+| `trimMaxFoldsPerHour` | `30` | 每滾動小時 side model 折疊的節奏上限（緊急級豁免）。 |
 | `trimSideModel` | 未設定 | 寫摘要的 side model 路由。留空 = 繼承對話目前模型。 |
 | `trimFoldFallbackModel` | 未設定 | 摘要 side model 失敗時摺疊改用的重試路由；壓力檔仍失敗則退回機械摺疊。留空 = 無備援。盡量選擇冷卻、風控與並行餘量充足的路由。 |
 | `trimStateDir` | 未設定 | 折疊狀態目錄覆蓋。留空 = `<dshHome>/.dsh-switchman/state/trim/`。 |
@@ -136,7 +136,7 @@ bash <安裝目錄>/skills/db-query/scripts/setup.sh
 
 **觸發路徑。** 級別檢查在閒置邊界上執行；在閒置狀態事件不可達的宿主上，兜底改為在每次模型串流完成後也檢查一次（每個對話節流為每 60 秒至多評估一次）。每個決策——fold 與 no-op 皆然——都會作為一行帶時間戳的 `key=value` 附加進裁剪狀態目錄（見 `trimStateDir`）下的 `decisions.log`，為 fold 留下離線稽核軌跡；列詞彙（`view-applied`、fold 決策/結果列、`surface-replace`、`surface-replace skipped reason=…`）收錄於 [docs/context-trim.md](./docs/context-trim.md)。
 
-**線上真值與穩態。** 決策列攜帶 `view=<n>`，回應落地後還會帶上 `wire=<n>`——真實的廠商提示詞（未快取輸入 + 快取讀取 + 快取寫入，從串流的 usage 事件取樣得到）。view 估算只統計 messages 陣列，而且總是比線上讀數小一個固定額外開銷（實測 ≈ 17.3k：系統提示詞 + 工具 schema + persona），所以壓力級與緊急級按 `max(view, wire)` 評估，只有 `wire` 才是提示詞大小的讀數。150k 視窗下，健康的鋸齒波在每次 fold 剛結束時線上 ≈ 40k ↔ 下次 fold 時 88–90k（佔視窗的 ≈27%–60%），每 ~50k 原始增長折疊一次，上限由壓力級而非視窗釘在 90k 附近。若 `view` 持續攀升卻從不出現 `surface-replace` 列，就去讀跳過列（`incomplete-seqs`、`no-service`、`compaction-lock`）。
+**線上真值與穩態。** 決策列攜帶 `view=<n>`，回應落地後還會帶上 `wire=<n>`——真實的廠商提示詞（未快取輸入 + 快取讀取 + 快取寫入，從串流的 usage 事件取樣得到）。view 估算只統計 messages 陣列，而且總是比線上讀數小一個固定額外開銷（實測 ≈ 17.3k：系統提示詞 + 工具 schema + persona），所以壓力級與緊急級按 `max(view, wire)` 評估，只有 `wire` 才是提示詞大小的讀數。150k 視窗下，健康的鋸齒波在每次 fold 剛結束時線上 ≈ 40k ↔ 下次 fold 時 64–97.5k（佔視窗的 ≈27%–65%），每 ~25k 原始增長折疊一次，上限由壓力級而非視窗釘在 97.5k 附近。若 `view` 持續攀升卻從不出現 `surface-replace` 列，就去讀跳過列（`incomplete-seqs`、`no-service`、`compaction-lock`）。
 
 **宿主壓縮紀元。** fold 引用錨定在訊息 id 與內容雜湊上，因此宿主自身的壓縮一旦替換了重發歷史，整本帳就會同時老化：所有塊都無法定位，view 靜默回退為原始歷史（fail-open——決策日誌會記錄 `view-applied applied=0`），外掛在下一次請求時把增長基線重錨到壓縮後的視圖。宿主壓縮因此是兜底的裁剪層，外掛 fold 負責單一宿主紀元內的細粒度工作。 部分派發改用完全凍結的請求陣列或選項物件（目前的 agent loop 會深凍結裝配好的請求）；對這類派發，`injectView` 會在決策日誌裡報告結果：`nothing-to-apply`（沒有定位到 fold 塊——原始歷史本身就是 view）、`in-place`/`swapped`（fold view 已隨請求送出）或 `none`（fold 存在但凍結的派發帶不動它——線上送出原始歷史）。**Surface replace 是可用時的發送路徑**（`surfaceFold`，預設開啟）：在序列的 `agent/turn-stopping` 邊界外加一次閒置清掃，外掛追加宿主風格的 shadow-price 計量事件與一條攜帶 `surfaceOp {op:'replace', startSeq, endSeq}` 的 `user/message` 替換事件，`sourceEventSeqs` 覆蓋被遮蔽的每個表面節點——與宿主自身壓縮用的是同一機制——已提交的 fold 由此從源頭直達線上，凍結派發也不例外。當某對話近期派發都記錄 `none` 時，外掛把 view 當作僅供計量：水位改用服務商上報的計數（force 檔與自動交接照常運作），fold 循環暫停、不再空燒 summarizer 呼叫，裁剪橫幅以 `wire=raw`（folds not shipping; watermark reads the tally）標記該行；沒有 surface 機制的宿主（或開關關閉時）保持的正是這套舊行為。
 

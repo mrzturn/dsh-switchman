@@ -194,7 +194,7 @@ window.__ModuleLoader__.load({
 		 * Host-side default (also the fallback for malformed stored values). */
 		const WM_NUMBER_FIELDS = [
 			{ field: 'wmSoftTokens', min: 1000, def: 80000 },
-			{ field: 'wmHardTokens', min: 2000, def: 120000 },
+			{ field: 'wmHardTokens', min: 2000, def: 95000 },
 			{ field: 'wmForceTokens', min: 3000, def: 150000 },
 			{ field: 'wmReadBudgetTokens', min: 200, def: 3000 },
 			{ field: 'wmSubagentForceTokens', min: 0, def: 0 },
@@ -270,12 +270,12 @@ window.__ModuleLoader__.load({
 		 *  coerced server-side but never sent here fails every fenced
 		 *  write (and vice versa). */
 		const TRIM_NUMBER_FIELDS = [
-			{ field: 'trimGrowthTokens', min: 1000, def: 12000 },
-			{ field: 'trimIncrementTokens', min: 1000, def: 20000 },
-			{ field: 'trimPressurePercent', min: 5, max: 100, def: 45 },
+			{ field: 'trimGrowthTokens', min: 1000, def: 22500 },
+			{ field: 'trimIncrementTokens', min: 1000, def: 25000 },
+			{ field: 'trimPressurePercent', min: 5, max: 100, def: 65 },
 			{ field: 'trimEmergencyPercent', min: 5, max: 100, def: 95 },
 			{ field: 'trimWindowTokens', min: 0, def: 0 },
-			{ field: 'trimProtectedTail', min: 0, max: 100, def: 4 },
+			{ field: 'trimProtectedTail', min: 0, max: 100, def: 10 },
 			{ field: 'trimMaxFoldsPerHour', min: 1, max: 60, def: 30 },
 			{ field: 'trimLadderT2Tokens', min: 1000, def: 8000 },
 			{ field: 'trimLadderT2MinBlocks', min: 2, max: 200, def: 3 },

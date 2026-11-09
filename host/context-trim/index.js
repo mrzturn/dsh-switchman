@@ -121,9 +121,10 @@ export function recentTrimViewTokensOf(sessionId, maxAgeMs = TRIM_VIEW_MAX_AGE_M
  * system/tool sections (a session-shape-dependent mass — live decision-log
  * pairs drift −5k…+6k between view and wire in steady state), so a
  * view-only watermark tightens every protective tier late by exactly that
- * mass, and the wmHardTokens-95k ≙ trim-pressure-90k alignment (c453b91)
- * is silently defeated. The wire half comes from accepted MAIN dispatches
- * only (noteTrimWireTokens below). Same sticky gate as the view bridge;
+ * mass, and the wmHardTokens-95k ≈ trim-pressure-97.5k adjacency (65%
+ * of the 150k window) is silently defeated. The wire half comes from
+ * accepted MAIN dispatches only (noteTrimWireTokens below). Same sticky
+ * gate as the view bridge;
  * fail-open — null means the caller falls back to the stored tally. */
 export function recentTrimPromptTokensOf(sessionId, maxAgeMs = TRIM_VIEW_MAX_AGE_MS) {
 	try {
@@ -476,11 +477,11 @@ export function applyContextTrim(ctx, config) {
 		return mode === "off" || mode === "advisory" || mode === "auto" ? mode : "auto";
 	};
 	const thresholdsNow = () => ({
-		growthTokens: readNumber(config, "trimGrowthTokens", 12_000),
-		incrementTokens: readNumber(config, "trimIncrementTokens", 20_000),
-		pressurePercent: readNumber(config, "trimPressurePercent", 45),
+		growthTokens: readNumber(config, "trimGrowthTokens", 22_500),
+		incrementTokens: readNumber(config, "trimIncrementTokens", 25_000),
+		pressurePercent: readNumber(config, "trimPressurePercent", 65),
 		emergencyPercent: readNumber(config, "trimEmergencyPercent", 95),
-		protectedTail: Math.max(0, Math.round(readNumber(config, "trimProtectedTail", 4))),
+		protectedTail: Math.max(0, Math.round(readNumber(config, "trimProtectedTail", 10))),
 		maxFoldsPerHour: readNumber(config, "trimMaxFoldsPerHour", 30),
 		ladderT2Tokens: readNumber(config, "trimLadderT2Tokens", 8_000),
 		ladderT2MinBlocks: readNumber(config, "trimLadderT2MinBlocks", 3),
@@ -1145,14 +1146,19 @@ export function applyContextTrim(ctx, config) {
 			// Fallback fold check on the stream path: the agent/status idle event
 			// may not reach a globally-registered listener on every host topology,
 			// so each stream end also runs a throttled (60 s/session) check. The
-			// trigger's own cadence gates still guard over-folding.
+			// trigger's own cadence gates still guard over-folding. After the fold
+			// check, chain a surface sweep: fold blocks commit mid-run even for
+			// sessions whose dispatches are host-frozen (subagent children see
+			// exactly ONE idle — at task end — so without this their wire ships
+			// raw history until they finish; the sweep is the only relief channel
+			// that reaches frozen dispatches). Same 60 s cadence, fail-open.
 			try {
 				if (enabledNow() && modeNow() === "auto" && wrappedSession !== null) {
 					const nowMs = Date.now();
 					if (nowMs - (lastStreamCheckAt.get(wrappedSession) ?? 0) >= 60_000) {
 						lastStreamCheckAt.set(wrappedSession, nowMs);
 						if (lastStreamCheckAt.size > 200) lastStreamCheckAt.delete(lastStreamCheckAt.keys().next().value);
-						void maybeFold(wrappedSession, "stream");
+						void maybeFold(wrappedSession, "stream").finally(() => surfacePass.sweep(wrappedSession, "stream"));
 					}
 				}
 			} catch {

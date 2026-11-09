@@ -163,13 +163,17 @@ test("frozen dispatch: fold commits, turn-stopping appends the surface replace p
 	assert.ok(Array.isArray(block.surfaceSeqs) && block.surfaceSeqs.length === block.count, "commit-time capture stores the node span");
 	// The FIRST USER message (node 0) is task-intent protected: folds start
 	// after it, so the captured span begins at node 1 (docs/ladder-fold.md).
-	assert.deepEqual(block.surfaceSeqs, session.surface.nodes.slice(1, block.count + 1), "captured seqs start after the protected first user message");
+	assert.deepEqual(block.surfaceSeqs, session.rawEvents.slice(1, block.count + 1).map((event) => event.seq), "captured seqs start after the protected first user message (raw-log anchored: the stream-path sweep may already have shipped this block and rewritten the live surface)");
 
-	// Frozen re-sends (resumed-host shape): the view cannot ship — wire=raw.
+	// Frozen re-sends (resumed-host shape): the stream-path sweep has already
+	// SHIPPED the fold before these dispatches, so the derived surface already
+	// excludes the folded range — there is no pending view delta to inject
+	// ("nothing-to-apply"). Pre-fix these read "none": the wire carried the raw
+	// history all the way to the next turn boundary.
 	for (let i = 0; i < 2; i++) {
 		await (async () => { const stream = listener(Object.freeze({ sessionId: "surf-1", messages: Object.freeze(session.deriveMessages()), provider: "p", model: "m" }), async function* () { yield { type: "finish", usage: { input_tokens: 1 } }; }); for await (const c of stream) void c; })();
 	}
-	assert.equal(recentTrimInjectOf("surf-1"), "none", "frozen dispatches cannot carry the view");
+	assert.equal(recentTrimInjectOf("surf-1"), "nothing-to-apply", "frozen dispatches see the already-shipped surface, not a raw-history delta");
 
 	// Turn-stopping (serial boundary): the pass ships the fold to the surface.
 	hooks["agent/turn-stopping"]({ agent: { session }, turn: 3, signal: undefined });
@@ -197,7 +201,9 @@ test("frozen dispatch: fold commits, turn-stopping appends the surface replace p
 	assert.match(derived[0].content[0].text, /^u1 /u, "first user message stays raw (task-intent protection)");
 	assert.match(derived[1].content[0].text, /Surface fold summary/u);
 	assert.ok(derived.length < first.length);
-	assert.match(decisionsOf(stateDir), new RegExp(`session=surf-1 surface-replace startSeq=\\d+ endSeq=\\d+ seqs=${block.count} tokens=\\d+ generation=\\d+ via=turn-stopping`, "u"));
+	// NEW SEMANTICS: the ship's first opportunity is the stream fallback's own
+	// sweep (via=stream); the turn-stopping sweep below only confirms idempotence.
+	assert.match(decisionsOf(stateDir), new RegExp(`session=surf-1 surface-replace startSeq=\\d+ endSeq=\\d+ seqs=${block.count} tokens=\\d+ generation=\\d+ via=stream`, "u"));
 });
 
 test("idempotence: a second pass appends nothing", async (t) => {
@@ -234,11 +240,12 @@ test("compaction lock: an open compaction/start pair defers the replace", async 
 	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
 	const session = seededSession("surf-l");
 	agentsById.set("surf-l", { session });
+	// Open the lock BEFORE the first dispatch: the stream-path sweep (new) must
+	// defer under it like any other trigger, so the no-replace-under-lock
+	// assertion stays meaningful in a topology where a sweep fires every stream.
+	session.append("compaction/start", { compactionId: "c-1", turn: null });
 	await (async () => { const stream = listener({ sessionId: "surf-l", messages: session.deriveMessages(), provider: "p", model: "m" }, async function* () { yield { type: "finish", usage: { input_tokens: 1 } }; }); for await (const c of stream) void c; })();
 	assert.equal(await poll(() => handle.store.ledgerOf("surf-l").blocks.length >= 1), true);
-	// Open lock: a compaction/start without its compaction/end.
-	session.append("compaction/start", { compactionId: "c-1", turn: null });
-	hooks["agent/turn-stopping"]({ agent: { session }, turn: 1, signal: undefined });
 	await poll(() => false, 40);
 	const before = session.rawEvents.length;
 	assert.equal(handle.store.ledgerOf("surf-l").blocks[0].surfaceReplaced, undefined, "no replace under the lock");
@@ -979,8 +986,10 @@ test("open compaction lock: supported() false and maybeFold burns no summary cal
 		const stream = listener(options, async function* () { yield { type: "finish", usage: { input_tokens: 1 } }; });
 		for await (const chunk of stream) void chunk;
 	}
-	// Fold 1 commits on the mutable dispatch (one summary-model call), then a
-	// frozen re-send puts the dispatch on inject=none — the resumed shape.
+	// Open the compaction lock BEFORE the first dispatch: the stream-path sweep
+	// must defer like any other trigger, so fold 1 stays unshipped and the
+	// frozen shape keeps its wire-raw fold pause semantics below.
+	session.append("compaction/start", { compactionId: "c-open", turn: null });
 	await dispatch(false);
 	assert.equal(await poll(() => handle.store.ledgerOf("surf-lk").blocks.length >= 1), true, "fold 1 committed");
 	await dispatch(true);
@@ -991,7 +1000,6 @@ test("open compaction lock: supported() false and maybeFold burns no summary cal
 	// Open (orphaned) compaction lock: sweep defers, so the fold gate must say
 	// "not capable" instead of letting maybeFold burn summary calls for folds
 	// that can never reach the wire (≤6/hour with zero relief).
-	session.append("compaction/start", { compactionId: "c-open", turn: null });
 	assert.equal(handle.surfacePass.supported("surf-lk"), false, "an open lock makes the channel incapable");
 	await handle.maybeFold("surf-lk", "locktest");
 	assert.equal(prepareCalls, callsAfterFold, "no summary-model call under the lock");
@@ -1165,4 +1173,42 @@ test("ladder ship: waits for consumed blocks to ship, then tombstones on a non-s
 	hooks["agent/turn-stopping"]({ agent: { session }, turn: 4, signal: undefined });
 	assert.equal(await poll(() => staleLadder.block.surfaceSkip !== undefined), true, "the ladder tombstones with its consumed block");
 	assert.equal(staleLadder.block.surfaceSkip.reason, "ladder-consumed-skipped");
+});
+
+test("stream path chains the surface sweep: an unshipped fold ships mid-run with no idle and no turn boundary", async (t) => {
+	let listener = null;
+	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
+	const { ctx, agentsById } = mockCtx({ llmFiber: fiber });
+	const llm = {
+		resolveModelInfo: async () => ({ context: { contextWindow: 100_000 } }),
+		prepareCall: async () => ({ stream: async function* () { yield { type: "text-delta", text: "Stream sweep summary." }; yield { type: "finish" }; } }),
+	};
+	ctx.get = () => llm;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-surface-ss-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	const session = seededSession("surf-ss");
+	agentsById.set("surf-ss", { session });
+
+	// Child-shaped topology: agent/status idle and agent/turn-stopping never
+	// fire in this test — the throttled stream fallback is the ONLY trigger.
+	// Fold commits already happen mid-run; commit an unshipped block directly.
+	const derived = session.deriveMessages();
+	const first = derived.find((message) => message.id === "u1");
+	const last = derived.find((message) => message.id === "a2");
+	const commit = handle.store.commitFold("surf-ss", { refRange: { firstId: first.id, lastId: last.id }, count: 4, approxTokens: 9_000, summary: "Unshipped until the stream sweep ships it.", kind: "summary", tier: "model" }, null);
+	assert.equal(commit.ok, true, "unshipped block commits");
+
+	// Frozen dispatch through the stream path: inject stays "none", and the
+	// chained sweep (via=stream) must ship the block before the chain settles.
+	const frozenStream = listener(Object.freeze({ sessionId: "surf-ss", messages: Object.freeze(session.deriveMessages()), provider: "p", model: "m" }), async function* () { yield { type: "finish", usage: { input_tokens: 1 } }; });
+	for await (const chunk of frozenStream) void chunk;
+	assert.equal(recentTrimInjectOf("surf-ss"), "none", "frozen dispatch injects nothing");
+	const block = handle.store.ledgerOf("surf-ss").blocks[0];
+	if (!(await poll(() => block.surfaceReplaced !== undefined))) {
+		console.log("DEBUG surf-ss decisions:\n" + decisionsOf(stateDir));
+		console.log("DEBUG surf-ss block:", JSON.stringify(block));
+	}
+	assert.equal(await poll(() => block.surfaceReplaced !== undefined), true, "the stream sweep ships the unshipped block mid-run");
+	assert.match(decisionsOf(stateDir), /via=stream/u, "the sweep ran on the stream path");
 });

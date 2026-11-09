@@ -101,12 +101,12 @@ const NUMBER_FIELDS = [
  *  MUST mirror the client page's TRIM_NUMBER_FIELDS: a field coerced here
  *  but never sent by the client fails every fenced write (and vice versa). */
 const TRIM_NUMBER_FIELDS = [
-	{ field: "trimGrowthTokens", min: 1000, max: Number.POSITIVE_INFINITY, def: 12000 },
-	{ field: "trimIncrementTokens", min: 1000, max: Number.POSITIVE_INFINITY, def: 20000 },
-	{ field: "trimPressurePercent", min: 5, max: 100, def: 45 },
+	{ field: "trimGrowthTokens", min: 1000, max: Number.POSITIVE_INFINITY, def: 22500 },
+	{ field: "trimIncrementTokens", min: 1000, max: Number.POSITIVE_INFINITY, def: 25000 },
+	{ field: "trimPressurePercent", min: 5, max: 100, def: 65 },
 	{ field: "trimEmergencyPercent", min: 5, max: 100, def: 95 },
 	{ field: "trimWindowTokens", min: 0, max: Number.POSITIVE_INFINITY, def: 0 },
-	{ field: "trimProtectedTail", min: 0, max: 100, def: 4 },
+	{ field: "trimProtectedTail", min: 0, max: 100, def: 10 },
 	{ field: "trimLadderT2Tokens", min: 1000, max: Number.POSITIVE_INFINITY, def: 8000 },
 	{ field: "trimLadderT2MinBlocks", min: 2, max: 200, def: 3 },
 	{ field: "trimLadderT3Tokens", min: 1000, max: Number.POSITIVE_INFINITY, def: 6000 },

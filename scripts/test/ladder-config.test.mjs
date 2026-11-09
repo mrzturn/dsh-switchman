@@ -33,6 +33,7 @@ function fullValues(overrides = {}) {
 		intentFallbackRoute: { provider: "", model: "" },
 		trimSideModel: { provider: "", model: "" },
 		intentCandidates: [],
+		trimFoldFallbackModel: { provider: "", model: "" },
 		intentCacheTtlSeconds: 300,
 		intentSwitchConfidence: 80,
 		intentTimeoutMs: 60000,
@@ -92,6 +93,7 @@ test("coerceValues round-trips every trim field the client page sends", () => {
 	assert.equal(coerced.surfaceFold, true);
 	assert.equal(coerced.trimStateDir, "");
 	assert.deepEqual(coerced.trimSideModel, { provider: "", model: "" });
+	assert.deepEqual(coerced.trimFoldFallbackModel, { provider: "", model: "" });
 	assert.equal(coerced.trimGrowthTokens, 22500);
 	assert.equal(coerced.trimIncrementTokens, 50000);
 	assert.equal(coerced.trimPressurePercent, 60);

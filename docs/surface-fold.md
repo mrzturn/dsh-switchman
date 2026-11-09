@@ -141,15 +141,15 @@ provider's full prompt size: uncached `inputTokens` + `cacheReadTokens` (plus
 ## Expected steady state
 
 With the fixes in place the loop settles into a sawtooth well below the window
-(measured, deepseek-flash, 150k window, defaults):
+(deepseek-flash, 150k window, current defaults — mirrors docs/context-trim.md "Expected steady state"):
 
 | Point in the cycle | view | wire |
 | --- | --- | --- |
-| just after a ship | ≈ 20.8k | ≈ 39–42k |
-| foldable span reaches 50k | ≈ 70.8k | ≈ 88k |
-| pressure tier (60% of 150k) | ≈ 72.7k | ≈ 90k |
+| just after a ship | ≈ 22–25k | ≈ 40–44k |
+| growth gate re-arms (foldable span ≈ 25k) | ≈ 47–50k | ≈ 64–67k |
+| pressure tier (65% of 150k) | ≈ 80.2k | ≈ 97.5k |
 
 `wire − view` stays at the fixed overhead O ≈ 17.3k. The floor creeps +0.5–2k
-per cycle (each summary absorbs the previous one, and the 6 protected tail
-messages stay raw), so the ceiling — pinned at 90k by the pressure tier — is
+per cycle (each summary absorbs the previous one, and the 10 protected tail
+messages stay raw), so the ceiling — pinned at 97.5k by the pressure tier — is
 what actually bounds the prompt, not the window.

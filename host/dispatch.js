@@ -284,15 +284,40 @@ function annotationFixOf(args, config) {
 	);
 }
 
+/** The assembling session's own route, from the DSH agent-loop's assemble
+ *  context (`agent.ts` passes `modelSelection` with every turn assembly;
+ *  older builds and non-agent assemblies omit it). Null when absent or
+ *  malformed — the session-route line then does not render (fail-open,
+ *  like every capability read in this file family). */
+function sessionRouteOf(context) {
+	const route = context === null || typeof context !== "object" ? undefined : context.modelSelection;
+	if (route === null || typeof route !== "object") return null;
+	const provider = typeof route.provider === "string" ? route.provider.trim() : "";
+	const model = typeof route.model === "string" ? route.model.trim() : "";
+	if (provider === "" || model === "") return null;
+	const effort = typeof route.reasoningEffort === "string" && route.reasoningEffort !== "" ? route.reasoningEffort : null;
+
+	return { provider, model, effort };
+}
+
+
 /** The `[SWITCHMAN:POOLS]` block: anchor line, one line per configured lane,
  *  then the guidance lines (byte-stable for a given configuration). Routes
  *  outside the session's DSH-authorized child models carry a ⚠not-authorized
  *  marker (after any @effort suffix) — teams mode only: with teamsMode OFF
  *  the whitelist is never read, `state.authorized` stays null, and neither
- *  the markers nor the drift guidance lines render. */
-function renderPoolsBlock(state) {
+ *  the markers nor the drift guidance lines render. When the assembling
+ *  context carries the session's own model selection, a `session route:`
+ *  line follows the anchor. */
+function renderPoolsBlock(state, sessionRoute = null) {
 	const configured = state.lanePools.filter((pool) => pool.routes.length > 0);
 	const lines = [`[SWITCHMAN:POOLS] configured=${configured.length}/6 enforce=${state.enforce}`];
+	if (sessionRoute !== null) {
+		lines.push(
+			`session route: ${sessionRoute.provider}/${sessionRoute.model}${sessionRoute.effort === null ? "" : `@${sessionRoute.effort}`}` +
+				` — implicit dispatch (omitting provider/model/effort) gives the child THIS route; when it differs from the lane entries, only an explicit dispatch lands a lane model.`,
+		);
+	}
 	let anyUnauthorized = false;
 	for (const pool of state.lanePools) {
 		if (pool.routes.length === 0) continue;
@@ -317,7 +342,7 @@ function renderPoolsBlock(state) {
 		`Entries render as provider/model(TIER)@effort: (TIER) is the S/A/B/C capability grade and @effort a manually pinned reasoning effort — both are display-only annotations, NEVER parts of the model id.`,
 		`Decompose before dispatching: provider/model(TIER)@effort → provider=provider, model=model, reasoning_effort=effort (a pin overrides the lane default); a route without @effort carries no per-route pin — fall back to the lane's default effort above.`,
 		`Review delegations: anchor independence on the code AUTHOR's model, not the main session's (author = the agent that produced the diff: its explicit dispatch route, or the inherited session model when unspecified). Prefer a reviewer model different from the author's; also avoiding the session model is a bonus (its integration pass already covers that angle). If no pool entry differs from the author, same-model review is allowed — declare DOWNGRADED and state whether it is relative to the author or the session.`,
-		`Explicit provider/model/effort on subagent/workflow calls is validated against this session's DSH-authorized child models (DSH Settings: allow agents to choose subagent models) — NOT against this table; when denied, discover allowed routes via list_subagent_models, or dispatch implicitly by omitting all three fields (the child then uses configured defaults or inherits the parent route).`,
+		`Explicit lane dispatch is the DEFAULT for subagent/workflow: name provider+model+reasoning_effort decomposed from the lane row (validated against this session's DSH-authorized child models — DSH Settings: allow agents to choose subagent models — NOT against this table). Implicit dispatch (omitting all three fields) is a LAST-RESORT fallback, never a shortcut: use it only after an explicit attempt was denied or list_subagent_models confirmed no authorized route, and declare IMPLICIT-DOWNGRADED in your report when you do — the child then uses configured defaults or inherits the parent route, so the lane's model is lost.`,
 	);
 	if (anyUnauthorized) {
 		lines.push(
@@ -353,11 +378,11 @@ function applyDispatch(ctx, config) {
 		name: "switchman:dispatch",
 		order: 10400,
 		interpolate: false,
-		text: () => {
+		text: (context) => {
 			const state = readDispatchState(ctx, config);
 			const anyConfigured = state.lanePools.some((pool) => pool.routes.length > 0) || state.modelRank.length > 0;
 			if (!anyConfigured) return "";
-			return renderPoolsBlock(state);
+			return renderPoolsBlock(state, sessionRouteOf(context));
 		},
 	});
 

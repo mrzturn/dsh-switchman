@@ -71,8 +71,9 @@ the trim pressure tiers evaluate in `maybeFold`. Each pure source has one
 bias: the bare view never counts the system/tool sections (a
 session-shape-dependent mass; live decision-log pairs drift −5k…+6k between
 view and wire in steady state), so a view-only watermark tightens every
-protective tier late by exactly that mass — and the `wmHardTokens` 95k ≙
-trim-pressure 90k alignment silently loses its meaning in units. The stored
+protective tier late by exactly that mass — and the `wmHardTokens` 95k ≈
+trim-pressure 97.5k adjacency (65% of the 150k window) silently loses its
+meaning in units. The stored
 tally is wire-domain but never re-prices splice-level folds (it keeps
 counting material the model no longer receives), so it is only the
 gate-rejected fallback, never a max operand. The 2026-11-04 incident above is
@@ -233,20 +234,20 @@ any fold; they fire only when the raw tiers stay quiet.
 
 | Gate / constant | Value | Code | Notes |
 | --- | --- | --- | --- |
-| Growth anchor | `max(view, wire) − lastFoldLowTokens > 22500` | `index.js:705`, `trigger.js:120-124`; default `index.js:446`, `config.js:238` | strict `>` |
-| Foldable-increment floor | contiguous increment ≥ 50000 | `trigger.js:116`, `index.js:447`, `config.js:241` | binds first in practice |
-| Pressure tier | usage ≥ 60% of window (90k of 150k) | `trigger.js:106`, `config.js:244` | side-model fold |
-| Emergency tier | usage ≥ 95% (142.5k of 150k) | `trigger.js:88`, `config.js:247` | mechanical fold, no side-model call |
-| Emergency cooldown | 90 s | `trigger.js:31` `EMERGENCY_COOLDOWN_MS` | also applies to a rejected emergency commit |
-| Min interval, side-model folds | 60 s | `trigger.js:28` `FOLD_MIN_INTERVAL_MS` | |
-| Hourly cap | 16 side-model folds per rolling hour | `trigger.js:101-102`, `config.js:257` | emergency exempt: evaluated before the cap AND before the 60 s min-interval (it has its own 90 s cooldown) |
-| Protected tail | 6 messages | `trigger.js:40`, `config.js:254` | never folded |
-| Window | model-resolved (150000 for deepseek-flash), capped by `trimWindowTokens` (0 ⇒ `wmForceTokens`) | `index.js:204`, `index.js:455-483` | `null` disables pressure/emergency tiers |
+| Growth anchor | `max(view, wire) − lastFoldLowTokens > 22500` | eval `trigger.js:196-207` (anchor fields `trigger.js:203-205`, written `state.js:502`); defaults `index.js:479`, `config.js:249` | strict `>` |
+| Foldable-increment floor | contiguous increment ≥ 25000 | `trigger.js:198`, `index.js:480`, `config.js:252` | binds first in practice |
+| Pressure tier | usage ≥ 65% of window (97.5k of 150k) | `trigger.js:189-195`, `index.js:481`, `config.js:254` | side-model fold |
+| Emergency tier | usage ≥ 95% (142.5k of 150k) | `trigger.js:141-147`, `index.js:482`, `config.js:256` | mechanical fold, no side-model call |
+| Emergency cooldown | 90 s | `trigger.js:41` `EMERGENCY_COOLDOWN_MS` | also applies to a rejected emergency commit |
+| Min interval, side-model folds | 60 s | `trigger.js:38` `FOLD_MIN_INTERVAL_MS` | |
+| Hourly cap | 30 side-model folds per rolling hour | `trigger.js:130-132`, `config.js:277` | emergency exempt: evaluated before the cap AND before the 60 s min-interval (it has its own 90 s cooldown) |
+| Protected tail | 10 messages | `trigger.js:56-59`, `config.js:270` | never folded |
+| Window | model-resolved (150000 for deepseek-flash), capped by `trimWindowTokens` (0 ⇒ `wmForceTokens`) | `index.js:525-530`, `index.js:548-568` | `null` disables pressure/emergency tiers |
 | Fold-failure backoff | 60 s × 2^(n−1), 15 min ceiling | `index.js:323-324` | failures advance no cadence gate |
 
-Which gate binds: at a 150k window the 60% pressure line (90k wire) sits just
-above the ~88k wire point where the growth gate's 50000 increment is reached, so
-growth fires first in the normal case and pressure pins the ceiling. The 50000
+Which gate binds: at a 150k window the 65% pressure line (97.5k wire) sits well
+above the ~64-67k wire point where the growth gate's 25000 increment is reached, so
+growth fires first in the normal case and pressure pins the ceiling. The 25000
 increment floor is the binding constraint, not the 22500 growth delta.
 
 ## decisions.log vocabulary
@@ -269,7 +270,7 @@ Operators diagnose from these rows:
 `reason=` values emitted by the trigger (`trigger.js`): `nothing-foldable`,
 `empty-increment`, `usage <p>% >= <emergency>%` or `emergency-cooldown`,
 `hourly-cap`, `min-interval`, `usage <p>% >= <pressure>%`,
-`growth ~<n> > 22500 and increment ~<n> >= 50000`, `below-thresholds` — plus
+`growth ~<n> > 22500 and increment ~<n> >= 25000`, `below-thresholds` — plus
 `injection-unavailable` from the fold gate.
 
 ## Expected steady state
@@ -278,18 +279,18 @@ Measured on live deepseek-flash sessions (150k window, defaults):
 
 | Point in the cycle | view | wire |
 | --- | --- | --- |
-| just after a fold | ≈ 20.8k | ≈ 39–42k |
-| growth gate re-arms (foldable span ≈ 50k) | ≈ 70.8k | ≈ 88k |
-| pressure tier (60% of 150k) | ≈ 72.7k | ≈ 90k |
+| just after a fold | ≈ 22-25k | ≈ 40-44k |
+| growth gate re-arms (foldable span ≈ 25k) | ≈ 47-50k | ≈ 64-67k |
+| pressure tier (65% of 150k) | ≈ 80.2k | ≈ 97.5k |
 
-So the healthy sawtooth is wire ≈ 40k ↔ 88–90k (≈27%–60% of the window), one
-fold per ~50k of raw conversation growth; under normal load the prompt never
+So the healthy sawtooth is wire ≈ 40k ↔ 64-97.5k (≈27%-65% of the window), one
+fold per ~25k of raw conversation growth; under normal load the prompt never
 approaches the window (for the heavy-load exception see Known limitations). The
-ceiling is effectively pinned at 90k by the pressure tier; the floor creeps
-upward by +0.5–2k per cycle, because each fold's summary absorbs the previous
-summary and the 6 protected tail messages stay raw.
+ceiling is effectively pinned at 97.5k by the pressure tier; the floor creeps
+upward by +0.5-2k per cycle, because each fold's summary absorbs the previous
+summary and the 10 protected tail messages stay raw.
 
-A session reading `view ~70k, growth ~50k` with no `surface-replace` rows is NOT
+A session reading `view ~48k, growth ~25k` with no `surface-replace` rows is NOT
 in steady state: check the skip rows (`incomplete-seqs`, `no-service`,
 `compaction-lock`, `append-rejected:…`) and whether fold-decision rows appear at
 all.
@@ -302,12 +303,12 @@ all.
   rest of the session. Its summary still renders in the view, but nothing ships,
   so on a frozen-dispatch session those tokens stay on the wire: the fold was
   paid for and its relief is lost. Expected, not a bug.
-- **Hourly cap + emergency exemption.** At most 16 side-model folds per hour, with
+- **Hourly cap + emergency exemption.** At most 30 side-model folds per hour, with
   the emergency tier exempt from that cap; under very heavy use the prompt can
   spike to the emergency line (142.5k of a 150k window) before a fold lands.
 - **Growth-anchor unit mix.** `lastFoldLowTokens` is stored in VIEW units while
   the growth comparison runs on `max(view, wire)`, so in wire terms the gate arms
-  ~17k early. Harmless today because the 50000 increment floor binds first; an
+  ~17k early. Harmless today because the 25000 increment floor binds first; an
   open nit, not a per-number patch target.
 - **The view is not the prompt.** The view estimate is messages-only and, in
   steady state, reads smaller than the wire by O ≈ 17.3k. Never use it as a

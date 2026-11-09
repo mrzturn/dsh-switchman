@@ -110,18 +110,26 @@ export function createMetrics() {
 }
 
 /** Wrap a stream result so each chunk flows through a (failing-open)
- * sampler before being yielded. Returns the original value untouched when
- * it is not an async iterable (non-stream fallbacks must pass through). */
-export function wrapStreamForMetrics(result, onChunk) {
+ * sampler before being yielded. An optional completion callback runs when
+ * iteration finishes or is closed; non-stream fallbacks pass through untouched. */
+export function wrapStreamForMetrics(result, onChunk, onFinally = null) {
 	if (result === null || typeof result !== "object" || typeof result[Symbol.asyncIterator] !== "function") return result;
 	async function* sampled() {
-		for await (const chunk of result) {
-			try {
-				onChunk(chunk);
-			} catch {
-				/* sampling must never break the stream */
+		try {
+			for await (const chunk of result) {
+				try {
+					onChunk(chunk);
+				} catch {
+					/* sampling must never break the stream */
+				}
+				yield chunk;
 			}
-			yield chunk;
+		} finally {
+			try {
+				onFinally?.();
+			} catch {
+				/* completion callbacks must never break the stream */
+			}
 		}
 	}
 	return sampled();

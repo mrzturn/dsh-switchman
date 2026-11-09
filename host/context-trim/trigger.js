@@ -132,7 +132,7 @@ export function evaluateTrigger(input) {
 	// Side-model folds (pressure + growth + ladder) share the cadence gates.
 	const lastFoldAt = Number.isFinite(input?.lastFoldAt) ? input.lastFoldAt : 0;
 	const hourly = Array.isArray(input?.foldsThisHour) ? input.foldsThisHour.filter((ts) => now - ts < 3_600_000).length : 0;
-	const maxFoldsPerHour = Number.isInteger(thresholds.maxFoldsPerHour) && thresholds.maxFoldsPerHour > 0 ? thresholds.maxFoldsPerHour : 16;
+	const maxFoldsPerHour = Number.isInteger(thresholds.maxFoldsPerHour) && thresholds.maxFoldsPerHour > 0 ? thresholds.maxFoldsPerHour : 30;
 	const hourlyBlocked = hourly >= maxFoldsPerHour;
 
 	if (foldable !== null && incrementTokens >= 1) {
@@ -187,7 +187,7 @@ export function evaluateTrigger(input) {
 		}
 		if (!hourlyBlocked && now - lastFoldAt >= FOLD_MIN_INTERVAL_MS) {
 			// Tier b — pressure: soft window threshold, side-model.
-			const pressurePercent = Number.isFinite(thresholds.pressurePercent) && thresholds.pressurePercent > 0 ? thresholds.pressurePercent : 60;
+			const pressurePercent = Number.isFinite(thresholds.pressurePercent) && thresholds.pressurePercent > 0 ? thresholds.pressurePercent : 65;
 			if (windowTokens !== null) {
 				const usagePct = (input.viewTokens / windowTokens) * 100;
 				if (usagePct >= pressurePercent) {
@@ -196,7 +196,7 @@ export function evaluateTrigger(input) {
 			}
 			// Tier a — growth gate: the primary cache-friendly heuristic.
 			const growthTokens = Number.isFinite(thresholds.growthTokens) && thresholds.growthTokens > 0 ? thresholds.growthTokens : 22_500;
-			const incrementGate = Number.isFinite(thresholds.incrementTokens) && thresholds.incrementTokens > 0 ? thresholds.incrementTokens : 50_000;
+			const incrementGate = Number.isFinite(thresholds.incrementTokens) && thresholds.incrementTokens > 0 ? thresholds.incrementTokens : 25_000;
 			// Growth anchor: the post-fold low when known (keeps the gate armed
 			// after folds that commit at high view points), else the pre-fold
 			// view for ledgers written before lastFoldLowTokens existed.

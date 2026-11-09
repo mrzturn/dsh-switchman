@@ -102,7 +102,7 @@ bash <安装目录>/skills/db-query/scripts/setup.sh
 
 **意图识别**（默认不可用，需配置分类器 + 至少一个候选 + 打开主开关）：`intentEnabled` = 关（关闭时 Auto 入口隐藏，已选 Auto 的会话走兜底链）；分类器路由未设置；分类器类型 `chat`；候选列表空（预置分类需填模型才参与路由）；缓存窗口 `300` 秒 / 切换置信度 `80` / 分类超时 `60000` ms；历史 `6` 条 / `2400` 字符；`intentContextWindow` = `200000`。
 
-**上下文裁剪**：`trimEnabled` = 开；`trimMode` = `auto`（全自动）；增长闸门 `22500` token + 增量 `50000` token；压力 `60%` / 紧急 `95%`；保护尾部 `6` 条；折叠节奏上限每小时 `6` 次；side model 未设置（继承会话模型）——详见下文「自动上下文裁剪」一节。
+**上下文裁剪**：`trimEnabled` = 开；`trimMode` = `auto`（全自动）；增长闸门 `22500` token + 增量 `25000` token；压力 `65%` / 紧急 `95%`；保护尾部 `10` 条；折叠节奏上限每小时 `30` 次；side model 未设置（继承会话模型）——详见下文「自动上下文裁剪」一节。
 
 **开箱要点**：① 意图识别开箱不可用是有意设计，三步开启（分类器、候选、开关）；② Auto 有效窗口开箱即为 200000——护栏保证 0.8×窗口 ≥ force 档（150000），核心压缩线（160000）永远在平滑交接线（150000）之后；③ 开箱最有感的是水位三件套：80k 提醒委派 / 95k 收敛读取 / 150k 自动交接（写文档+压缩），无需任何设置。
 
@@ -123,12 +123,12 @@ bash <安装目录>/skills/db-query/scripts/setup.sh
 | `trimEnabled` | `true` | 总开关。关闭后折叠与度量全部停用（监听器退化为纯透传）。 |
 | `trimMode` | `auto` | `off` 只测量 / `advisory` 模型自折 / `auto` 系统自动折。 |
 | `trimGrowthTokens` | `22500` | 增长闸门：出站 view 自上次 fold 以来增长到该值即触发折叠。 |
-| `trimIncrementTokens` | `50000` | 闸门搭档：连续可压缩增量也须达到该规模。 |
-| `trimPressurePercent` | `60` | 压力档：view 用量达到上下文窗口该百分比即折叠。 |
+| `trimIncrementTokens` | `25000` | 闸门搭档：连续可压缩增量也须达到该规模。 |
+| `trimPressurePercent` | `65` | 压力档：view 用量达到上下文窗口该百分比即折叠。 |
 | `trimEmergencyPercent` | `95` | 紧急档：到该百分比强制机械折叠（无 side model 调用）。 |
 | `trimWindowTokens` | `0` | 窗口上限：压力与紧急档按 min(模型窗口, 上限) 计算。`0` = 跟随 `wmForceTokens`。 |
-| `trimProtectedTail` | `6` | 最后 N 条消息永不折叠。 |
-| `trimMaxFoldsPerHour` | `6` | 每滚动小时 side model 折叠的节奏上限（紧急档豁免）。 |
+| `trimProtectedTail` | `10` | 最后 N 条消息永不折叠。 |
+| `trimMaxFoldsPerHour` | `30` | 每滚动小时 side model 折叠的节奏上限（紧急档豁免）。 |
 | `trimSideModel` | 未设置 | 写摘要的 side model 路由。留空 = 继承会话当前模型。 |
 | `trimFoldFallbackModel` | 未设置 | 摘要 side model 失败时折叠改用的重试路由；压力档仍失败则退回机械折叠。留空 = 无兜底。尽量选择冷却、风控与并发余量充足的路由。 |
 | `trimStateDir` | 未设置 | 折叠状态目录覆盖。留空 = `<dshHome>/.dsh-switchman/state/trim/`。 |
@@ -136,7 +136,7 @@ bash <安装目录>/skills/db-query/scripts/setup.sh
 
 **触发路径。** 档位检查在空闲边界上运行；在空闲状态事件不可达的宿主上，兜底改为在每次模型流式完成后也检查一次（每个会话节流为每 60 秒至多评估一次）。每个决策——fold 与 no-op 皆然——都以「ISO 时间戳 + `key=value` 字段」的形式追加一行到裁剪状态目录（见 `trimStateDir`）下的 `decisions.log`，为 fold 留下离线审计轨迹；行词汇（`view-applied`、fold 决策/结果行、`surface-replace`、`surface-replace skipped reason=…`）收录于 [docs/context-trim.md](./docs/context-trim.md)。
 
-**线上真值与稳态。** 决策行携带 `view=<n>`，响应落地后还会带上 `wire=<n>`——真实的供应商提示词（未缓存输入 + 缓存读取 + 缓存写入，从流的 usage 事件采样得到）。view 估算只统计 messages 数组，并且总是比线上读数小一个固定开销（实测 ≈ 17.3k：系统提示词 + 工具 schema + persona），所以压力档与紧急档按 `max(view, wire)` 评估，只有 `wire` 才是提示词大小的读数。150k 窗口下，健康的锯齿波在每次 fold 刚结束时线上 ≈ 40k ↔ 下次 fold 时 88–90k（占窗口的 ≈27%–60%），每 ~50k 原始增长折叠一次，上限由压力档而非窗口钉在 90k 附近。若 `view` 持续攀升却从不出现 `surface-replace` 行，就去读跳过行（`incomplete-seqs`、`no-service`、`compaction-lock`）。
+**线上真值与稳态。** 决策行携带 `view=<n>`，响应落地后还会带上 `wire=<n>`——真实的供应商提示词（未缓存输入 + 缓存读取 + 缓存写入，从流的 usage 事件采样得到）。view 估算只统计 messages 数组，并且总是比线上读数小一个固定开销（实测 ≈ 17.3k：系统提示词 + 工具 schema + persona），所以压力档与紧急档按 `max(view, wire)` 评估，只有 `wire` 才是提示词大小的读数。150k 窗口下，健康的锯齿波在每次 fold 刚结束时线上 ≈ 40k ↔ 下次 fold 时 64–97.5k（占窗口的 ≈27%–65%），每 ~25k 原始增长折叠一次，上限由压力档而非窗口钉在 97.5k 附近。若 `view` 持续攀升却从不出现 `surface-replace` 行，就去读跳过行（`incomplete-seqs`、`no-service`、`compaction-lock`）。
 
 **宿主压缩纪元。** fold 引用锚定在消息 id 与内容哈希上，因此宿主自身的压缩一旦替换了重发历史，整本账就会同时老化：所有块都无法定位，view 静默回退为原始历史（fail-open——决策日志会记录 `view-applied applied=0`），插件在下一次请求时把增长基线重锚到压缩后的视图。宿主压缩因此是兜底的裁剪层，插件 fold 负责单个宿主纪元内的细粒度工作。 部分派发改用完全冻结的请求数组或选项对象（当前的 agent loop 会深冻结装配好的请求）；对这类派发，`injectView` 会在决策日志里报告结果：`nothing-to-apply`（没有定位到 fold 块——原始历史本身就是 view）、`in-place`/`swapped`（fold view 已随请求发出）或 `none`（fold 存在但冻结的派发带不动它——线上发送原始历史）。**Surface replace 是可用时的发送路径**（`surfaceFold`，默认开启）：在串行的 `agent/turn-stopping` 边界外加一次空闲清扫，插件追加宿主风格的 shadow-price 计量事件和一条携带 `surfaceOp {op:'replace', startSeq, endSeq}` 的 `user/message` 替换事件，`sourceEventSeqs` 覆盖被遮蔽的每个表面节点——与宿主自身压缩用的是同一机制——已提交的 fold 由此从源头直达线上，冻结派发也不例外。当某会话近期派发都记录 `none` 时，view 仅用于计量：水位改用服务商上报的计数（force 档与自动交接照常工作）。折叠只在 surface 通道同样不可用时才暂停——由持久的可用性探测判定（会话在线且暴露 `append`/`surface.nodes`、没有打开的 compaction 锁），与「最近是否发过货」无关，因此重启不再把引擎冻住。只有当该会话从未成功发出过任何 surface 替换时，裁剪横幅才以 `wire=raw`（folds not shipping; watermark reads the tally）标记该行；没有 surface 机制的宿主（或开关关闭时）保持的正是这套旧行为。
 

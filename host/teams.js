@@ -84,6 +84,7 @@ const TEAMS_SECTION_TEXT = [
 	"## 五、团队触发与协作纪律",
 	"- 需要多成员持久协作、共享任务板、消息往来的用 Agent Teams（满足任一即触发 spawn_teammate：可并行的多个独立子任务；量大且自包含；主上下文水位已高；需要角色分离）；一次性、无需共享状态的单点调查用 subagent。",
 	"- 写作域隔离：共享任务上写明互不重叠的 write_scopes；用 team_task_* 维护任务板与依赖顺序；Lead 汇总最终 diff、复核关键改动并运行测试；用 wait_agent 等到必需的 teammate 完成，绝不在结果未回前下最终结论。",
+	"- 子智能体消息通道：subagent/workflow 返回的子会话 id 只能经 child_message 桥接送达——send_message 只解析 teammate 名字，对子会话 id 必报 active teammate「…」not found；该报错不代表子会话死亡，先改用 child_message，不要据此重派或判定死亡。",
 ].join("\n");
 
 // ---- shared volatile-read helpers (mirrors dispatch.js) --------------------
@@ -580,4 +581,4 @@ function applyTeams(ctx, config) {
 	syncChildMessageTool();
 }
 
-export { applyTeams, pumpTeamsOrchestration, SWITCHMAN_SETTINGS_NS, scheduleTeamsOrchestration, teamsBundleState, teamsSyncSnapshot };
+export { applyTeams, pumpTeamsOrchestration, SWITCHMAN_SETTINGS_NS, TEAMS_SECTION_TEXT, scheduleTeamsOrchestration, teamsBundleState, teamsSyncSnapshot };

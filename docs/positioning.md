@@ -34,7 +34,7 @@ Algorithm-level detail and per-mechanism borrow verdicts: see the appendix at th
 
 These existed because nothing folded context. The engine now does. Principle: **flip defaults to off, keep code as break-glass until the engine is proven in daily use.**
 
-1. **Force-tier auto-handover + entry compression** (`context-watch.js` handover path, `handover-state.js`, parts of `subagents.js`, `/ctx-pause` `/ctx-resume` `/ctx-handover`) — the 150k treadmill should never trigger once trim folds at pressure 60%. Retire from the hot path; keep behind an off-by-default flag.
+1. **Force-tier auto-handover + entry compression** (`context-watch.js` handover path, `handover-state.js`, parts of `subagents.js`, `/ctx-pause` `/ctx-resume` `/ctx-handover`) — the 150k treadmill should never trigger once trim folds at pressure 65%. Retire from the hot path; keep behind an off-by-default flag.
 2. **Read-budget double gate** (`ACCOUNT_TOOLS`/`GATED_TOOLS`) — shrink from cap/deny to a soft advisory.
 3. **Watermark banner** — from a four-tier anxiety machine (ok/soft/hard/force) to a truthful readout of the folded view. The estimation machinery underneath stays (it is the engine's trigger input).
 4. **Compaction arbitration** (`cordis.patch.yml` `auto:false`) — keep, with a better justification: "the switchman fold engine owns folding" — not "plugin trim temporarily beats host compaction". See Stage 3 for how this eventually dissolves.
@@ -78,10 +78,9 @@ Sources: the npm package ships its own paper (`billion-context@0.1.212/paper/模
 
 **Blocks**: `{blockId, tier 1/2/3, topic, summary, directMessageIds, effectiveMessageIds, directBlockIds, survivedCount, generation, active}`. `effectiveMessageIds` is *transitive* — lineage survives re-folding. Tier-2 re-distillation is a safety valve, not a routine path (3.5% of production blocks). Don't build tier-2 now; keep the ledger ready for it (transitive coverage on re-fold). Decompress reactivates sources; **decompress-to-file** writes full text to the filesystem instead of back into context — restore without disturbing the KV prefix. A capability worth adding to trim's unfold later.
 
-**Trigger (demand-side)**: fold nudge fires when context > 0.45×window AND growth-since-last-fold > 50K, with an effective minimum request of 22.5K (45% of the gate — never force a fold smaller than worth summarizing). **trim's constants already match: `increment 50000` = the growth gate, `growth 22500` = the effective minimum, `emergency 95` = their 95% emergency path. The engine was calibrated against these numbers; the remaining divergence is `pressure 60` vs their 0.45×window floor.**
+**Trigger (demand-side)**: fold nudge fires when context > 0.45×window AND growth-since-last-fold > 50K, with an effective minimum request of 22.5K (45% of the gate — never force a fold smaller than worth summarizing). **After the 2026-11-09 rebalance trim keeps two of the paper matches and deliberately diverges on the rest: `growth 22500` still mirrors the 22.5K effective minimum and `emergency 95` still matches their 95% emergency path, but `increment 25000` halves their 50K growth gate (fold twice as often, keep the rendered view lower for cache-prefix economics), and `pressure 65` sits further above their 0.45×window floor.**
 
-**Protected zones are enforced in the filter phase, not the prompt**: the fold tool calls themselves (they carry the summaries), the recent zone (hard floor ~5 messages / ~5K tokens), the last user message, and the first user message (task intent). Assistant messages skip reference-label injection (anti-echo). trim's `protectedTail 6` covers the recent zone; check first-user-message protection.
-
+**Protected zones are enforced in the filter phase, not the prompt**: the fold tool calls themselves (they carry the summaries), the recent zone (hard floor ~5 messages / ~5K tokens), the last user message, and the first user message (task intent). Assistant messages skip reference-label injection (anti-echo). trim's `protectedTail 10` covers the recent zone; check first-user-message protection.
 **Six interactive mechanisms — the borrowable core:**
 
 1. **Throttled increment-only requests** — never demand a fold below the effective minimum. trim has this.

@@ -154,8 +154,9 @@ export function measureNow(ctx, agent) {
 		// longer receives — high bias), while the bare view never counts the
 		// system/tool sections (low bias). max(view, wire) fixes both and puts
 		// the watermark tiers (soft/hard/force + read budget) on the SAME
-		// boundary as the fold engine — wmHardTokens 95k ≙ trim pressure 90k
-		// (c453b91) holds in units, not just in numbers. Strictly additive +
+		// boundary as the fold engine — wmHardTokens 95k ≈ trim pressure
+		// 97.5k (65% of the 150k window) — holds in units, not just in
+		// numbers. Strictly additive +
 		// fail-open: any trim failure falls back to the stored measure.
 		try {
 			const sessionId = agent?.session?.id ?? (typeof agent?.id === "string" ? agent.id : null);
