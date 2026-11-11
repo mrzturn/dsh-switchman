@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 格式参照 Keep a Changelog;版本遵循语义化版本。
 
+## [1.11.2] — 2026-11-12
+
+### English
+
+#### Added
+
+- **Teams-first delegation doctrine**: the teams-vs-subagent trigger debate is replaced by channel priority — delegate through Agent Teams whenever its tools exist in the session; on missing tools or a provisioning failure, degrade to the `subagent` channel immediately instead of retrying the dead one. (`a35f085`)
+- **Pre-execute tool-argument sanitation**: a waterfall before tool validation coerces the two recurring broken shapes — stringified-JSON composites and empty-string enum fields — with whitelist-only fields, structural assertions on the sanitized output, and fail-open on any internal error; unparseable values keep the tool's own validation error unchanged, so sanitation never swallows a real failure. (`51fb730`)
+- **Factory-patch default config seed** (`4eda921`, `3547d2c`): the four factory presets now splice a tuned config block into the dsh-switchman-host insert row so a fresh install ships with sane behavior tuning out of the box — the trim loop and its T2/T3 ladder, the watermark tiers, `teamsMode`, `surfaceFold`, `dispatchEnforce: advice`, and `langScope: project` (28 keys). Personal model routes are deliberately not seeded — the six dispatch pools, `modelRank`, the intent classifier, UI/conversation language, `trimSideModel`, and `trimFoldFallbackModel` are left to per-user configuration; the empty-pool whitelist sync is guarded in `host/teams.js` (skip + warn), so shipping `syncWhitelist: true` stays safe.
+- **Preset-drift detection in validate.mjs** (`befa61e`): check 2 now asserts the live DSH presets against committed snapshots (`scripts/fixtures/dsh-presets/`, taken from DSH 0.2.2-rc.1) and verifies snapshot freshness in app mode; `DSH_SKIP_HOST_CHECK=1` falls back to comparing against the committed snapshots only (CI/off-machine); `scripts/snapshot-presets.mjs` regenerates the fixtures after a DSH upgrade; the shared app-tree readers moved to `scripts/dsh-app-source.mjs`.
+- **Push/PR validate workflow** (`ebbc184`): the validate workflow runs the snapshot-backed validate.mjs and the unit tests on pushes to main/dev and on pull requests, with node 24 pinned to match `engines` and the publish workflow.
+
+#### Changed
+
+- **Subagent watermark tiers scale with the session model's window** (`ae56485`): the new volatile `wmSubagentWindowRatio` (default 0.75) derives a child session's watermark tiers from its own model window — force = min(static force, window × ratio), soft/hard shrink by the same factor; tighten-only and fail-open until the session's route resolves. Trim metrics now capture per-session model routes so the watermark layer can look up the session's own window, and trim side routes round-trip an optional effort pin across schema, routes fence, and the client form — settings saves no longer strip it. Ladder-config, trim-loop, and new subagent-watermark tests cover it.
+
+#### Fixed
+
+- **Rejected subagent model dispatches now teach instead of just failing** (`7c398f4`): merged provider/model strings (`provider/model` inside the model field), bare models, and provider-prefixed models are detected and denied with the exact corrected fields; provider-less model ids get provider candidates suggested by matching every configured route; provider-less `list_subagent_models` lookups are covered the same way.
+
+### 中文
+
+#### 新增
+
+- **团队优先委派**（`a35f085`）：teams 与 subagent 的触发之争改为通道优先级——会话里存在 teams 工具就走 Agent Teams；工具缺失或组建失败时立刻降级 `subagent` 通道，不重试死通道。
+- **工具参数预清洗**（`51fb730`）：工具校验前增加瀑布式清洗，矫正两类高频坏参——字符串化 JSON 复合参数与空字符串枚举字段；仅白名单字段、清洗结果过结构断言、内部错误一概放行；解析不了的值保持工具自身校验错误不变——清洗绝不吞掉真实失败。
+- **出厂补丁默认配置种子**（`4eda921`、`3547d2c`）：四个出厂预设向 dsh-switchman-host 行注入 28 键调优配置，全新安装开箱即得合理的行为调优——trim 循环与 T2/T3 阶梯、水位各档、`teamsMode`、`surfaceFold`、`dispatchEnforce: advice`、`langScope: project`。个人模型路由刻意不进种子——六池、`modelRank`、intent 分类器、界面/对话语言、`trimSideModel`、`trimFoldFallbackModel` 留给用户自配；空池白名单同步有守卫（`host/teams.js` 跳过并告警），出厂 `syncWhitelist: true` 依然安全。
+- **validate.mjs 预设漂移检测**（`befa61e`）：第 2 项检查改为对 DSH 出厂预设的实时断言 + 快照新鲜度校验（app 模式），快照提交在 `scripts/fixtures/dsh-presets/`（取自 DSH 0.2.2-rc.1）；`DSH_SKIP_HOST_CHECK=1` 退化为仅比对已提交快照（CI/离机场景）；DSH 升级后用 `scripts/snapshot-presets.mjs` 重新生成；公共 app 树读取抽取到 `scripts/dsh-app-source.mjs`。
+- **push/PR 验证工作流**（`ebbc184`）：验证工作流在 push（main/dev）与 PR 时跑快照版 validate.mjs + 单测，node 24 与 `engines`、发版工作流对齐。
+
+#### 变更
+
+- **子代理水位随会话模型窗口缩放**（`ae56485`）：新增 volatile `wmSubagentWindowRatio`（默认 0.75），子会话水位档由其自身模型窗口推导——force = min(静态 force, 窗口 × 比例)，soft/hard 同比收缩；路由未解析时只收紧、fail-open。trim 指标现记录每会话模型路由供水位层自查窗口；trim 侧路由的 effort 钉扎在 schema、routes 围栏、client 表单三处可往返保存——设置页不再丢字段。ladder-config、trim-loop 与新增的 subagent-watermark 测试覆盖。
+
+#### 修复
+
+- **被拒的子模型派发现在会教人**（`7c398f4`）：provider/model 混写串（model 字段里带 `provider/`）、裸模型、带 provider 前缀的模型都会被识别并以精确纠正字段拒绝；无 provider 的模型 id 按全量已配置路由给出候选；无 provider 的 `list_subagent_models` 查询同样覆盖。
+
 ## [1.11.1] — 2026-11-09
 
 ### English
