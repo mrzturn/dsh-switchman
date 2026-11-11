@@ -1,0 +1,39 @@
+name: Validate
+
+# Push/PR CI: validate the bundle and run the unit tests without an installed
+# DSH app. The preset comparison runs against the committed snapshots in
+# scripts/fixtures/dsh-presets/ (see scripts/snapshot-presets.mjs) — a drift
+# between cordis.patch.yml and the snapshotted DSH generation fails here, not
+# only on a maintainer's machine (the 2026-11 PR #2 class of upgrade breakage).
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          # [2026-11-11]-[engines.dsh targets the node >=24 runtime; keep parity with publish.yml]-[node 24]
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate bundle (against committed preset snapshots)
+        run: node scripts/validate.mjs
+        env:
+          # [2026-11-11]-[no DSH app on CI runners; validate.mjs falls back to the committed preset snapshots]-[snapshot-backed validation]
+          DSH_SKIP_HOST_CHECK: "1"
+
+      - name: Unit tests
+        run: npm test
+        env:
+          DSH_SKIP_HOST_CHECK: "1"
