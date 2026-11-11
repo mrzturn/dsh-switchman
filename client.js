@@ -198,6 +198,7 @@ window.__ModuleLoader__.load({
 			{ field: 'wmForceTokens', min: 3000, def: 150000 },
 			{ field: 'wmReadBudgetTokens', min: 200, def: 3000 },
 			{ field: 'wmSubagentForceTokens', min: 0, def: 0 },
+			{ field: 'wmSubagentWindowRatio', min: 0.1, def: 0.75 },
 		];
 
 		/** The three thresholds that must keep a strict ascending order. */
@@ -212,6 +213,10 @@ window.__ModuleLoader__.load({
 			wmSubagentForceTokens: {
 				label: 'wmSubagentForceLabel',
 				help: 'wmSubagentForceHelp',
+			},
+			wmSubagentWindowRatio: {
+				label: 'wmSubagentWindowRatioLabel',
+				help: 'wmSubagentWindowRatioHelp',
 			},
 		};
 
@@ -367,12 +372,16 @@ window.__ModuleLoader__.load({
 		/** Stable identity of one provider/model route. */
 		const routeKey = (route) => `${route.provider}\0${route.model}`;
 
-		/** One well-formed {provider, model} route, or null. */
+		/** One well-formed {provider, model[, effort]} route, or null. */
 		function sanitizeRoute(route) {
 			if (route === null || typeof route !== 'object') return null;
 			if (typeof route.provider !== 'string' || route.provider === '') return null;
 			if (typeof route.model !== 'string' || route.model === '') return null;
-			return { provider: route.provider, model: route.model };
+			// Trim side routes may carry an optional effort pin; keep it on the
+			// round-trip so a settings save never strips it (intent routes omit it).
+			const out = { provider: route.provider, model: route.model };
+			if (typeof route.effort === 'string' && route.effort !== '') out.effort = route.effort;
+			return out;
 		}
 
 		/** One well-formed rank entry ({provider, model[, tier]}), or null;
@@ -896,6 +905,9 @@ window.__ModuleLoader__.load({
 				wmSubagentForceLabel: '子智能体强制阈值',
 				wmSubagentForceHelp:
 					'仅覆盖子智能体的 force 档（soft/hard 与主会话共用）；0 = 跟随上方强制水位。',
+				wmSubagentWindowRatioLabel: '子智能体窗口比例',
+				wmSubagentWindowRatioHelp:
+					'按子智能体自身模型窗口缩放三档：force = min(静态档，窗口×比例)，soft/hard 同比收缩；只收紧不放宽。',
 				wmSubagentFollowForce: '跟随 force 档（0）',
 				wmCommands:
 					'命令：/ctx-pause 暂停水位干预 · /ctx-resume 恢复干预 · /ctx-handover 立即写交接文档并压缩。',
@@ -912,6 +924,7 @@ window.__ModuleLoader__.load({
 				trimSideModelLabel: '摘要模型',
 				trimSideModelHelp: '折叠摘要使用的模型路由；默认「跟随会话模型」。阶梯蒸馏同样使用该路由。',
 				trimFollowSession: '跟随会话模型',
+				trimEffortPinLow: '默认（pin low）',
 				trimFoldFallbackModelLabel: '折叠异常兜底模型',
 				trimFoldFallbackModelHelp: '摘要模型调用失败时改用该模型重试；仍失败则压力折叠退回机械折叠。尽量选择没有冷却、风控或并发限制的模型，避免与主会话共用同一账号。留空 = 无兜底。',
 				trimFallbackUnset: '未设置（失败时直接机械折叠）',
@@ -1160,6 +1173,9 @@ window.__ModuleLoader__.load({
 				wmSubagentForceLabel: 'Subagent force threshold',
 				wmSubagentForceHelp:
 					'Overrides only the subagent force tier (soft/hard are shared with the main session); 0 follows the force watermark above.',
+				wmSubagentWindowRatioLabel: 'Subagent window ratio',
+				wmSubagentWindowRatioHelp:
+					'Scale the subagent tiers to its own model window: force = min(static tier, window × ratio); soft/hard shrink by the same factor. Tightens only, never loosens.',
 				wmSubagentFollowForce: 'Follow the force tier (0)',
 				wmCommands:
 					'Commands: /ctx-pause suspends watermark actions · /ctx-resume resumes them · /ctx-handover writes the handover doc and compacts now.',
@@ -1179,6 +1195,7 @@ window.__ModuleLoader__.load({
 				trimSideModelHelp:
 					'Route for fold summaries; defaults to following the session model. Also used by ladder distillations.',
 				trimFollowSession: 'Follow session model',
+				trimEffortPinLow: 'Default (pin low)',
 				trimFoldFallbackModelLabel: 'Fold fallback model',
 				trimFoldFallbackModelHelp:
 					'When the summary route fails, the fold retries on this model before degrading a pressure fold to a mechanical one. Prefer a model with headroom on cooldowns, risk control, and concurrency limits — avoid sharing the pinned account with the main session. Empty = no fallback leg.',
@@ -1434,6 +1451,9 @@ window.__ModuleLoader__.load({
 				wmSubagentCapHelp: '開啟後子智能體可用下方獨立強制閾值；關閉則完全跟隨上方三檔水位。',
 				wmSubagentForceLabel: '子智能體強制閾值',
 				wmSubagentForceHelp: '僅覆蓋子智能體的 force 檔（soft/hard 與主會話共用）；0 = 跟隨上方強制水位。',
+				wmSubagentWindowRatioLabel: '子代理視窗比例',
+				wmSubagentWindowRatioHelp:
+					'按子代理自身模型視窗縮放三檔：force = min(靜態檔，視窗×比例)，soft/hard 同比收縮；只收緊不放寬。',
 				wmSubagentFollowForce: '跟隨 force 檔（0）',
 				wmCommands: '命令：/ctx-pause 暫停水位干預 · /ctx-resume 恢復干預 · /ctx-handover 立即寫交接文件並壓縮。',
 				trimSectionTitle: '上下文裁剪',
@@ -1449,6 +1469,7 @@ window.__ModuleLoader__.load({
 				trimSideModelLabel: '摘要模型',
 				trimSideModelHelp: '摺疊摘要使用的模型路由；預設「跟隨對話模型」。階梯蒸餾同樣使用該路由。',
 				trimFollowSession: '跟隨對話模型',
+				trimEffortPinLow: '預設（pin low）',
 				trimFoldFallbackModelLabel: '摺疊異常備援模型',
 				trimFoldFallbackModelHelp: '摘要模型呼叫失敗時改用該模型重試；仍失敗則壓力摺疊退回機械摺疊。盡量選擇沒有冷卻、風控或並行限制的模型，避免與主對話共用同一帳號。留空 = 無備援。',
 				trimFallbackUnset: '未設定（失敗時直接機械摺疊）',
@@ -1677,6 +1698,9 @@ window.__ModuleLoader__.load({
 				wmSubagentCapHelp: 'オンにすると、下の専用強制しきい値を使えます。オフなら上の 3 段階の水位に完全に従います。',
 				wmSubagentForceLabel: 'サブエージェント強制しきい値',
 				wmSubagentForceHelp: 'サブエージェントの force 段階のみを上書きします（soft/hard はメインセッションと共通）。0 なら上の強制水位に従います。',
+				wmSubagentWindowRatioLabel: 'サブエージェント窓比率',
+				wmSubagentWindowRatioHelp:
+					'サブエージェント自身のモデル窓に合わせて3段階を縮小：force = min(静的しきい値，窓×比率)。soft/hardも同率で縮小。引き締めのみ。',
 				wmSubagentFollowForce: 'force 段階に従う（0）',
 				wmCommands: 'コマンド：/ctx-pause で水位アクションを一時停止 · /ctx-resume で再開 · /ctx-handover で今すぐ引き継ぎ文書を書いて圧縮。',
 				trimSectionTitle: 'コンテキストトリム',
@@ -1771,6 +1795,7 @@ window.__ModuleLoader__.load({
 					'分類失敗時：前回ルート → フォールバック → 候補の先頭。空欄は候補の先頭。',
 				intentRouteUnset: '未設定',
 				intentEffortFollow: 'モデルのデフォルト',
+				trimEffortPinLow: 'デフォルト（pin low）',
 				intentDockAuto: '自動',
 				intentDockUnrouted: '未ルーティング',
 				intentDockUsing: '使用中',
@@ -1904,8 +1929,12 @@ window.__ModuleLoader__.load({
 				wmSubagentCapHelp: '켜면 서브에이전트가 아래 전용 강제 임계값을 사용합니다. 끄면 위 세 수위를 그대로 따릅니다.',
 				wmSubagentForceLabel: '서브에이전트 강제 임계값',
 				wmSubagentForceHelp: '서브에이전트의 force 단계만 덮어씁니다(soft/hard는 메인 세션과 공유). 0이면 위 강제 수위를 따릅니다.',
+				wmSubagentWindowRatioLabel: '서브에이전트 창 비율',
+				wmSubagentWindowRatioHelp:
+					'서브에이전트 자체 모델 창에 맞춰 3단계 축소: force = min(정적 기준, 창×비율). soft/hard도 같은 비율로 축소. 완화 없이 강화만.',
 				wmSubagentFollowForce: 'force 단계 따르기(0)',
 				wmCommands: '명령: /ctx-pause 수위 개입 일시 중지 · /ctx-resume 재개 · /ctx-handover 지금 핸드오버 문서를 작성하고 압축.',
+				trimEffortPinLow: '기본 (low 고정)',
 				trimSectionTitle: '컨텍스트 트림',
 				trimModeLabel: '트림 모드',
 				trimModeHelp:
@@ -2130,8 +2159,12 @@ window.__ModuleLoader__.load({
 				wmSubagentCapHelp: 'Subagents dürfen die eigene erzwungene Schwelle unten nutzen; aus = vollständig den drei Stufen oben folgen.',
 				wmSubagentForceLabel: 'Erzwungene Schwelle für Subagents',
 				wmSubagentForceHelp: 'Überschreibt nur die Force-Stufe der Subagents (soft/hard teilen sich mit der Haupt-Session); 0 folgt dem erzwungenen Wasserstand oben.',
+				wmSubagentWindowRatioLabel: 'Subagent-Fensterquote',
+				wmSubagentWindowRatioHelp:
+					'Skaliert die Stufen auf das eigene Modellfenster des Subagenten: force = min(statische Stufe, Fenster × Quote); soft/hard schrumpfen im selben Faktor. Verengt nur, lockert nie.',
 				wmSubagentFollowForce: 'Der Force-Stufe folgen (0)',
 				wmCommands: 'Befehle: /ctx-pause pausiert Wasserstand-Aktionen · /ctx-resume setzt sie fort · /ctx-handover schreibt das Übergabedokument jetzt und komprimiert sofort.',
+				trimEffortPinLow: 'Standard (pin low)',
 				trimSectionTitle: 'Kontext-Trim',
 				trimModeLabel: 'Trim-Modus',
 				trimModeHelp:
@@ -2359,8 +2392,12 @@ window.__ModuleLoader__.load({
 				wmSubagentCapHelp: 'Permite que los subagentes usen el umbral forzado propio de abajo; desactivado = seguir por completo los tres niveles de arriba.',
 				wmSubagentForceLabel: 'Umbral forzado de subagentes',
 				wmSubagentForceHelp: 'Solo sobrescribe el nivel forzado de los subagentes (soft/hard se comparten con la sesión principal); 0 sigue el nivel forzado de arriba.',
+				wmSubagentWindowRatioLabel: 'Ratio de ventana del subagente',
+				wmSubagentWindowRatioHelp:
+					'Escala los niveles a la ventana del propio modelo del subagente: force = min(nivel estático, ventana × ratio); soft/hard se reducen por el mismo factor. Solo restringe, nunca amplía.',
 				wmSubagentFollowForce: 'Seguir el nivel forzado (0)',
 				wmCommands: 'Comandos: /ctx-pause suspende las acciones del nivel · /ctx-resume las reanuda · /ctx-handover escribe el documento y compacta ahora.',
+				trimEffortPinLow: 'Predeterminado (pin low)',
 				trimSectionTitle: 'Recorte de contexto',
 				trimModeLabel: 'Modo de recorte',
 				trimModeHelp:
@@ -2589,8 +2626,12 @@ window.__ModuleLoader__.load({
 				wmSubagentCapHelp: 'Laisse les subagents utiliser le seuil force dédié ci-dessous ; désactivé = suivent intégralement les trois paliers ci-dessus.',
 				wmSubagentForceLabel: 'Seuil force des subagents',
 				wmSubagentForceHelp: 'Ne remplace que le palier force des subagents (soft/hard partagés avec la session principale) ; 0 suit la ligne d’eau force ci-dessus.',
+				wmSubagentWindowRatioLabel: 'Ratio de fenêtre du sous-agent',
+				wmSubagentWindowRatioHelp:
+					'Ajuste les paliers à la fenêtre propre du modèle du sous-agent : force = min(palier statique, fenêtre × ratio) ; soft/hard réduits du même facteur. Ne fait que resserrer, jamais relâcher.',
 				wmSubagentFollowForce: 'Suivre le palier force (0)',
 				wmCommands: 'Commandes : /ctx-pause suspend les actions de niveau d’eau · /ctx-resume les reprend · /ctx-handover écrit le document et compacte maintenant.',
+				trimEffortPinLow: 'Par défaut (pin low)',
 				trimSectionTitle: 'Rognage du contexte',
 				trimModeLabel: 'Mode de rognage',
 				trimModeHelp:
@@ -2819,8 +2860,12 @@ window.__ModuleLoader__.load({
 				wmSubagentCapHelp: 'Lascia i subagent usare la soglia force dedicata qui sotto; spento = seguono appieno le tre soglie sopra.',
 				wmSubagentForceLabel: 'Soglia force dei subagent',
 				wmSubagentForceHelp: 'Sostituisce solo la soglia force dei subagent (soft/hard restano condivise con la sessione principale); 0 segue la soglia force sopra.',
+				wmSubagentWindowRatioLabel: 'Rapporto finestra del subagente',
+				wmSubagentWindowRatioHelp:
+					'Ridimensiona i livelli alla finestra del modello del subagente: force = min(livello statico, finestra × rapporto); soft/hard si riducono dello stesso fattore. Solo restrizione, mai allentamento.',
 				wmSubagentFollowForce: 'Segui la soglia force (0)',
 				wmCommands: 'Comandi: /ctx-pause sospende le azioni da livello dell’acqua · /ctx-resume le riprende · /ctx-handover scrive il documento e compatta subito.',
+				trimEffortPinLow: 'Predefinito (pin low)',
 				trimSectionTitle: 'Riduzione del contesto',
 				trimModeLabel: 'Modalità di riduzione',
 				trimModeHelp:
@@ -3049,8 +3094,12 @@ window.__ModuleLoader__.load({
 				wmSubagentCapHelp: 'Deixa os subagents usar o limiar force dedicado abaixo; desligado = seguem integralmente os três limiares acima.',
 				wmSubagentForceLabel: 'Limiar force dos subagents',
 				wmSubagentForceHelp: 'Sobrepõe apenas o limiar force dos subagents (soft/hard são compartilhados com a sessão principal); 0 segue o limiar force acima.',
+				wmSubagentWindowRatioLabel: 'Razão de janela do subagente',
+				wmSubagentWindowRatioHelp:
+					'Escala os níveis para a janela do próprio modelo do subagente: force = min(nível estático, janela × razão); soft/hard encolhem pelo mesmo fator. Apenas aperta, nunca afrouxa.',
 				wmSubagentFollowForce: 'Seguir o limiar force (0)',
 				wmCommands: 'Comandos: /ctx-pause suspende as ações de nível de água · /ctx-resume as retoma · /ctx-handover escreve o documento e compacta agora.',
+				trimEffortPinLow: 'Padrão (pin low)',
 				trimSectionTitle: 'Corte de contexto',
 				trimModeLabel: 'Modo de corte',
 				trimModeHelp:
@@ -3279,8 +3328,12 @@ window.__ModuleLoader__.load({
 				wmSubagentCapHelp: 'Субагенты используют отдельный порог force ниже; выключено = полностью следуют трём линиям выше.',
 				wmSubagentForceLabel: 'Порог force субагентов',
 				wmSubagentForceHelp: 'Меняет только линию force субагентов (soft/hard общие с главной сессией); 0 — следовать линии force выше.',
+				wmSubagentWindowRatioLabel: 'Доля окна субагента',
+				wmSubagentWindowRatioHelp:
+					'Масштабирует уровни под собственное окно модели субагента: force = min(статический уровень, окно × доля); soft/hard сжимаются на тот же коэффициент. Только ужесточает, не смягчает.',
 				wmSubagentFollowForce: 'Следовать линии force (0)',
 				wmCommands: 'Команды: /ctx-pause приостанавливает действия по уровню воды · /ctx-resume возобновляет их · /ctx-handover записывает документ передачи и сжимает прямо сейчас.',
+				trimEffortPinLow: 'По умолчанию (pin low)',
 				trimSectionTitle: 'Обрезка контекста',
 				trimModeLabel: 'Режим обрезки',
 				trimModeHelp:
@@ -5856,6 +5909,7 @@ window.__ModuleLoader__.load({
 									(meta) => meta.model === route.model,
 								);
 								edit(field, {
+									...route,
 									provider: next,
 									model: kept ? route.model : '',
 								});
@@ -5880,18 +5934,31 @@ window.__ModuleLoader__.load({
 						disabled: !editable || route.provider === '',
 						'aria-label': `${label} · model`,
 					}, ...trimModelOptions(followMode, route, route.model)),
+					route.provider !== ''
+						? intentEffortSelect(
+							`${trimId}-${field}-effort`,
+							route,
+							route.effort,
+							(next) => edit(field, { ...route, effort: next }),
+							`${label} · effort`,
+							t('trimEffortPinLow'),
+						)
+						: null,
 				);
 			};
 			/** Reasoning-effort select for one intent route: the model's
 			 *  wire efforts when the catalog reports them, the EFFORTS
 			 *  fallback otherwise; '' = adapter default. A stored value
-			 *  missing from the list stays selectable. */
+			 *  missing from the list stays selectable. emptyLabel replaces
+			 *  the '' option label (trim rows pin low instead of following
+			 *  the model default). */
 			const intentEffortSelect = (
 				id,
 				route,
 				value,
 				onCommit,
 				ariaLabel,
+				emptyLabel,
 			) => {
 				const meta = catalogIndex.get(routeKey(route));
 				const wire =
@@ -5915,7 +5982,7 @@ window.__ModuleLoader__.load({
 						style: STYLE.effortSelect,
 						'aria-label': ariaLabel,
 					},
-					h('option', { value: '' }, t('intentEffortFollow')),
+					h('option', { value: '' }, emptyLabel ?? t('intentEffortFollow')),
 					...[...wire, ...pending].map((entry) =>
 						h('option', { value: entry.id }, entry.name ?? entry.id),
 					),

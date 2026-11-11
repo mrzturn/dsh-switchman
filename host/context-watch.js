@@ -53,7 +53,7 @@ import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { clearHandover, handoverOf, recordHandover } from "./handover-state.js";
 import { enumerateLiveSubagents, sessionRecordPath, sessionRecordsDir } from "./subagents.js";
-import { recentTrimPromptTokensOf } from "./context-trim/index.js";
+import { recentTrimModelOf, recentTrimPromptTokensOf } from "./context-trim/index.js";
 
 /** Tools whose result text is accounted against the per-turn read budget. */
 const ACCOUNT_TOOLS = new Set(["read", "glob", "grep", "bash"]);
@@ -241,6 +241,69 @@ function renderSubWatermark(level) {
 	);
 }
 
+/** Freshness TTL for resolved subagent model windows (same cadence as the
+ *  trim engine's windowCache: 10 minutes, negative results cached too). */
+const SUB_WINDOW_TTL_MS = 600_000;
+
+/** Synchronously read the resolved context window (tokens) of the model a
+ *  subagent session is running on, or null when unknown/stale. On a cache
+ *  miss it primes the resolution in the background and returns null — the
+ *  first render falls back to the static tiers (fail-open), later renders
+ *  see the scaled tiers. Resolution goes through ctx.get("llm").
+ *  resolveModelInfo, the same DSH channel the trim engine uses. */
+function subagentWindowTokens(ctx, state, sessionId) {
+	try {
+		const route = recentTrimModelOf(sessionId);
+		if (route === null) return null;
+		const key = `${route.provider}/${route.model}`;
+		const now = Date.now();
+		const entry = state.subWindow.get(key);
+		if (entry !== undefined && now - entry.at < SUB_WINDOW_TTL_MS) return entry.value;
+		if (entry === undefined || entry.priming !== true) {
+			// Occupy the slot so concurrent renders do not fan out resolutions;
+			// at=0 keeps the read path treating it as a miss until primed.
+			state.subWindow.set(key, { value: null, at: 0, priming: true });
+			void primeSubagentWindow(ctx, state, route, key);
+		}
+		return null;
+	} catch {
+		return null;
+	}
+}
+
+/** Async window resolution backing subagentWindowTokens; stores the raw
+ *  resolved window (null when unknown — negative-cached for the same TTL). */
+async function primeSubagentWindow(ctx, state, route, key) {
+	try {
+		const llm = ctx.get?.("llm", false);
+		const info = await llm?.resolveModelInfo?.({ provider: route.provider, model: route.model });
+		const windowTokens = info?.context?.contextWindow;
+		const value = Number.isFinite(windowTokens) && windowTokens > 0 ? windowTokens : null;
+		state.subWindow.set(key, { value, at: Date.now() });
+		if (state.subWindow.size > 200) state.subWindow.delete(state.subWindow.keys().next().value);
+	} catch {
+		state.subWindow.set(key, { value: null, at: Date.now() });
+	}
+}
+
+/** Pure subagent tier scaling (exported for tests): cap force at
+ *  windowTokens × ratio and shrink soft/hard by the same factor (floored at
+ *  1000/2000) so tier spacing and ordering survive the shrink. Tighten-only:
+ *  a null/non-positive window, a cap ≥ the input force, or a cap below 3000
+ *  returns the tiers unchanged (fail-open). */
+export function scaleSubagentTiers(th, windowTokens, ratio) {
+	const subTh = { ...th };
+	if (!Number.isFinite(windowTokens) || windowTokens <= 0) return subTh;
+	const cap = Math.floor(windowTokens * ratio);
+	if (cap < subTh.force && cap >= 3000) {
+		const factor = cap / subTh.force;
+		subTh.soft = Math.max(1000, Math.floor(subTh.soft * factor));
+		subTh.hard = Math.max(2000, Math.floor(subTh.hard * factor));
+		subTh.force = cap;
+	}
+	return subTh;
+}
+
 /** Whole live line for one assembly (the tail context); "" whenever anything
  * needed is missing or the session sits at the silent ok tier. */
 function renderWatermarkContext(ctx, config, state, agent) {
@@ -250,16 +313,25 @@ function renderWatermarkContext(ctx, config, state, agent) {
 		const th = readThresholds(config);
 		const used = measureNow(ctx, agent);
 		if (used === null) return "";
-		const level = levelOf(used, th);
-		if (level === "ok") return "";
 		if (!isRoot(ctx, agent)) {
-			// Subagents share the root soft/hard thresholds; the optional
-			// wmSubagentForceTokens override replaces only the force tier
-			// (enabled by the wmSubagentCap toggle, 0/0 = follow the root set).
+			// Subagent tiers: root baseline, optional static force override, then
+			// capped by the subagent's OWN model window (ratio × window), so a
+			// small-window child model gets proportionally earlier tiers instead
+			// of inheriting tiers sized for the root model. Scaling can only
+			// TIGHTEN (min), never loosen; soft/hard shrink by the same factor to
+			// preserve tier spacing. Window resolution is async, so the render
+			// path reads a primed cache and primes in the background on miss —
+			// first renders fall back to the static tiers (fail-open).
 			const subForce = readBool(config.wmSubagentCap, true) ? readNumber(config.wmSubagentForceTokens, 0) : 0;
-			const subTh = subForce > 0 ? { ...th, force: subForce } : th;
+			const subTh = scaleSubagentTiers(
+				subForce > 0 ? { ...th, force: subForce } : { ...th },
+				subagentWindowTokens(ctx, state, sessionId),
+				readNumber(config.wmSubagentWindowRatio, 0.75),
+			);
 			return renderSubWatermark(levelOf(used, subTh));
 		}
+		const level = levelOf(used, th);
+		if (level === "ok") return "";
 		if (state.paused.has(sessionId)) return PAUSED_LINE;
 		const live = handoverOf(sessionId);
 		const elapsed = Date.now() - (state.lastHandover.get(sessionId) ?? 0);
@@ -333,6 +405,7 @@ function applyContextWatch(ctx, config) {
 		handoverTool: null,
 		lastHandover: new Map(),
 		readUsed: new Map(),
+		subWindow: new Map(), // "provider/model" -> { value: number|null, at } — resolved subagent model windows (see subagentWindowTokens)
 	};
 	const warn = (message) => ctx.logger?.warn?.(`dsh-switchman: ${message}`);
 

@@ -67,10 +67,14 @@ export const IntentCandidateSchema = z.object({
  *  ModelRouteSchema this accepts the "unset" `{provider:"", model:""}`
  *  pair the settings page round-trips — ModelRouteSchema's `.min(1)`
  *  would reject that exact declared default on every settings write.
- *  Consumers validate non-empty before trusting the route. */
+ *  Consumers validate non-empty before trusting the route. effort follows
+ *  the optional no-`.required()` style (schemastery passes undefined
+ *  through): the trim summarizer reads it as a reasoning-effort pin;
+ *  intent-layer routes leave it unset. */
 const IntentRouteSchema = z.object({
 	provider: z.string(),
 	model: z.string(),
+	effort: z.string(),
 });
 
 /** All dsh-switchman settings. Field names are the settings mutation paths. */
@@ -153,6 +157,14 @@ export const Config = z.object({
 	wmSubagentCap: z.boolean().default(true).volatile(),
 	/** Subagent hard cap; 0 = share wmForceTokens. */
 	wmSubagentForceTokens: z.number().min(0).default(0).volatile(),
+	/** Scale subagent watermark tiers to the subagent's own model window:
+	 * force = min(static force [or wmSubagentForceTokens], window × ratio);
+	 * soft/hard shrink by the same factor to preserve tier spacing. The ratio
+	 * can only TIGHTEN tiers, never loosen them; 1 = cap at the full model
+	 * window (still tightens when the window is smaller than the static
+	 * force tier). Resolution is async and cached per model route; until it
+	 * lands, the static tiers apply (fail-open). */
+	wmSubagentWindowRatio: z.number().min(0.1).max(1).default(0.75).volatile(),
 
 	// --- Teams mode: doctrine injection + whitelist sync -------------------
 	/** Agent Teams master switch. ON = inject the `[SWITCHMAN:TEAMS]` doctrine

@@ -643,3 +643,67 @@ test("fold fallback model: a failing side route retries the fallback before any 
 	assert.equal(outcomes.length, 1, "the fold commits on the pressure tier");
 	assert.ok(!outcomes[0].includes("fallback=mechanical"), "no degrade marker when the model fallback lands");
 });
+
+/** Side-route effort inheritance (session effort → capture → side route →
+ * summary proposal). Four scenarios in one run: A session-inherited effort
+ * rides through verbatim; B an explicit trimSideModel effort wins; C no
+ * effort anywhere pins low (never send without one); D an inherited effort
+ * the route does not support falls back to one retry pinned low. */
+test("side-route effort: inherited rides through, fixed wins, none pins low, unsupported retries low", async (t) => {
+	mock.timers.enable({ now: Date.now() });
+	t.after(() => mock.timers.reset());
+	let listener = null;
+	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
+	const effortsSeen = []; // reasoningEffort of every prepareCall proposal, in order
+	const llm = {
+		resolveModelInfo: async () => ({ context: { contextWindow: 100_000 } }),
+		prepareCall: async (proposal) => {
+			effortsSeen.push(proposal.reasoningEffort ?? null);
+			// Scenario D, first attempt: the inherited "high" is unsupported.
+			if (effortsSeen.length === 4 && proposal.reasoningEffort === "high") {
+				const err = new Error("provider \"p\" model \"m\" does not support reasoning effort \"high\"");
+				err.code = "UNSUPPORTED_REASONING_EFFORT";
+				throw err;
+			}
+			return { stream: async function* () {
+				yield { type: "text-delta", text: "Effort fold summary." };
+				yield { type: "finish" };
+			} };
+		},
+	};
+	const stateDirs = [];
+	t.after(() => { for (const dir of stateDirs) rmSync(dir, { recursive: true, force: true }); });
+
+	async function drive(sessionId, { sessionEffort, sideCfg } = {}) {
+		const { ctx, hooks } = mockCtx({ llmFiber: fiber });
+		ctx.get = () => llm;
+		const stateDir = mkdtempSync(join(tmpdir(), "trim-effort-"));
+		stateDirs.push(stateDir);
+		const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir, ...sideCfg });
+		const store = [];
+		for (let i = 1; i <= 6; i++) {
+			store.push({ role: "user", content: [{ type: "text", text: `t${i}u ` + "F".repeat(12_000) }] });
+			store.push({ role: "assistant", content: [{ type: "text", text: `t${i}a ` + "F".repeat(12_000) }] });
+			const options = { sessionId, messages: store.slice(), provider: "p", model: "m" };
+			if (sessionEffort !== undefined) options.reasoningEffort = sessionEffort;
+			const stream = listener(options, async function* () { yield { type: "finish", usage: { input_tokens: 1 } }; });
+			for await (const chunk of stream) void chunk;
+		}
+		hooks["agent/status"]({ status: "idle", agent: { session: { id: sessionId } } });
+		assert.equal(await poll(() => handle.store.ledgerOf(sessionId).blocks.length >= 1), true, `fold must commit for ${sessionId}`);
+		mock.timers.tick(61_000); // clear the per-session min-interval for the next scenario
+	}
+
+	// A: session-inherited effort rides through verbatim (no fixed side model).
+	await drive("eff-a", { sessionEffort: "high" });
+	assert.equal(effortsSeen[0], "high");
+	// B: an explicit trimSideModel effort wins over the session's own.
+	await drive("eff-b", { sessionEffort: "high", sideCfg: { trimSideModel: { provider: "s", model: "sm", effort: "medium" } } });
+	assert.equal(effortsSeen[1], "medium");
+	// C: nothing carries an effort → pin low (never send without one).
+	await drive("eff-c", { sideCfg: { trimSideModel: { provider: "s", model: "sm" } } });
+	assert.equal(effortsSeen[2], "low");
+	// D: unsupported inherited effort → exactly one retry pinned low.
+	await drive("eff-d", { sessionEffort: "high" });
+	assert.deepEqual(effortsSeen.slice(3), ["high", "low"]);
+});

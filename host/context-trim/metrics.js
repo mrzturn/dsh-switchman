@@ -67,8 +67,7 @@ export function createMetrics() {
 				cacheWriteTokens: null, // cache-write bucket of the last sample
 				outputTokens: null,
 				viewTokens: null, // view estimate noted by the listener pre-request
-				lastModel: null, // { provider, model } of the last stream
-				lastStreamAt: 0,
+				lastModel: null, // { provider, model, effort } of the last stream
 				totalStreams: 0,
 			};
 		}
@@ -87,8 +86,7 @@ export function createMetrics() {
 		noteView(sessionId, viewTokens, model) {
 			const record = recordOf(sessionId);
 			if (Number.isFinite(viewTokens)) record.viewTokens = Math.round(viewTokens);
-			if (model !== null && typeof model === "object") record.lastModel = { provider: model.provider ?? null, model: model.model ?? null };
-			record.lastStreamAt = Date.now();
+			if (model !== null && typeof model === "object") record.lastModel = { provider: model.provider ?? null, model: model.model ?? null, effort: typeof model.effort === "string" && model.effort !== "" ? model.effort : null };
 			record.totalStreams += 1;
 			return record;
 		},

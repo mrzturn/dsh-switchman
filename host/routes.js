@@ -95,6 +95,12 @@ const NUMBER_FIELDS = [
 	"wmReadBudgetTokens",
 	"wmSubagentForceTokens",
 ];
+/** Watermark numbers with REAL bounds (host/config.js schema): rejected (not
+ *  clamped) on write, defaulted on read — NUMBER_FIELDS only rejects negatives,
+ *  which would let a 0 ratio silently disable subagent tier scaling. */
+const WM_BOUNDED_NUMBER_FIELDS = [
+	{ field: "wmSubagentWindowRatio", min: 0.1, max: 1, def: 0.75 },
+];
 /** Trim numbers carry their own schema bounds (host/config.js), so the
  *  shared NUMBER_FIELDS coercion (which only rejects negatives) is too
  *  loose — these validate against each field's declared min/max. This group
@@ -144,10 +150,13 @@ const INTENT_NUMBER_FIELDS = [
 	{ field: "intentHistoryMaxChars", min: 200, max: 20000, def: 2400 },
 	{ field: "intentContextWindow", min: 1024, max: Number.POSITIVE_INFINITY, def: 200000 },
 ];
-/** Intent route references: unlike pool routes they round-trip the "unset"
- *  {provider:"", model:""} pair, so they validate against the loosened
- *  cleanIntentRoute (both keys must be strings; either may be empty). */
-const INTENT_ROUTE_FIELDS = ["intentClassifierRoute", "intentFallbackRoute", "trimSideModel", "trimFoldFallbackModel"];
+/** Intent route references round-trip the "unset" {provider:"", model:""}
+ *  pair, so they validate against the loosened cleanIntentRoute (both keys
+ *  must be strings; either may be empty); intent routes never carry effort. */
+const INTENT_ROUTE_FIELDS = ["intentClassifierRoute", "intentFallbackRoute"];
+/** Trim side routes additionally round-trip an optional effort pin — the
+ *  settings page's reasoning-effort select — via cleanTrimRoute below. */
+const TRIM_ROUTE_FIELDS = ["trimSideModel", "trimFoldFallbackModel"];
 /** Intent candidate list (route + optional effort/note per entry). */
 const INTENT_CANDIDATE_FIELDS = ["intentCandidates"];
 
@@ -304,6 +313,18 @@ function cleanIntentRoute(entry) {
 	const provider = typeof entry.provider === "string" ? entry.provider.trim() : null;
 	const model = typeof entry.model === "string" ? entry.model.trim() : null;
 	return provider === null || model === null ? null : { provider, model };
+	}
+
+/** Coerce one TRIM side route: like cleanIntentRoute, but a non-empty string
+ *  effort rides along — the trim summarizer pins reasoning effort on its side
+ *  model, and stripping it here made every settings save silently revert the
+ *  settings page's effort select to the default. Intent routes omit effort. */
+function cleanTrimRoute(entry) {
+	const route = cleanIntentRoute(entry);
+	if (route === null) return null;
+	const effort = typeof entry.effort === "string" ? entry.effort.trim() : "";
+	if (effort !== "") route.effort = effort;
+	return route;
 }
 
 /** Coerce one intent candidate: provider/model must be non-empty; effort/note
@@ -349,6 +370,7 @@ export function snapshotOf(config) {
 			? rawOf(config[field]).map(cleanEffortEntry).filter(Boolean)
 			: [];
 	for (const field of INTENT_ROUTE_FIELDS) values[field] = cleanIntentRoute(rawOf(config?.[field])) ?? { provider: "", model: "" };
+	for (const field of TRIM_ROUTE_FIELDS) values[field] = cleanTrimRoute(rawOf(config?.[field])) ?? { provider: "", model: "" };
 	for (const field of INTENT_CANDIDATE_FIELDS)
 		values[field] = mergeIntentCandidates(rawOf(config?.[field]));
 	values.intentClassifierKind = ENUM_FIELDS.intentClassifierKind.includes(rawOf(config?.intentClassifierKind))
@@ -371,6 +393,10 @@ export function snapshotOf(config) {
 	for (const field of NUMBER_FIELDS) {
 		const raw = Number(rawOf(config?.[field]));
 		values[field] = Number.isFinite(raw) ? raw : 0;
+	}
+	for (const { field, def } of WM_BOUNDED_NUMBER_FIELDS) {
+		const raw = Number(rawOf(config?.[field]));
+		values[field] = Number.isFinite(raw) ? raw : def;
 	}
 	values.wmDenyMode = ENUM_FIELDS.wmDenyMode.includes(rawOf(config?.wmDenyMode))
 		? rawOf(config.wmDenyMode)
@@ -419,6 +445,11 @@ export function coerceValues(input) {
 		if (route === null) return null;
 		values[field] = route;
 	}
+	for (const field of TRIM_ROUTE_FIELDS) {
+		const route = cleanTrimRoute(input[field]);
+		if (route === null) return null;
+		values[field] = route;
+	}
 	for (const field of INTENT_CANDIDATE_FIELDS) {
 		if (!Array.isArray(input[field])) return null;
 		const candidates = input[field].map(cleanIntentCandidate);
@@ -452,6 +483,11 @@ export function coerceValues(input) {
 	for (const field of NUMBER_FIELDS) {
 		const raw = Number(input[field]);
 		if (!Number.isFinite(raw) || raw < 0) return null;
+		values[field] = raw;
+	}
+	for (const { field, min, max } of WM_BOUNDED_NUMBER_FIELDS) {
+		const raw = Number(input[field]);
+		if (!Number.isFinite(raw) || raw < min || raw > max) return null;
 		values[field] = raw;
 	}
 	if (!ENUM_FIELDS.wmDenyMode.includes(input.wmDenyMode)) return null;

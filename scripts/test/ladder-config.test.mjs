@@ -53,6 +53,7 @@ function fullValues(overrides = {}) {
 		wmForceTokens: 150000,
 		wmReadBudgetTokens: 3000,
 		wmSubagentForceTokens: 0,
+		wmSubagentWindowRatio: 0.75,
 		trimGrowthTokens: 22500,
 		trimIncrementTokens: 50000,
 		trimPressurePercent: 60,
@@ -105,6 +106,17 @@ test("coerceValues round-trips every trim field the client page sends", () => {
 	assert.equal(coerced.trimLadderT2MinBlocks, 3);
 	assert.equal(coerced.trimLadderT3Tokens, 6000);
 	assert.equal(coerced.trimLadderT3MinBlocks, 2);
+	assert.equal(coerced.wmSubagentWindowRatio, 0.75);
+	// Trim side routes keep their effort pin through coercion; intent routes
+	// never gain one (cleanIntentRoute strips it).
+	assert.deepEqual(
+		coerceValues(fullValues({ trimFoldFallbackModel: { provider: "p", model: "m", effort: "high" } })).trimFoldFallbackModel,
+		{ provider: "p", model: "m", effort: "high" },
+	);
+	assert.deepEqual(
+		coerceValues(fullValues({ intentClassifierRoute: { provider: "p", model: "m", effort: "high" } })).intentClassifierRoute,
+		{ provider: "p", model: "m" },
+	);
 });
 
 test("trim field bounds reject out-of-schema values", () => {
@@ -114,6 +126,8 @@ test("trim field bounds reject out-of-schema values", () => {
 	assert.equal(coerceValues(fullValues({ trimMaxFoldsPerHour: 61 })), null, "hourly cap above the schema maximum");
 	assert.equal(coerceValues(fullValues({ trimMode: "yolo" })), null, "unknown mode rejected");
 	assert.equal(coerceValues(fullValues({ trimGrowthTokens: "many" })), null, "non-numeric rejected");
+	assert.equal(coerceValues(fullValues({ wmSubagentWindowRatio: 0.05 })), null, "ratio below the schema floor");
+	assert.equal(coerceValues(fullValues({ wmSubagentWindowRatio: 1.5 })), null, "ratio above 1 would loosen tiers");
 });
 
 test("a payload missing any trim field fails coercion (the client must send ALL fields)", () => {

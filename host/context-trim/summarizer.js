@@ -225,13 +225,15 @@ function describeFailure(chunk) {
 }
 
 /** Side-model summary. llm: the dsh llm service (receiver-bound methods);
- * route: { provider, model } | null (null → caller skips); materialText:
- * renderMaterial output; options.systemPrompt overrides the default
+ * route: { provider, model, effort? } | null (null → caller skips); materialText:
  * compression prompt (the ladder distillation passes its own); deadlineMs:
  * hard budget. Returns the summary text, or null on ANY failure (caller
  * skips the fold cycle). */
 export async function summarizeWithModel(llm, route, materialText, options = {}) {
 	const fail = typeof options.onFail === "function" ? options.onFail : null;
+	// Effort-retry notice: fires BEFORE the low-pinned retry, whether or not
+	// the retry lands. Falls back to fail when the caller doesn't supply one.
+	const notice = typeof options.onNotice === "function" ? options.onNotice : null;
 	if (route === null || route === undefined) { fail?.("no-route"); return null; }
 	if (typeof llm?.prepareCall !== "function") { fail?.("no-prepare-call"); return null; }
 	const deadlineMs = Number.isFinite(options.deadlineMs) && options.deadlineMs > 0 ? options.deadlineMs : SUMMARY_TIMEOUT_MS;
@@ -240,11 +242,40 @@ export async function summarizeWithModel(llm, route, materialText, options = {})
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(new Error("trim summary deadline")), deadlineMs);
 	try {
-		const call = await llm.prepareCall(
-			{ provider: route.provider, model: route.model, maxTokens },
-			controller.signal,
-			(controls) => controls,
-		);
+		// Effort policy: inherit the route's effort verbatim when it carries
+		// one (session-inherited routes carry the session's own DSH-resolved
+		// effort; explicit trimSideModel configs may pin theirs), else pin
+		// "low" — summaries are auxiliary work. NEVER send without an effort,
+		// and never send "off": pi-ai maps both to thinking:{type:"disabled"}
+		// (profileOptions turns "off" back into an absent reasoning option),
+		// which newer Anthropic endpoints reject with 400. A DSH session run
+		// with thinking disabled resolves its effort to "off", so an inherited
+		// route can carry exactly that value — treat it like empty here.
+		// The effort rides the prepareCall proposal so it resolves into
+		// call.config, keeping stream options consistent with the prepared
+		// call (INVALID_PREPARED_CALL guard).
+		const requestedEffort = typeof route.effort === "string" && route.effort !== "" && route.effort !== "off" ? route.effort : "low";
+		let call;
+		try {
+			call = await llm.prepareCall(
+				{ provider: route.provider, model: route.model, maxTokens, reasoningEffort: requestedEffort },
+				controller.signal,
+				(controls) => controls,
+			);
+		} catch (prepareError) {
+			// An inherited session effort can exceed what the route's adapter
+			// supports: retry once pinned low before giving up (the outer
+			// catch then turns the failure into a skipped fold cycle).
+			const code = prepareError?.code ?? null;
+			const named = typeof prepareError?.message === "string" && prepareError.message.includes("UNSUPPORTED_REASONING_EFFORT");
+			if (requestedEffort === "low" || (code !== "UNSUPPORTED_REASONING_EFFORT" && !named)) throw prepareError;
+			(notice ?? fail)?.(`effort "${requestedEffort}" unsupported, retrying low`);
+			call = await llm.prepareCall(
+				{ provider: route.provider, model: route.model, maxTokens, reasoningEffort: "low" },
+				controller.signal,
+				(controls) => controls,
+			);
+		}
 		let text = "";
 		let finishKind = null;
 		// stream options MUST carry the prepared call config — the adapter

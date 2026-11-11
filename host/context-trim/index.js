@@ -58,6 +58,7 @@ import { childSessionIdOf } from "../subagent-model.js";
 // it and the stored tally takes over.
 const trimViewBySession = new Map(); // sessionId -> { viewTokens, at, inject, lastNoneAt }
 const trimWireBySession = new Map(); // sessionId -> { promptTokens, at } — last sampled provider prompt of an accepted MAIN dispatch (side calls never write; a tiny inherited-id usage sample must not lower the watermark's wire floor)
+const capturedModelBySession = new Map(); // sessionId -> { provider, model, at } — last stream-captured model route, read by the watermark layer to scale subagent tiers to the session's own model window
 /** Freshness TTL for the in-memory view/injection registry (watermark and
  *  banner display only). NEVER a fold gate: gating folds on "did the surface
  *  channel ship recently" deadlocks resumed sessions (2026-11-05). The fold
@@ -107,6 +108,19 @@ export function recentTrimViewTokensOf(sessionId, maxAgeMs = TRIM_VIEW_MAX_AGE_M
 	try {
 		const entry = gatedViewEntry(sessionId, maxAgeMs);
 		return entry !== null && Number.isFinite(entry.viewTokens) && entry.viewTokens > 0 ? entry.viewTokens : null;
+	} catch {
+		return null;
+	}
+}
+
+/** Most recent captured model route ({provider, model}) for a session, or
+ * null when missing, stale, or malformed. The watermark layer reads this to
+ * look up the session's own model window (subagent tier scaling). */
+export function recentTrimModelOf(sessionId, maxAgeMs = TRIM_VIEW_MAX_AGE_MS) {
+	try {
+		const entry = capturedModelBySession.get(sessionId);
+		if (entry === undefined || Date.now() - entry.at > maxAgeMs) return null;
+		return typeof entry.provider === "string" && typeof entry.model === "string" ? { provider: entry.provider, model: entry.model } : null;
 	} catch {
 		return null;
 	}
@@ -234,7 +248,11 @@ function readRoute(config, key) {
 		let got = value;
 		if (value !== null && typeof value === "object" && typeof value.get === "function") got = value.get();
 		if (got !== null && typeof got === "object" && typeof got.provider === "string" && got.provider !== "" && typeof got.model === "string" && got.model !== "") {
-			return { provider: got.provider, model: got.model };
+			// Pass the configured effort through verbatim (IntentRouteSchema
+			// already carries the optional field); absent/empty just omits it.
+			return typeof got.effort === "string" && got.effort !== ""
+				? { provider: got.provider, model: got.model, effort: got.effort }
+				: { provider: got.provider, model: got.model };
 		}
 	} catch {
 		/* fall through */
@@ -576,6 +594,10 @@ export function applyContextTrim(ctx, config) {
 	 * copy — message objects are treated as immutable records). */
 	function captureOf(sessionId, messages, model, viewTokens) {
 		captures.set(sessionId, { messages: messages.slice(), model, viewTokens, at: Date.now() });
+		if (model !== null && typeof model === "object" && typeof model.provider === "string" && typeof model.model === "string") {
+			capturedModelBySession.set(sessionId, { provider: model.provider, model: model.model, at: Date.now() });
+			if (capturedModelBySession.size > 200) capturedModelBySession.delete(capturedModelBySession.keys().next().value);
+		}
 		// keep the capture map bounded (200 sessions)
 		if (captures.size > 200) {
 			const oldest = captures.keys().next().value;
@@ -673,7 +695,15 @@ export function applyContextTrim(ctx, config) {
 		} else if (view.applied > 0) {
 			epochResetDoneBySession.delete(sessionId);
 		}
-		const model = { provider: options.provider ?? null, model: options.model ?? null };
+		// Capture the session's own resolved reasoningEffort alongside
+		// provider/model: at stream-listener time DSH has already resolved the
+		// effective effort for this dispatch, so the side route can inherit it
+		// verbatim instead of re-deriving (and losing) it.
+		const model = {
+			provider: options.provider ?? null,
+			model: options.model ?? null,
+			effort: typeof options.reasoningEffort === "string" && options.reasoningEffort !== "" ? options.reasoningEffort : null,
+		};
 		captureOf(sessionId, rawSnapshot, model, viewTokens);
 		metrics.noteView(sessionId, viewTokens, model);
 		const priorEntry = trimViewBySession.get(sessionId);
@@ -694,7 +724,10 @@ export function applyContextTrim(ctx, config) {
 		if (explicit !== null) return explicit;
 		const model = metrics.of(sessionId)?.lastModel ?? null;
 		if (model !== null && typeof model.provider === "string" && model.provider !== "" && typeof model.model === "string" && model.model !== "") {
-			return { provider: model.provider, model: model.model };
+			// Inherit the session's own resolved effort when one was captured.
+			return typeof model.effort === "string" && model.effort !== ""
+				? { provider: model.provider, model: model.model, effort: model.effort }
+				: { provider: model.provider, model: model.model };
 		}
 		return null;
 	}
@@ -733,6 +766,7 @@ export function applyContextTrim(ctx, config) {
 			const summarize = (r, tag) => summarizeWithModel(llm, r, renderLadderMaterial(consumed), {
 				systemPrompt: LADDER_SYSTEM_PROMPT,
 				onFail: (why) => decisionLog(`session=${sessionId} summary-fail route=${tag} why=${why} blocks=${consumed.length} ~${approxTokens}t ladder=${decision.tier}`),
+				onNotice: (why) => decisionLog(`session=${sessionId} summary-retry route=${tag} why=${why} blocks=${consumed.length} ~${approxTokens}t ladder=${decision.tier}`),
 			});
 			let summary = route !== null ? await summarize(route, "side") : null;
 			if (summary === null && fallback !== null && !sameRoute(fallback, route)) summary = await summarize(fallback, "fallback");
@@ -779,6 +813,7 @@ export function applyContextTrim(ctx, config) {
 			const material = renderMaterial(capture.messages, startIdx, endIdx, refOf);
 			const summarize = (r, tag) => summarizeWithModel(llm, r, material, {
 				onFail: (why) => decisionLog(`session=${sessionId} summary-fail route=${tag} why=${why} msgs=${count} ~${approxTokens}t`),
+				onNotice: (why) => decisionLog(`session=${sessionId} summary-retry route=${tag} why=${why} msgs=${count} ~${approxTokens}t`),
 			});
 			summary = route !== null ? await summarize(route, "side") : null;
 			if (summary === null && fallback !== null && !sameRoute(fallback, route)) summary = await summarize(fallback, "fallback");
