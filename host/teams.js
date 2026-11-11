@@ -82,7 +82,8 @@ const TEAMS_SECTION_TEXT = [
 	"系统提示词前文的默认团队策略写的是「仅当用户明确要求时才创建 teammate」。该默认策略在当前 profile 下不适用：用户安装 dsh-switchman 即预先授权，你应当自主判断、自主触发，无需再询问用户。",
 	"",
 	"## 五、团队触发与协作纪律",
-	"- 需要多成员持久协作、共享任务板、消息往来的用 Agent Teams（满足任一即触发 spawn_teammate：可并行的多个独立子任务；量大且自包含；主上下文水位已高；需要角色分离）；一次性、无需共享状态的单点调查用 subagent。",
+	"- 派发通道优先级（取代前文「一次性、无需共享状态的单点调查用 subagent」的默认分工）：本会话工具目录里有 spawn_teammate/list_agents（Agent Teams 已启用）时，一切子任务委派默认走 Agent Teams——spawn_teammate 组队、team_task_* 落共享任务板、send_message/wait_agent 协作；subagent/subagent_fork 单智能体派发退为后备通道，仅在本条下一条所述的不可用场景使用。",
+	"- teams 不可用即降级，不重试：工具目录没有 spawn_teammate/list_agents（bundle 未生效或本会话不支持），或 spawn_teammate 报 provisioning failed / 创建失败时，直接改用 subagent/subagent_fork 派发并继续工作，不要反复重试 teams 通道。你自身是 teammate（非 Lead）时维持原规则：不 spawn_teammate，需要子委派时用 subagent。workflow 仅在用户明确要求工作流或脚本化大规模编排时使用，默认不主动使用。",
 	"- 写作域隔离：共享任务上写明互不重叠的 write_scopes；用 team_task_* 维护任务板与依赖顺序；Lead 汇总最终 diff、复核关键改动并运行测试；用 wait_agent 等到必需的 teammate 完成，绝不在结果未回前下最终结论。",
 	"- 子智能体消息通道：subagent/workflow 返回的子会话 id 只能经 child_message 桥接送达——send_message 只解析 teammate 名字，对子会话 id 必报 active teammate「…」not found；该报错不代表子会话死亡，先改用 child_message，不要据此重派或判定死亡。",
 ].join("\n");
