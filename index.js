@@ -25,6 +25,12 @@
  * ctx_handover agent tool, and the /ctx-pause, /ctx-resume,
  * /ctx-handover commands.
  *
+ * The tool-argument sanitation layer (host/tool-args-sanitize.js) is a
+ * `tools/pre-execute` waterfall listener that transparently coerces known
+ * broken argument shapes — stringified-JSON composites ("[100, 145]" instead
+ * of [100, 145]) and empty-string enum fields (encoding: "") — before the
+ * tool implementations validate them, eliminating a recurring class of
+ * self-correcting tool-call retries observed in production session logs.
  * Teams mode mounts two more layers: host/teams.js carries the team clauses
  * extracted from the cordis.patch.yml suffix in a `[SWITCHMAN:TEAMS]` section
  * (order 10250, injected only while teamsMode is ON) plus the deferred ON
@@ -81,6 +87,9 @@ import { applyIntent } from "./host/intent.js";
 // Client-bridge routes (config snapshot/fenced write + model catalog for the
 // restricted browser half, which has no configForms/remote services).
 import { applyRoutes } from "./host/routes.js";
+// Tool-argument sanitation (transparent coercion of stringified-JSON and
+// empty-string argument shapes before tool validation).
+import { applyToolArgsSanitize } from "./host/tool-args-sanitize.js";
 
 /** Cordis plugin name. */
 const name = "dsh-switchman";
@@ -211,6 +220,7 @@ function apply(ctx, config) {
 	applyIntent(ctx, config);
 	applySubagentModel(ctx);
 	applyRoutes(ctx, config);
+	applyToolArgsSanitize(ctx, config);
 }
 
 export { apply, inject, name };
