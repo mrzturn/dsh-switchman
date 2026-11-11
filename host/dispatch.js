@@ -15,7 +15,14 @@
  * pushes the caller back to implicit dispatch — silently losing the lane's
  * route. The sanitation denies such calls with the exact corrected
  * arguments instead (exec.arguments is deep-frozen by the runtime, so a
- * deny is the only correction channel `tools/pre-execute` offers).
+ * deny is the only correction channel `tools/pre-execute` offers). The
+ * same pass covers the field-shape failures production logs show models
+ * repeating (a merged "provider/model" string with the provider field
+ * omitted, a bare model with the provider field omitted, a model still
+ * carrying its "provider/" prefix, and a provider-less
+ * list_subagent_models call) — every such call is rejected by DSH
+ * outright, so each deny carries the exact corrected fields and turns
+ * 2-4 blind retries into one immediate re-dispatch.
  *
  * Model-facing text is English and byte-stable for a given configuration
  * (the anchor line never varies with UI locale). All reads go through the
@@ -284,6 +291,208 @@ function annotationFixOf(args, config) {
 	);
 }
 
+/** Every configured {provider, model} route across all lanes and
+ *  modelRank, in config order. Unlike configuredRoutes (whose folded key
+ *  is first-wins per model segment — right for route MATCHING, where
+ *  duplicates would collapse), this keeps every entry: provider-candidate
+ *  hints must see all providers offering the same model id. */
+function allConfiguredRoutes(config) {
+	const routes = [];
+	const add = (route) => {
+		if (isModelRoute(route)) routes.push(route);
+	};
+	for (const lane of LANES) for (const route of readList(config[laneField(lane)])) add(route);
+	for (const entry of readList(config.modelRank)) add(entry);
+	return routes;
+}
+
+/** Distinct configured providers whose folded model key matches one bare
+ *  model id, in config order — completes a corrective hint for a
+ *  delegation or enumeration call that omitted the provider field. */
+function modelProviderMatches(config, model) {
+	const key = normalizeModelKey("", model);
+	if (key === "") return [];
+	const seen = new Set();
+	const providers = [];
+	for (const route of allConfiguredRoutes(config)) {
+		if (normalizeModelKey("", route.model) !== key || seen.has(route.provider)) continue;
+		seen.add(route.provider);
+		providers.push(route.provider);
+	}
+	return providers;
+}
+
+/** Canonical pool spelling for a folded model-id hit (caller casing
+ *  and annotation tail vary); the trimmed input when no pool route
+ *  folds to it. */
+function canonicalPoolModel(config, providers, model) {
+	const hit = allConfiguredRoutes(config).find(
+		(route) =>
+			providers.includes(route.provider) &&
+			normalizeModelKey("", route.model) === normalizeModelKey("", model),
+	);
+	return hit !== undefined ? hit.model : model;
+}
+
+/** Corrective deny reason for one delegation call whose provider/model
+ *  field SPLIT is malformed, or null to pass through. Covers the field
+ *  failures observed in production session logs (each burned 2-4 blind
+ *  retries before a manual fix):
+ *
+ *  - provider omitted, model a merged "provider/model" string: DSH rejects
+ *    EVERY such call with "`provider` and `model` must be supplied
+ *    together" before any route check, so denying with the split fields is
+ *    a strict improvement even when the split is not a configured route —
+ *    a deliberate exception to the annotated-copy rule that unknown ids
+ *    pass through (that rule protects calls DSH would ACCEPT; these can
+ *    never succeed);
+ *  - provider given, model still carrying that same "provider/" prefix:
+ *    DSH joins provider + "/" + model itself, so the resolved route
+ *    double-encodes the provider and misses the exact-match whitelist;
+ *  - provider omitted, model a bare id: resolved against the pool table —
+ *    exactly one configured provider → the pair; several → the candidate
+ *    list; none → pass through (DSH's own error already says what's wrong);
+ *  - provider given, model naming a DIFFERENT provider's configured route:
+ *    denied with that route's pair; anything else passes untouched. */
+function routeFixOf(args, config) {
+	const model = typeof args?.model === "string" ? args.model.trim() : "";
+	if (model === "") return null;
+	const providerGiven = typeof args?.provider === "string" && args.provider.trim() !== "";
+	const provider = providerGiven ? args.provider.trim() : "";
+
+	// Provider given, model still prefixed: the double-encoded route can
+	// never match the exact whitelist, so the correction is unconditional.
+	if (providerGiven && model.startsWith(`${provider}/`)) {
+		const fixed = model.slice(provider.length + 1).trim();
+		if (fixed === "" || fixed.includes("/")) return null;
+		return (
+			`[SWITCHMAN:POOLS] the model argument already carries the provider prefix — DSH joins provider + "/" + model itself, so this call resolves to the route "${provider}/${model}" and is rejected. ` +
+			`Re-dispatch with provider "${provider}", model "${fixed}", keeping every other argument unchanged.`
+		);
+	}
+
+	const cut = model.lastIndexOf("/");
+
+	// Provider given, model names another provider's configured route.
+	if (providerGiven && cut > 0) {
+		const prefix = model.slice(0, cut).trim();
+		const known =
+			prefix === ""
+				? undefined
+				: allConfiguredRoutes(config).find(
+					(route) =>
+						route.provider.toLowerCase() === prefix.toLowerCase() &&
+						normalizeModelKey("", route.model) === normalizeModelKey("", model.slice(cut + 1).trim()),
+				);
+		// No configured route under that prefix: not a shape we can correct
+		// — pass through for DSH's own rejection, without tripping the
+		// fail-open catch.
+		if (known === undefined) return null;
+		return (
+			`[SWITCHMAN:POOLS] the model argument embeds another provider's route — with provider "${provider}" this resolves to "${provider}/${model}", which no authorized route matches. ` +
+			`Re-dispatch with provider "${known.provider}", model "${known.model}", keeping every other argument unchanged.`
+		);
+	}
+
+	if (providerGiven) return null;
+
+	// Provider omitted, merged "provider/model" string: always rejected by
+	// DSH (both fields are required together), deny with the split fields.
+	if (cut > 0) {
+		// A merged copy of the already-prefixed id ("prov/prov/model") —
+		// the repeated head segment is the giveaway; recommend the inner
+		// pair directly. Other mid-slash shapes stay uncorrectable.
+		const segments = model.split("/");
+		const doubled =
+			segments.length === 3 &&
+			segments[0].trim().toLowerCase() === segments[1].trim().toLowerCase();
+		const providerFix = (doubled ? segments[0] : model.slice(0, cut)).trim();
+		const modelFix = stripTrailingAnnotations((doubled ? segments[2] : model.slice(cut + 1)).trim());
+		// Segments still malformed after the split (a mid-slash provider,
+		// a leading-slash or nested model) cannot be corrected into a call
+		// DSH would accept — pass through.
+		if (
+			providerFix === "" ||
+			modelFix === "" ||
+			providerFix.includes("/") ||
+			modelFix.includes("/")
+		)
+			return null;
+		const matched = allConfiguredRoutes(config).find(
+			(route) =>
+				route.provider.toLowerCase() === providerFix.toLowerCase() &&
+				normalizeModelKey("", route.model) === normalizeModelKey("", modelFix),
+		);
+		// Recommend the pool's canonical spelling on a folded hit so
+		// case-variant or annotated copies resolve on the first retry.
+		const shownProvider = matched !== undefined ? matched.provider : providerFix;
+		const shownModel = matched !== undefined ? matched.model : modelFix;
+		const note =
+			matched === undefined
+				? `If "${shownProvider}/${shownModel}" is not authorized for this session, the re-dispatch error will say so precisely.`
+				: `This is the configured pool route ${shownProvider}/${shownModel}.`;
+		return (
+			`[SWITCHMAN:POOLS] the model argument merges provider and model into one string — subagent calls take SEPARATE provider and model fields, and DSH rejects every call that omits either. ` +
+			`Re-dispatch with provider "${shownProvider}", model "${shownModel}", keeping every other argument unchanged. ${note}`
+		);
+	}
+
+	// A leading "/" (cut === 0) is malformed beyond folding: the pool
+	// matcher would silently strip it and recommend the malformed id back.
+	// Pass through and let DSH's own schema error surface.
+	if (cut === 0) return null;
+
+	// Provider omitted, bare model id: resolve the provider from the pool
+	// table; pass through when the id names no configured provider.
+	const providers = modelProviderMatches(config, model);
+	if (providers.length === 0) return null;
+	const shownModel = canonicalPoolModel(config, providers, model);
+	if (providers.length === 1) {
+		return (
+			`[SWITCHMAN:POOLS] the provider field is missing — subagent calls take SEPARATE provider and model fields, and DSH rejects every call that omits either. ` +
+			`The model id "${model}" is configured under exactly one provider. Re-dispatch with provider "${providers[0]}", model "${shownModel}", keeping every other argument unchanged.`
+		);
+	}
+	return (
+		`[SWITCHMAN:POOLS] the provider field is missing and the model id "${model}" is configured under several providers (${providers.join(", ")}). ` +
+		`Re-dispatch with one of those providers as the provider field, model "${shownModel}", keeping every other argument unchanged.`
+	);
+}
+
+/** Corrective deny reason for a malformed list_subagent_models call, or
+ *  null to pass through. DSH's own schema rejects {} and {model}-only
+ *  calls with a bare "`provider` must be non-empty"; production logs show
+ *  that error costing 2-4 blind probes (empty, empty, provider-only,
+ *  provider+model). One deny carrying the pool table's provider list
+ *  turns that into a single corrected call. provider-given calls always
+ *  pass. */
+function enumerationFixOf(args, config) {
+	const provider = typeof args?.provider === "string" ? args.provider.trim() : "";
+	if (provider !== "") return null;
+	const model = typeof args?.model === "string" ? args.model.trim() : "";
+	if (model === "") {
+		const providers = [...new Set(allConfiguredRoutes(config).map((route) => route.provider))];
+		const list = providers.length > 0 ? ` Providers configured on this session's pools: ${providers.join(", ")}.` : "";
+		return (
+			`[SWITCHMAN:POOLS] list_subagent_models requires a non-empty provider — a call without one is rejected, not a listing of everything. ` +
+			`Call it with {"provider":"<provider>"} to enumerate that provider's selectable models, then add "model" for one route's details.${list}`
+		);
+	}
+	const providers = modelProviderMatches(config, model);
+	if (providers.length === 0) return null;
+	const shownModel = canonicalPoolModel(config, providers, model);
+	if (providers.length === 1) {
+		return (
+			`[SWITCHMAN:POOLS] list_subagent_models requires a non-empty provider. The model id "${model}" is configured under exactly one provider — ` +
+			`call it with provider "${providers[0]}", model "${shownModel}" for that route's details.`
+		);
+	}
+	return (
+		`[SWITCHMAN:POOLS] list_subagent_models requires a non-empty provider. The model id "${model}" is configured under several providers (${providers.join(", ")}) — ` +
+		`call it with one of those providers as the provider field, model "${shownModel}".`
+	);
+}
+
 /** The assembling session's own route, from the DSH agent-loop's assemble
  *  context (`agent.ts` passes `modelSelection` with every turn assembly;
  *  older builds and non-agent assemblies omit it). Null when absent or
@@ -340,9 +549,11 @@ function renderPoolsBlock(state, sessionRoute = null) {
 		`Lanes marked * are in manual order: dispatch follows the listed order exactly (the head is the first choice).`,
 		`effort: economy=medium mechanical=medium main=medium (high for complex tasks) hard=high vision=multimodal-capable model review=high; an unconfigured lane uses the system default model.`,
 		`Entries render as provider/model(TIER)@effort: (TIER) is the S/A/B/C capability grade and @effort a manually pinned reasoning effort — both are display-only annotations, NEVER parts of the model id.`,
-		`Decompose before dispatching: provider/model(TIER)@effort → provider=provider, model=model, reasoning_effort=effort (a pin overrides the lane default); a route without @effort carries no per-route pin — fall back to the lane's default effort above.`,
+		`Decompose into SEPARATE tool fields: provider/model(TIER)@effort → {"provider":"<provider>","model":"<model>","reasoning_effort":"<effort>"} (a pin overrides the lane default; a route without @effort carries no per-route pin — fall back to the lane's default effort above).`,
+		`The table cell is ONE display string, never a field value: "model":"provider/model" (provider field omitted) is rejected, and model NEVER carries a "provider/" prefix — DSH joins provider + "/" + model itself, so a prefixed model double-encodes the provider and misses the whitelist.`,
 		`Review delegations: anchor independence on the code AUTHOR's model, not the main session's (author = the agent that produced the diff: its explicit dispatch route, or the inherited session model when unspecified). Prefer a reviewer model different from the author's; also avoiding the session model is a bonus (its integration pass already covers that angle). If no pool entry differs from the author, same-model review is allowed — declare DOWNGRADED and state whether it is relative to the author or the session.`,
 		`Explicit lane dispatch is the DEFAULT for subagent/workflow: name provider+model+reasoning_effort decomposed from the lane row (validated against this session's DSH-authorized child models — DSH Settings: allow agents to choose subagent models — NOT against this table). Implicit dispatch (omitting all three fields) is a LAST-RESORT fallback, never a shortcut: use it only after an explicit attempt was denied or list_subagent_models confirmed no authorized route, and declare IMPLICIT-DOWNGRADED in your report when you do — the child then uses configured defaults or inherits the parent route, so the lane's model is lost.`,
+		`list_subagent_models verifies authorized routes before dispatching: {"provider":"<provider>"} lists that provider's models, {"provider":"<provider>","model":"<model>"} returns one route's details — {} and {"model"} alone are rejected (provider is required and non-empty).`,
 	);
 	if (anyUnauthorized) {
 		lines.push(
@@ -395,6 +606,13 @@ function applyDispatch(ctx, config) {
 	// named; model-less calls use the system default and pass through.
 	ctx.on("tools/pre-execute", (exec, next) => {
 		try {
+			if (exec?.name === "list_subagent_models") {
+				// Enumeration sanitation: DSH rejects provider-less calls with a
+				// bare "`provider` must be non-empty"; deny once with the pool
+				// table's provider list instead (fail-open wrapper below).
+				const fix = enumerationFixOf(exec.arguments, config);
+				return fix === null ? next() : { kind: "deny", reason: fix };
+			}
 			if (exec?.name !== "subagent" && exec?.name !== "subagent_fork") return next();
 			const args = exec.arguments;
 
@@ -405,7 +623,7 @@ function applyDispatch(ctx, config) {
 			// implicit dispatch, losing the lane's route. Deny with the
 			// exact corrected arguments instead — one immediate retry on
 			// the intended route.
-			const fix = annotationFixOf(args, config);
+			const fix = annotationFixOf(args, config) ?? routeFixOf(args, config);
 			if (fix !== null) return { kind: "deny", reason: fix };
 
 			// Enforce gate: unchanged semantics, now sharing the factored
