@@ -1,0 +1,10 @@
+{
+	"dsh": "0.2.2-rc.1",
+	"generatedAt": "2026-11-11T13:18:25.971Z",
+	"presets": [
+		"standard",
+		"ptc",
+		"minimal",
+		"cordis"
+	]
+}
