@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 格式参照 Keep a Changelog;版本遵循语义化版本。
 
+## [Unreleased]
+
+### English
+
+#### Added
+
+- **PTC direct-call guard**: one final-say systemPrompt section (order 10510, after every other dsh-switchman section) rendered only when the viewing scope resolves to the PTC tool executor — detected per assembly via `ctx.tools.selectExecutor(context.scope)` plus the executor's `describe()` `knownNames: ["run_code"]` discrimination, with fail-open on any unusable probe — restating that `run_code` is the only directly callable tool and every named tool must be invoked as `await tools.name(args)` inside a `run_code` program, so doctrines and skill catalogs that name tools directly (teams delegation, bundled skills) are far less likely to trigger `unknown tool` rejections in PTC sessions (a prompt-level mitigation, not a hard guarantee). (`host/ptc-guard.js`)
+
+### 中文
+
+#### 新增
+
+- **PTC 直调守卫**：新增一条「最后一句话」systemPrompt section（order 10510，晚于本插件所有其它 section），仅当会话作用域解析到 PTC 工具执行器时渲染——每次组装经 `ctx.tools.selectExecutor(context.scope)` 加执行器 `describe()` 的 `knownNames: ["run_code"]` 判别式按会话检测，探测不可用时一律 fail-open 渲染空串——重申 `run_code` 是唯一可直调工具、其余工具必须在 `run_code` 程序内以 `await tools.name(args)` 调用，使直接点名工具的规程与技能目录（teams 委派、内置技能）在 PTC 会话触发 `unknown tool` 报错的可能性大幅降低（提示词级缓解，非硬保证）。（`host/ptc-guard.js`）
+
 ## [1.11.2] — 2026-11-12
 
 ### English

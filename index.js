@@ -51,6 +51,13 @@
  * defensive ctx.get reads (NOT declared in inject): a deployment without the
  * llm service leaves this layer a warn-once no-op — a documented runtime
  * precondition, like sessionQuery/pluginManager above.
+ * The PTC direct-call guard (host/ptc-guard.js) is a final-say prompt section
+ * (order 10510) rendered only when the viewing scope resolves to the PTC tool
+ * executor — detected per assembly via ctx.tools.selectExecutor(context.scope)
+ * plus the executor's describe() knownNames — restating that every named tool
+ * must be called inside a run_code program (`await tools.name(args)`), so
+ * doctrines and skill catalogs that name tools directly can no longer trigger
+ * `unknown tool` rejections in PTC sessions.
  */
 
 import { readdirSync, readFileSync } from "node:fs";
@@ -70,6 +77,8 @@ import { applyDispatch } from "./host/dispatch.js";
 // Agent Teams layer (teams-mode doctrine section + bundle/whitelist
 // orchestration; the clause text extracted from the cordis.patch.yml suffix).
 import { applyTeams } from "./host/teams.js";
+// PTC direct-call guard (final-say transport rule for PTC-executor scopes).
+import { applyPtcGuard } from "./host/ptc-guard.js";
 // Subagent model-visibility layer (post-execute `model:` annotation).
 import { applySubagentModel } from "./host/subagent-model.js";
 
@@ -197,7 +206,8 @@ function loadSkillCandidates(root, warn) {
 /** Register the bundled dsh-switchman skill provider on `ctx.skills` and
  *  mount the language (lang), dispatch (dispatch), teams (teams), watermark
  *  (context-watch), vision (vision), intent routing (intent), subagent model
- *  visibility (subagent-model), and client-bridge (routes) layers. */
+ *  visibility (subagent-model), client-bridge (routes), and the PTC
+ *  direct-call guard (ptc-guard) layers. */
 function apply(ctx, config) {
 	const root = fileURLToPath(new URL("./skills/", import.meta.url));
 	const warn = (message) => ctx.logger.warn(`dsh-switchman: ${message}`);
@@ -214,6 +224,7 @@ function apply(ctx, config) {
 	applyLanguage(ctx, config);
 	applyDispatch(ctx, config);
 	applyTeams(ctx, config);
+	applyPtcGuard(ctx);
 	applyContextWatch(ctx, config);
 	applyContextTrim(ctx, config);
 	applyVision(ctx, config);
