@@ -598,3 +598,19 @@ assert.match(
 	"the dock mapping must pass the overflow-risk fields through",
 );
 console.log("OK: intent layer (OFF-resident adapter, 0.8 window floor, overflow-risk probe, 11-dict surface)");
+
+// Pool manual order: the one-click move-to-top control ships in all 11
+// dictionaries and is wired PoolCard -> onMoveTop -> movePoolRouteToTop.
+const poolTopKeys = CLIENT_SOURCE.match(/poolMoveTop:/gu) ?? [];
+assert.equal(poolTopKeys.length, 11, "all 11 dictionaries must define poolMoveTop");
+assert.match(
+	CLIENT_SOURCE,
+	/function movePoolRouteToTop\(field, index\) \{/u,
+	"movePoolRouteToTop must be defined in client.js",
+);
+assert.match(
+	CLIENT_SOURCE,
+	/onMoveTop: \(index\) => \{\n\s*movePoolRouteToTop\(field, index\);/u,
+	"the pool card must wire onMoveTop to movePoolRouteToTop",
+);
+console.log("OK: pool manual order (one-click move to top, 11-dict surface)");

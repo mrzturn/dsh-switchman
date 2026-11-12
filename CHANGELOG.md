@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 格式参照 Keep a Changelog;版本遵循语义化版本。
 
+## [Unreleased]
+
+### English
+
+#### Added
+
+- **Dispatch pools (manual order)**: new one-click ⤒ "Move to top" button moves a route straight to the first position.
+
+### 中文
+
+#### 新增
+
+- **派发池手动序**：新增「一键登顶」按钮（⤒），所选模型一步排到首位。
+
 ## [1.11.3] — 2026-11-12
 
 ### English

@@ -845,6 +845,7 @@ window.__ModuleLoader__.load({
 					'开启后按列表顺序派发（首个即首选）；未开启按能力排序自动排。',
 				poolManualSelected: '已选 · 派发优先序',
 				poolManualAddable: '可添加',
+				poolMoveTop: '登顶',
 				poolMoveUp: '上移',
 				poolMoveDown: '下移',
 				poolRemoveOne: '移除',
@@ -1113,6 +1114,7 @@ window.__ModuleLoader__.load({
 					'When on, dispatch follows the listed order (head = first choice); when off, lanes are ordered by capability automatically.',
 				poolManualSelected: 'Selected · dispatch priority',
 				poolManualAddable: 'Add models',
+				poolMoveTop: 'Move to top',
 				poolMoveUp: 'Move up',
 				poolMoveDown: 'Move down',
 				poolRemoveOne: 'Remove',
@@ -1397,6 +1399,7 @@ window.__ModuleLoader__.load({
 				poolManualHelp: '開啟後按清單順序派發（首個即首選）；未開啟按能力排序自動排。',
 				poolManualSelected: '已選 · 派發優先序',
 				poolManualAddable: '可新增',
+				poolMoveTop: '登頂',
 				poolMoveUp: '上移',
 				poolMoveDown: '下移',
 				poolRemoveOne: '移除',
@@ -1644,6 +1647,7 @@ window.__ModuleLoader__.load({
 				poolManualHelp: 'オンにするとリストの順序でディスパッチします（先頭＝第一候補）。オフなら能力順で自動的に並びます。',
 				poolManualSelected: '選択済み · ディスパッチ優先順',
 				poolManualAddable: 'モデルを追加',
+				poolMoveTop: '先頭へ',
 				poolMoveUp: '上へ',
 				poolMoveDown: '下へ',
 				poolRemoveOne: '削除',
@@ -1875,6 +1879,7 @@ window.__ModuleLoader__.load({
 				poolManualHelp: '켜면 목록 순서대로 디스패치합니다(맨 앞이 제1순위). 끄면 능력 순으로 자동 정렬됩니다.',
 				poolManualSelected: '선택됨 · 디스패치 우선순위',
 				poolManualAddable: '모델 추가',
+				poolMoveTop: '맨 위로',
 				poolMoveUp: '위로',
 				poolMoveDown: '아래로',
 				poolRemoveOne: '제거',
@@ -2105,6 +2110,7 @@ window.__ModuleLoader__.load({
 				poolManualHelp: 'Ein: Der Versand folgt der gelisteten Reihenfolge (oben = erste Wahl); aus: Lanes werden automatisch nach Fähigkeit sortiert.',
 				poolManualSelected: 'Ausgewählt · Dispatch-Priorität',
 				poolManualAddable: 'Modelle hinzufügen',
+				poolMoveTop: 'Ganz nach oben',
 				poolMoveUp: 'Nach oben',
 				poolMoveDown: 'Nach unten',
 				poolRemoveOne: 'Entfernen',
@@ -2338,6 +2344,7 @@ window.__ModuleLoader__.load({
 				poolManualHelp: 'Activado, el despacho sigue el orden de la lista (el primero es la primera opción); desactivado, los carriles se ordenan automáticamente por capacidad.',
 				poolManualSelected: 'Seleccionados · prioridad de despacho',
 				poolManualAddable: 'Añadir modelos',
+				poolMoveTop: 'Mover al principio',
 				poolMoveUp: 'Subir',
 				poolMoveDown: 'Bajar',
 				poolRemoveOne: 'Quitar',
@@ -2572,6 +2579,7 @@ window.__ModuleLoader__.load({
 				poolManualHelp: 'Activé, le dispatch suit l’ordre affiché (la tête = premier choix) ; désactivé, les couloirs sont ordonnés par capacité automatiquement.',
 				poolManualSelected: 'Sélectionnés · priorité de dispatch',
 				poolManualAddable: 'Ajouter des modèles',
+				poolMoveTop: 'Placer en tête',
 				poolMoveUp: 'Monter',
 				poolMoveDown: 'Descendre',
 				poolRemoveOne: 'Retirer',
@@ -2806,6 +2814,7 @@ window.__ModuleLoader__.load({
 				poolManualHelp: 'Attivo, il dispatch segue l’ordine elencato (il primo della lista = prima scelta); spento, le corsie vengono ordinate per capacità automaticamente.',
 				poolManualSelected: 'Selezionati · priorità di dispatch',
 				poolManualAddable: 'Aggiungi modelli',
+				poolMoveTop: 'Porta in cima',
 				poolMoveUp: 'Sposta su',
 				poolMoveDown: 'Sposta giù',
 				poolRemoveOne: 'Rimuovi',
@@ -3040,6 +3049,7 @@ window.__ModuleLoader__.load({
 				poolManualHelp: 'Ligado, o despacho segue a ordem listada (o primeiro = primeira escolha); desligado, as faixas são ordenadas por capacidade automaticamente.',
 				poolManualSelected: 'Selecionados · prioridade de despacho',
 				poolManualAddable: 'Adicionar modelos',
+				poolMoveTop: 'Mover para o topo',
 				poolMoveUp: 'Mover para cima',
 				poolMoveDown: 'Mover para baixo',
 				poolRemoveOne: 'Remover',
@@ -3274,6 +3284,7 @@ window.__ModuleLoader__.load({
 				poolManualHelp: 'Включено — диспетчеризация идёт по списку (голова списка = первый выбор); выключено — полосы упорядочиваются по силе автоматически.',
 				poolManualSelected: 'Выбрано · приоритет диспетчеризации',
 				poolManualAddable: 'Добавить модели',
+				poolMoveTop: 'В начало',
 				poolMoveUp: 'Выше',
 				poolMoveDown: 'Ниже',
 				poolRemoveOne: 'Убрать',
@@ -4613,6 +4624,7 @@ window.__ModuleLoader__.load({
 			onToggleManual,
 			onSetEffort,
 			onMove,
+			onMoveTop,
 			onRemove,
 			onSelectAll,
 			onClear,
@@ -4774,6 +4786,20 @@ window.__ModuleLoader__.load({
 											h(
 												'div',
 												{ style: STYLE.rankActions },
+												h(
+													'button',
+													{
+														type: 'button',
+														onClick: () => {
+															onMoveTop(index);
+														},
+														disabled: !editable || index === 0,
+														title: t('poolMoveTop'),
+														'aria-label': t('poolMoveTop'),
+														style: STYLE.iconButton,
+													},
+													'⤒',
+												),
 												h(
 													'button',
 													{
@@ -5262,6 +5288,18 @@ window.__ModuleLoader__.load({
 				if (target < 0 || target >= pool.length) return;
 				const next = [...pool];
 				[next[index], next[target]] = [next[target], next[index]];
+				edit(field, next.map((route) => ({
+					provider: route.provider,
+					model: route.model,
+				})));
+			}
+
+			/** Manual order: move the route at index to the head of the
+			 *  pool in one step (boundary-guarded: a no-op when already first). */
+			function movePoolRouteToTop(field, index) {
+				const pool = values[field];
+				if (index <= 0 || index >= pool.length) return;
+				const next = [pool[index], ...pool.slice(0, index), ...pool.slice(index + 1)];
 				edit(field, next.map((route) => ({
 					provider: route.provider,
 					model: route.model,
@@ -6382,6 +6420,9 @@ window.__ModuleLoader__.load({
 								},
 								onMove: (index, delta) => {
 									movePoolRoute(field, index, delta);
+								},
+								onMoveTop: (index) => {
+									movePoolRouteToTop(field, index);
 								},
 								onRemove: (index) => {
 									removePoolRoute(field, index);
