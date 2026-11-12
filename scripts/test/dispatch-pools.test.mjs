@@ -76,6 +76,12 @@ test("teams section keeps the child_message channel rule for subagent ids", () =
 	assert.match(TEAMS_SECTION_TEXT, /不要据此重派或判定死亡/);
 });
 
+test("teams section keeps the run_code parallel-isolation rule", () => {
+	assert.match(TEAMS_SECTION_TEXT, /run_code 并行隔离/);
+	assert.match(TEAMS_SECTION_TEXT, /不要与文件\/搜索工具放进同一 run_code 程序里 Promise\.all 并行/);
+	assert.match(TEAMS_SECTION_TEXT, /下一步原样重试即可/);
+});
+
 test("persona suffix in cordis.patch.yml keeps the implicit-downgrade doctrine", () => {
 	const yml = readFileSync(join(ROOT, "cordis.patch.yml"), "utf8");
 	assert.ok(yml.includes("IMPLICIT-DOWNGRADED"), "suffix must require the declared downgrade");
