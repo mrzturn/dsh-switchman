@@ -7,6 +7,13 @@
  * The PTC executor's own `PTC_ONLY` section (order 800) states the rule once
  * near the top, but every later doctrine that names tools directly erodes it.
  *
+ * Second symptom (same day, session 22ced69f): the model sets `sandbox_permissions`
+ * on a call while the session already runs `danger-full-access`; the escalation
+ * request is rejected outright with `sandbox escalation to "workspace-write" is
+ * not strictly wider than this call's current "danger-full-access" mode` — an
+ * error with no correction hint. The clause below also states the never-set
+ * default and the retry-without-the-field fix.
+ *
  * Fix: one extra dynamic systemPrompt section (order 10510 — AFTER every
  * other dsh-switchman section: teams 10250, lang 10300, dispatch 10400,
  * context-trim 10450, context-watch 10500) that re-states the transport rule
@@ -82,6 +89,7 @@ function renderPtcGuard() {
 		`- Every other tool MUST be invoked as an awaited SDK function inside a ${RUN_CODE_NAME} program: \`await tools.name(args)\` — e.g. \`await tools.skill({ name: "git-commit-message" })\` or \`await tools.spawn_teammate({ ... })\`.`,
 		`- A direct call fails with: unknown tool "x": only \`${RUN_CODE_NAME}\` is callable directly — call \`x\` from inside a \`${RUN_CODE_NAME}\` program instead. Never retry the direct form; wrap the call.`,
 		`- Wherever this prompt says "call the X tool" (skill catalog, doctrines, per-turn reminders), read it as "call X inside a ${RUN_CODE_NAME} program". Batch independent calls as parallel awaits inside ONE program.`,
+		`- Never set \`sandbox_permissions\` on any call, direct or SDK: it is a privilege-escalation request and fails with "not strictly wider than this call's current ... mode" whenever the session already runs at least that access level — retry without the field.`,
 	].join("\n");
 }
 
