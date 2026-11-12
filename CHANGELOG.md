@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 格式参照 Keep a Changelog;版本遵循语义化版本。
 
-## [Unreleased]
+## [1.11.3] — 2026-11-12
 
 ### English
 
@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **PTC direct-call guard**: one final-say systemPrompt section (order 10510, after every other dsh-switchman section) rendered only when the viewing scope resolves to the PTC tool executor — detected per assembly via `ctx.tools.selectExecutor(context.scope)` plus the executor's `describe()` `knownNames: ["run_code"]` discrimination, with fail-open on any unusable probe — restating that `run_code` is the only directly callable tool and every named tool must be invoked as `await tools.name(args)` inside a `run_code` program, so doctrines and skill catalogs that name tools directly (teams delegation, bundled skills) are far less likely to trigger `unknown tool` rejections in PTC sessions (a prompt-level mitigation, not a hard guarantee). (`host/ptc-guard.js`)
 - **run_code parallel-isolation doctrine**: a new teams-section bullet advising that team-environment calls (`spawn_teammate` / `send_message`) be kept out of the same `run_code` program as file/search tools under `Promise.all` — a session-log postmortem found the only two `read` dispatches that ever failed with `UNKNOWN_TOOL` (out of fourteen) landed inside a teammate-creation orchestration window, with all other successes showing no such proximity — plus a self-recovery rule: when a previously working tool suddenly reports unknown, retry it verbatim on the next step instead of switching tools or abandoning the task. (`host/teams.js`)
+- **sandbox_permissions never-set rule**: the PTC guard section also pins that no tool call — direct or via the SDK — may carry a `sandbox_permissions` field: it is a privilege-escalation request and fails with "not strictly wider than this call's current access mode" whenever the session already runs at least that access level, so drop the field and retry instead of requesting an escalation. (`host/ptc-guard.js`)
 
 ### 中文
 
@@ -21,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **PTC 直调守卫**：新增一条「最后一句话」systemPrompt section（order 10510，晚于本插件所有其它 section），仅当会话作用域解析到 PTC 工具执行器时渲染——每次组装经 `ctx.tools.selectExecutor(context.scope)` 加执行器 `describe()` 的 `knownNames: ["run_code"]` 判别式按会话检测，探测不可用时一律 fail-open 渲染空串——重申 `run_code` 是唯一可直调工具、其余工具必须在 `run_code` 程序内以 `await tools.name(args)` 调用，使直接点名工具的规程与技能目录（teams 委派、内置技能）在 PTC 会话触发 `unknown tool` 报错的可能性大幅降低（提示词级缓解，非硬保证）。（`host/ptc-guard.js`）
 - **run_code 并行隔离条款**：teams 规程新增一条，建议 `spawn_teammate` / `send_message` 这类改变团队环境的调用不要与文件/搜索工具放进同一 `run_code` 程序里 `Promise.all` 并行——会话日志复盘发现全会话 14 次 `read` 派发中唯二报 `UNKNOWN_TOOL` 的两次恰落在队友创建编排窗口内、其余成功皆无此邻近——并给出自纠规则：此前可用的工具突然报 unknown 时，下一步原样重试即可，不要换工具名或放弃任务。（`host/teams.js`）
+- **sandbox_permissions 永不设置规则**：PTC 守卫同时钉死任何调用——直调或 SDK 内——都不得携带 `sandbox_permissions` 字段：它是特权提升请求，且当会话已运行在不低于该档位的访问级别时必报 "not strictly wider than this call's current access mode"，正确做法是去掉该字段重试而不是申请提权。（`host/ptc-guard.js`）
 
 ## [1.11.2] — 2026-11-12
 
