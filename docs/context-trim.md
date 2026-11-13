@@ -264,30 +264,39 @@ In `advisory` mode the session model is the fold driver, so the engine
 deliberately breaks the auto-mode silence rule there: when `max(view, wire)`
 reaches `trimAdvisoryPercent` (default `65`) of the effective window
 (`min(model window, trimWindowTokens || wmForceTokens)`), the engine appends a
-one-off `[SWITCHMAN:TRIM]` nudge AFTER the registered protocol head — the head
-itself stays byte-stable, so the cached prefix is unaffected. The nudge states
-the current pressure and the fold line ("At 83% (fold line 65%)") and asks for
-a same-turn `ctx_trim_fold`. Rules:
+one-off pinned `[SWITCHMAN:TRIM]` nudge as a `user/message` suffix at the live
+session-surface tail. It does not mutate the dispatch system head, so the
+registered protocol head stays byte-stable. The speak is a pure suffix; a later clear or upgrade prunes only the nudge nodes, so prompt-cache reuse survives up to the nudge. The nudge states the
+current pressure and fold line ("At 83% (fold line 65%)") and asks for a
+same-turn `ctx_trim_fold`. Rules:
 
 - Same-band throttle: one nudge per band (`high`/`critical`) per 10 minutes
-  (`ADVISORY_NUDGE_REPEAT_MS`, `index.js:286`); crossing into critical
-  (`trimAdvisoryCriticalPercent`, default `95`) re-speaks immediately.
-- Falling below the line closes the episode (one throttled `below-line` row);
-  the next crossing speaks again.
+  (`ADVISORY_NUDGE_REPEAT_MS`, `index.js:286`); any band change re-speaks
+  immediately, including escalation to critical (`trimAdvisoryCriticalPercent`,
+  default `95`) and a downgrade to high after a partial fold.
+- When pressure falls below the line, a tail sweep prunes every live nudge it
+can see — the recorded seq joined with a bounded last-50-node scan, so
+restarts and registry evictions cannot leave a stale nudge behind — logs one
+`below-line` row, and the next crossing starts a fresh episode.
+- Delivery requires a usable session surface and no open compaction lock. An
+  unavailable surface logs `skip why=surface-unavailable`.
+- Before replacing a nudge, the engine prunes its prior surface node; prunes
+touch only seqs still live on the surface (one point-sized `compaction/prune`
+event each), so a prior a fold already consumed is a no-op. Each speak
+carries a unique `trim_nudge_*` id. After a restart, it scans up to the last
+50 model-visible surface nodes for an orphaned nudge, prunes it, logs
+`advisory-nudge orphan-pruned seqs=…`, and speaks once with the current
+pressure and band. Failed prune or append operations log `skip why=prune-failed`
+or `skip why=append-failed` and can retry on a later dispatch.
 - `off` and `auto` modes never nudge. The lines are config fields
   (`config.js:273-277`); an inverted or out-of-range pair falls back to 65/95
   instead of silencing the nudge (`advisoryNudgeLines`, `index.js:291`).
-- Some hosts freeze the assembled request on EVERY dispatch (the current agent
-  loop deep-freezes its requests), not only during handover — there the nudge
-  can never attach (every attempt logs `skip why=frozen-dispatch`) and advisory
-  mode degrades to the `ctx_trim_fold`/`ctx_trim_status` tools alone. Where the
-  fold tools are not exposed to the session model either, `auto` mode's
-  engine-side folds are the only working automatic path; the handover
-  compaction remains the backstop.
 
 Every exit is visible in `decisions.log` (vocabulary below):
-`advisory-nudge pressure=… level=…`, `advisory-nudge skip why=…`, and
+`advisory-nudge pressure=… level=… seq=…`,
+`advisory-nudge skip why=…`, `advisory-nudge orphan-pruned seqs=…`, and
 `advisory-nudge below-line …`.
+
 ## decisions.log vocabulary
 
 One line per decision in `<trimStateDir>/decisions.log`: ISO timestamp followed
@@ -304,9 +313,9 @@ Operators diagnose from these rows:
 | ship skip | `surface-replace skipped reason=<…> via=<…> [block=<id>]` | deduplicated; reasons listed above |
 | guard | `side-dispatch skipped n=<n> msgs=<n> view=<n> blocks=<n>` | auxiliary llm call ignored |
 | epoch | `ledger-stale blocks=<n> view=<n> growth-baseline-reset` | host compaction aged the whole ledger out |
-| advisory nudge | `advisory-nudge pressure=<p>% mass=<n> window=<n> level=<high\|critical>` | one-off fold nudge appended to the dispatch system head (advisory mode only) |
-| advisory nudge skip | `advisory-nudge skip why=<no-captured-model\|bad-model-shape\|window-unknown\|frozen-dispatch> [pressure=<p>%]` | the nudge could not attach on this dispatch |
-| advisory nudge clear | `advisory-nudge below-line pressure=<p>% mass=<n> resolved=<n> cap=<n>` | pressure fell back below the line; the nudge episode closed |
+| advisory nudge | `advisory-nudge pressure=<p>% mass=<n> window=<n> level=<high\|critical> seq=<n>` | pinned fold nudge appended as a `user/message` suffix to the live session-surface tail (advisory mode only) |
+| advisory nudge skip | `advisory-nudge skip why=<no-captured-model\|bad-model-shape\|window-unknown\|surface-unavailable\|append-failed\|prune-failed> [pressure=<p>%]` | surface unavailable or a nudge append/prune failed, or the model/window was not ready |
+| advisory nudge clear | `advisory-nudge below-line pressure=<p>% mass=<n> resolved=<n> cap=<n> pruned=<n>` | pressure fell below the line; every live nudge the sweep found was pruned and the episode closed |
 | window resolve | `window-resolved key=<provider/model> window=<n>` | model window resolved, once per 10-min cache window, symmetric to `window-resolve-failed` |
 
 `reason=` values emitted by the trigger (`trigger.js`): `nothing-foldable`,

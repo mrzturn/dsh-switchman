@@ -1358,12 +1358,47 @@ test('summarizer: a terminal error finish surfaces the adapter failure detail in
 });
 
 describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
+	/** Minimal session surface used by the advisory nudge tests. */
+	function makeFakeSession(id, { surface = true } = {}) {
+		const session = {
+			id,
+			seq: 0,
+			events: [],
+			surface: { nodes: [] },
+			append(type, data, opts) {
+				const event = { type, data, seq: this.seq++, ...(opts === undefined ? {} : { opts }) };
+				this.events[event.seq] = event;
+				if (type === "user/message" && Array.isArray(this.surface?.nodes)) this.surface.nodes.push(event.seq);
+				if (type === "compaction/prune" && Array.isArray(this.surface?.nodes)) {
+					const shadowed = new Set(data?.shadowedSeqs ?? []);
+					this.surface.nodes = this.surface.nodes.filter((seq) => !shadowed.has(seq));
+				}
+				return event;
+			},
+			eventAt(seq) { return this.events[seq]; },
+		};
+		if (!surface) delete session.surface;
+		return session;
+	}
+
+	const nudgeSessionsByListener = new WeakMap();
+
 	/** Local mock ctx copy (the assembly factory above is describe-scoped). */
 	function nudgeCtx({ llmService = null } = {}) {
-		const hooks = {};
+		const sessions = new Map();
+		const hooks = new Proxy({}, {
+			set(target, key, value) {
+				target[key] = value;
+				if (key === "llm/stream" && typeof value === "function") nudgeSessionsByListener.set(value, sessions);
+				return true;
+			},
+		});
 		const ctx = {
 			log: { warn: () => {} },
-			agents: { currentInitiator: () => ({ session: { id: "" } }) },
+			agents: {
+				currentInitiator: () => ({ session: { id: "" } }),
+				get: (id) => sessions.get(id) ? { session: sessions.get(id) } : undefined,
+			},
 			systemPrompt: { section: () => {}, context: () => {} },
 			on: (event, handler) => { hooks[event] = handler; },
 			tools: { register: () => {} },
@@ -1372,8 +1407,11 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 				if (deps.includes("llm")) body({ on: (event, fn) => { hooks[event] = fn; }, off: () => {}, effect: () => {} });
 			},
 		};
-		return { ctx, hooks };
+		return { ctx, hooks, sessions };
 	}
+
+
+
 
 	const HEAD_TEXT = "You are a helpful assistant.";
 	function nudgeConfig() {
@@ -1394,6 +1432,8 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		return [{ role: "system", content: [{ type: "text", text: HEAD_TEXT }] }, ...makeMessages(20)];
 	}
 	async function dispatch(listener, sessionId, usageInput) {
+		const sessions = nudgeSessionsByListener.get(listener);
+		if (sessions && !sessions.has(sessionId)) sessions.set(sessionId, makeFakeSession(sessionId));
 		const request = { sessionId, messages: dispatchMessages(), provider: "p", model: "m" };
 		async function* innerStream() {
 			yield { type: "finish", usage: { input_tokens: usageInput } };
@@ -1402,12 +1442,30 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		for await (const chunk of result) void chunk;
 		return request;
 	}
+
+	function liveNudges(session) {
+		if (!Array.isArray(session?.surface?.nodes)) return [];
+		return session.surface.nodes.map((seq) => session.eventAt(seq)).filter((event) => {
+			const message = event?.data;
+			const text = Array.isArray(message?.content) ? message.content.map((part) => part?.text ?? "").join("") : String(message?.content ?? "");
+			return event?.type === "user/message" && ((typeof message?.id === "string" && message.id.startsWith("trim_nudge_")) || text.startsWith("[SWITCHMAN:TRIM] Advisory nudge"));
+		});
+	}
+
+	function liveNudgeTexts(session) {
+		return liveNudges(session).map((event) => event.data.content?.[0]?.text ?? "");
+	}
+
+	function pruneEvents(session) {
+		return session?.events?.filter((event) => event?.type === "compaction/prune") ?? [];
+	}
 	const nudgeRows = (cfg) => readFileSync(join(cfg.trimStateDir, "decisions.log"), "utf8").split("\n").filter((line) => line.includes("advisory-nudge pressure="));
 
 	test("advisoryNudgeText: pure, tiered, actionable wording", () => {
 		assert.equal(advisoryNudgeText(83, false), advisoryNudgeText(83, false));
 		const high = advisoryNudgeText(83, false);
 		assert.match(high, /\[SWITCHMAN:TRIM\] Advisory nudge/u);
+		assert.match(high, /pinned to the session tail until pressure falls below the fold line/u);
 		assert.match(high, /At 83% \(fold line 65%\)/u);
 		assert.match(high, /ctx_trim_status/u);
 		assert.match(high, /ctx_trim_fold/u);
@@ -1418,97 +1476,113 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		assert.notEqual(advisoryNudgeText(84, false), high, "different pressures render differently");
 	});
 
-	test("nudges once at the fold line on the wire system head, then stays quiet in-band", async () => {
-		const { ctx, hooks } = nudgeCtx();
+	test("nudges once at the fold line on the surface tail, then stays quiet in-band", async () => {
+		const { ctx, hooks, sessions } = nudgeCtx();
 		const cfg = nudgeConfig();
 		const handle = applyContextTrim(ctx, cfg);
 		const listener = hooks["llm/stream"];
 		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const sid = "sess-nudge-high";
 		try {
-			// d1 primes capture + wire (90k of the 100k window); nothing below the line.
-			const request1 = await dispatch(listener, "sess-nudge-high", 90_000);
+			const request1 = await dispatch(listener, sid, 90_000);
+			const session = sessions.get(sid);
+			assert.equal(liveNudges(session).length, 0, "first dispatch only primes wire usage");
 			assert.equal(request1.messages[0].content[0].text, HEAD_TEXT);
-			// d2 crosses the line: the head is swapped for a COPY carrying the nudge.
-			const request2 = await dispatch(listener, "sess-nudge-high", 90_000);
-			assert.match(request2.messages[0].content[0].text, /\[SWITCHMAN:TRIM\] Advisory nudge/u);
-			assert.match(request2.messages[0].content[0].text, /At 90% \(fold line 65%\)/u);
-			assert.ok(request2.messages[0].content[0].text.startsWith(HEAD_TEXT), "the nudge rides after the original head text");
+			const request2 = await dispatch(listener, sid, 90_000);
+			const nudges = liveNudges(session);
+			assert.equal(nudges.length, 1, "one surface-tail nudge is live");
+			assert.match(liveNudgeTexts(session)[0], /At 90% \(fold line 65%\)/u);
+			assert.match(nudges[0].data.id, /^trim_nudge_/u);
+			assert.deepEqual(nudges[0].data.source, { kind: "user" });
+			assert.equal(request2.messages[0].content[0].text, HEAD_TEXT, "the dispatch head remains untouched");
 			assert.match(nudgeRows(cfg).join("\n"), /session=sess-nudge-high advisory-nudge pressure=90% mass=90000 window=100000 level=high/u);
-			// d3 same band inside the repeat window: quiet.
-			await dispatch(listener, "sess-nudge-high", 91_000);
-			assert.equal(nudgeRows(cfg).length, 1, "same-band repeats inside the window stay quiet");
-			// The original d1 head object was never mutated.
-			assert.equal(request1.messages[0].content[0].text, HEAD_TEXT);
+			const nodeCount = session.surface.nodes.length;
+			await dispatch(listener, sid, 91_000);
+			assert.equal(liveNudges(session).length, 1, "same-band repeats inside the window stay quiet");
+			assert.equal(session.surface.nodes.length, nodeCount, "a quiet dispatch appends no surface node");
+			assert.equal(nudgeRows(cfg).length, 1);
+			assert.equal(request1.messages[0].content[0].text, HEAD_TEXT, "the original dispatch head is unchanged");
 		} finally {
 			rmSync(cfg.trimStateDir, { recursive: true, force: true });
 		}
 	});
 
-	test("escalation re-nudges immediately; dropping below clears the episode", async () => {
-		const { ctx, hooks } = nudgeCtx();
+	test("escalation re-nudges immediately; dropping below prunes the episode", async () => {
+		const { ctx, hooks, sessions } = nudgeCtx();
 		const cfg = nudgeConfig();
 		const handle = applyContextTrim(ctx, cfg);
 		const listener = hooks["llm/stream"];
 		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
 		const sid = "sess-nudge-escalate";
 		try {
-			await dispatch(listener, sid, 85_000); // prime; wire 85%
-			const r2 = await dispatch(listener, sid, 90_000); // 85% -> HIGH nudge
-			assert.match(r2.messages[0].content[0].text, /Advisory nudge/u);
-			await dispatch(listener, sid, 96_000); // 90% in-band -> quiet (repeat window)
-			const r4 = await dispatch(listener, sid, 30_000); // 96% -> CRITICAL re-nudge, no repeat wait
-			assert.match(r4.messages[0].content[0].text, /CRITICAL/u);
-			assert.match(r4.messages[0].content[0].text, /96% ≥ 95%/u);
-			await dispatch(listener, sid, 10_000); // 30% below the line -> episode cleared
-			const r6 = await dispatch(listener, sid, 85_000); // still 30% wire -> quiet
+			await dispatch(listener, sid, 85_000);
+			const session = sessions.get(sid);
+			await dispatch(listener, sid, 90_000);
+			assert.equal(liveNudges(session).length, 1);
+			const highSeq = liveNudges(session)[0].seq;
+			const highId = liveNudges(session)[0].data.id;
+			await dispatch(listener, sid, 96_000);
+			const r4 = await dispatch(listener, sid, 30_000);
+			assert.equal(liveNudges(session).length, 1, "upgrade replaces rather than duplicates the prior nudge");
+			assert.match(liveNudgeTexts(session)[0], /CRITICAL/u);
+			assert.match(liveNudgeTexts(session)[0], /96% ≥ 95%/u);
+			assert.notEqual(liveNudges(session)[0].data.id, highId, "each speak carries a unique nudge id");
+			assert.deepEqual(pruneEvents(session)[0].data.shadowedSeqs, [highSeq]);
+			await dispatch(listener, sid, 10_000);
+			assert.equal(liveNudges(session).length, 0, "below-line pressure prunes the pinned nudge");
+			assert.equal(pruneEvents(session).length, 2, "upgrade and clear each append a prune event");
+			const r6 = await dispatch(listener, sid, 85_000);
 			assert.equal(r6.messages[0].content[0].text, HEAD_TEXT);
-			const r7 = await dispatch(listener, sid, 1_000); // 85% again -> fresh episode nudges
-			assert.match(r7.messages[0].content[0].text, /Advisory nudge/u);
+			await dispatch(listener, sid, 1_000);
+			assert.equal(liveNudges(session).length, 1, "a new crossing after clear starts a fresh episode");
 			const levels = nudgeRows(cfg).map((line) => (line.includes("level=critical") ? "C" : "H"));
 			assert.deepEqual(levels, ["H", "C", "H"]);
+			assert.equal(r4.messages[0].content[0].text, HEAD_TEXT);
 		} finally {
 			rmSync(cfg.trimStateDir, { recursive: true, force: true });
 		}
 	});
 
-	test("custom advisory lines ride the config: speak and escalate at the configured percents", async () => {
-		const { ctx, hooks } = nudgeCtx();
+	test("custom advisory lines speak and escalate at the configured percents", async () => {
+		const { ctx, hooks, sessions } = nudgeCtx();
 		const cfg = { ...nudgeConfig(), trimAdvisoryPercent: 50, trimAdvisoryCriticalPercent: 70 };
 		const handle = applyContextTrim(ctx, cfg);
 		const listener = hooks["llm/stream"];
 		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
 		const sid = "sess-nudge-custom";
 		try {
-			await dispatch(listener, sid, 40_000); // prime; the NEXT dispatch evaluates 40% — below the custom line
-			const r2 = await dispatch(listener, sid, 55_000); // sees 40%: quiet; plants the 55% wire
-			assert.equal(r2.messages[0].content[0].text, HEAD_TEXT);
-			const r3 = await dispatch(listener, sid, 55_000); // sees 55% >= 50% -> speaks with the custom line
-			assert.match(r3.messages[0].content[0].text, /At 55% \(fold line 50%\)/u);
-			assert.match(r3.messages[0].content[0].text, /50–59%/u);
-			const r4 = await dispatch(listener, sid, 75_000); // sees 55%: same band inside the repeat window -> quiet
-			assert.equal(r4.messages[0].content[0].text, HEAD_TEXT);
-			const r5 = await dispatch(listener, sid, 75_000); // sees 75% >= 70% -> critical, no repeat wait
-			assert.match(r5.messages[0].content[0].text, /CRITICAL \(75% ≥ 70%\)/u);
-			const levels = nudgeRows(cfg).map((line) => (line.includes("level=critical") ? "C" : "H"));
-			assert.deepEqual(levels, ["H", "C"]);
+			await dispatch(listener, sid, 40_000);
+			const session = sessions.get(sid);
+			await dispatch(listener, sid, 55_000);
+			assert.equal(liveNudges(session).length, 0);
+			await dispatch(listener, sid, 55_000);
+			assert.match(liveNudgeTexts(session)[0], /At 55% \(fold line 50%\)/u);
+			assert.match(liveNudgeTexts(session)[0], /50–59%/u);
+			await dispatch(listener, sid, 75_000);
+			assert.equal(liveNudges(session).length, 1, "same-band dispatch does not duplicate the nudge");
+			await dispatch(listener, sid, 75_000);
+			assert.equal(liveNudges(session).length, 1);
+			assert.match(liveNudgeTexts(session)[0], /CRITICAL \(75% ≥ 70%\)/u);
+			assert.deepEqual(nudgeRows(cfg).map((line) => (line.includes("level=critical") ? "C" : "H")), ["H", "C"]);
 		} finally {
 			rmSync(cfg.trimStateDir, { recursive: true, force: true });
 		}
 	});
 
 	test("an inverted advisory pair falls back to the protocol defaults", async () => {
-		const { ctx, hooks } = nudgeCtx();
+		const { ctx, hooks, sessions } = nudgeCtx();
 		const cfg = { ...nudgeConfig(), trimAdvisoryPercent: 90, trimAdvisoryCriticalPercent: 80 };
 		const handle = applyContextTrim(ctx, cfg);
 		const listener = hooks["llm/stream"];
 		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
 		const sid = "sess-nudge-inverted";
 		try {
-			await dispatch(listener, sid, 50_000); // prime; the NEXT dispatch evaluates 50% — below the default line
-			const r2 = await dispatch(listener, sid, 85_000); // sees 50%: quiet; plants the 85% wire
-			assert.equal(r2.messages[0].content[0].text, HEAD_TEXT);
-			const r3 = await dispatch(listener, sid, 85_000); // sees 85% >= default 65% -> speaks with the DEFAULT line
-			assert.match(r3.messages[0].content[0].text, /At 85% \(fold line 65%\)/u);
+			await dispatch(listener, sid, 50_000);
+			const session = sessions.get(sid);
+			await dispatch(listener, sid, 85_000);
+			assert.equal(liveNudges(session).length, 0);
+			await dispatch(listener, sid, 85_000);
+			assert.match(liveNudgeTexts(session)[0], /At 85% \(fold line 65%\)/u);
 		} finally {
 			rmSync(cfg.trimStateDir, { recursive: true, force: true });
 		}
@@ -1516,15 +1590,17 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 
 	test("auto and off modes never nudge, even far past the line", async () => {
 		for (const mode of ["auto", "off"]) {
-			const { ctx, hooks } = nudgeCtx();
+			const { ctx, hooks, sessions } = nudgeCtx();
 			const cfg = { ...nudgeConfig(), trimMode: mode };
 			const handle = applyContextTrim(ctx, cfg);
 			const listener = hooks["llm/stream"];
 			handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+			const sid = "sess-nudge-muted-" + mode;
 			try {
-				await dispatch(listener, "sess-nudge-muted-" + mode, 97_000);
-				const request2 = await dispatch(listener, "sess-nudge-muted-" + mode, 1_000);
-				assert.equal(request2.messages[0].content[0].text, HEAD_TEXT, mode + " must stay silent at 97%");
+				await dispatch(listener, sid, 97_000);
+				const request2 = await dispatch(listener, sid, 1_000);
+				assert.equal(liveNudges(sessions.get(sid)).length, 0, mode + " must stay silent at 97%");
+				assert.equal(request2.messages[0].content[0].text, HEAD_TEXT);
 			} finally {
 				rmSync(cfg.trimStateDir, { recursive: true, force: true });
 			}
@@ -1533,15 +1609,17 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 
 	test("cache miss defers the nudge: async warm-up lands it on a later dispatch", async () => {
 		const resolves = [];
-		const { ctx, hooks } = nudgeCtx({ llmService: { resolveModelInfo: async (...args) => { resolves.push(args); return { context: { contextWindow: 100_000 } }; } } });
+		const { ctx, hooks, sessions } = nudgeCtx({ llmService: { resolveModelInfo: async (...args) => { resolves.push(args); return { context: { contextWindow: 100_000 } }; } } });
 		const cfg = nudgeConfig();
 		const handle = applyContextTrim(ctx, cfg);
 		const listener = hooks["llm/stream"];
 		const sid = "sess-nudge-warm";
 		try {
-			await dispatch(listener, sid, 90_000); // prime capture + wire; window unknown -> deferred
-			const r2 = await dispatch(listener, sid, 90_000); // d2: cache miss again? no — d1's warm-up already filled it
-			assert.match(r2.messages[0].content[0].text, /Advisory nudge/u, "d1's async warm-up lands the nudge on the very next dispatch");
+			await dispatch(listener, sid, 90_000);
+			await dispatch(listener, sid, 90_000);
+			const session = sessions.get(sid);
+			assert.equal(liveNudges(session).length, 1, "d1's async warm-up lands the nudge on the very next dispatch");
+			assert.match(liveNudgeTexts(session)[0], /Advisory nudge/u);
 			assert.equal(resolves.length, 1, "the miss fired exactly one warm-up resolve");
 			assert.deepEqual(resolves[0], ["p", "m"], "warm-up uses the two-string host contract");
 			assert.ok(handle.windowCache.get("p/m")?.windowTokens === 100_000, "warm-up filled the sync cache");
@@ -1550,27 +1628,124 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		}
 	});
 
-	test("frozen messages fall back to the reference swap; shared head is never mutated", async () => {
-		const { ctx, hooks } = nudgeCtx();
+	test("surface-unavailable hosts skip the nudge without changing dispatch messages", async () => {
+		const { ctx, hooks, sessions } = nudgeCtx();
 		const cfg = nudgeConfig();
 		const handle = applyContextTrim(ctx, cfg);
 		const listener = hooks["llm/stream"];
 		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
-		const sid = "sess-nudge-frozen";
+		const sid = "sess-nudge-no-surface";
+		const session = makeFakeSession(sid, { surface: false });
+		sessions.set(sid, session);
 		try {
 			await dispatch(listener, sid, 90_000);
-			const messages = Object.freeze(dispatchMessages());
-			const headBefore = messages[0];
-			const request = { sessionId: sid, messages, provider: "p", model: "m" };
-			async function* innerStream() {
-				yield { type: "finish", usage: { input_tokens: 1_000 } };
-			}
-			const result = listener(request, () => innerStream());
-			for await (const chunk of result) void chunk;
-			assert.notEqual(request.messages, messages, "frozen array is swapped by reference");
-			assert.match(request.messages[0].content[0].text, /Advisory nudge/u);
-			assert.equal(headBefore.content[0].text, HEAD_TEXT, "the shared head object is untouched");
-			assert.equal(messages[0], headBefore, "the frozen array still holds the original head");
+			const request = await dispatch(listener, sid, 90_000);
+			assert.equal(request.messages[0].content[0].text, HEAD_TEXT);
+			assert.equal(session.events.length, 0);
+			assert.match(readFileSync(join(cfg.trimStateDir, "decisions.log"), "utf8"), /advisory-nudge skip why=surface-unavailable pressure=90%/u);
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
+
+	test("open compaction locks make the nudge channel unavailable", async () => {
+		const { ctx, hooks, sessions } = nudgeCtx();
+		const cfg = nudgeConfig();
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const sid = "sess-nudge-locked";
+		const session = makeFakeSession(sid);
+		session.append("compaction/start", { compactionId: "open-lock" });
+		sessions.set(sid, session);
+		try {
+			await dispatch(listener, sid, 90_000);
+			await dispatch(listener, sid, 90_000);
+			assert.equal(liveNudges(session).length, 0);
+			assert.match(readFileSync(join(cfg.trimStateDir, "decisions.log"), "utf8"), /advisory-nudge skip why=surface-unavailable pressure=90%/u);
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
+
+	test("append failures retry on the next pressure check", async () => {
+		const { ctx, hooks, sessions } = nudgeCtx();
+		const cfg = nudgeConfig();
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const sid = "sess-nudge-append-retry";
+		try {
+			await dispatch(listener, sid, 90_000);
+			const session = sessions.get(sid);
+			const append = session.append.bind(session);
+			let fail = true;
+			session.append = function (type, data, opts) {
+				if (fail && type === "user/message") { fail = false; throw new Error("append unavailable"); }
+				return append(type, data, opts);
+			};
+			await dispatch(listener, sid, 90_000);
+			assert.equal(handle.advisoryNudgeBySession.has(sid), false, "failed append does not leave throttle state");
+			assert.equal(liveNudges(session).length, 0);
+			assert.match(readFileSync(join(cfg.trimStateDir, "decisions.log"), "utf8"), /advisory-nudge skip why=append-failed/u);
+			await dispatch(listener, sid, 90_000);
+			assert.equal(liveNudges(session).length, 1, "the following dispatch retries successfully");
+			assert.ok(Number.isFinite(handle.advisoryNudgeBySession.get(sid)?.seq), "successful speak records the episode");
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
+
+	test("prune failures retain the episode and retry below the line", async () => {
+		const { ctx, hooks, sessions } = nudgeCtx();
+		const cfg = nudgeConfig();
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const sid = "sess-nudge-prune-retry";
+		try {
+			await dispatch(listener, sid, 90_000);
+			const session = sessions.get(sid);
+			await dispatch(listener, sid, 90_000);
+			const append = session.append.bind(session);
+			let fail = true;
+			session.append = function (type, data, opts) {
+				if (fail && type === "compaction/prune") { fail = false; throw new Error("prune unavailable"); }
+				return append(type, data, opts);
+			};
+			await dispatch(listener, sid, 10_000);
+			await dispatch(listener, sid, 10_000);
+			assert.equal(liveNudges(session).length, 1, "failed prune leaves the live nudge intact");
+			assert.equal(handle.advisoryNudgeBySession.has(sid), true, "failed prune retains episode state");
+			assert.match(readFileSync(join(cfg.trimStateDir, "decisions.log"), "utf8"), /advisory-nudge skip why=prune-failed/u);
+			await dispatch(listener, sid, 10_000);
+			assert.equal(liveNudges(session).length, 0, "the next below-line check clears the nudge");
+			assert.equal(handle.advisoryNudgeBySession.has(sid), false);
+			assert.match(readFileSync(join(cfg.trimStateDir, "decisions.log"), "utf8"), /advisory-nudge below-line .*pruned=1/u);
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
+
+	test("restart recovery prunes an orphaned nudge before speaking at current pressure", async () => {
+		const { ctx, hooks, sessions } = nudgeCtx();
+		const cfg = nudgeConfig();
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const sid = "sess-nudge-restart";
+		const session = makeFakeSession(sid);
+		const orphan = session.append("user/message", { id: "trim_nudge_" + sid, role: "user", content: [{ type: "text", text: "[SWITCHMAN:TRIM] Advisory nudge — previous process" }], source: { kind: "user" } });
+		sessions.set(sid, session);
+		try {
+			await dispatch(listener, sid, 90_000);
+			await dispatch(listener, sid, 90_000);
+			const live = liveNudges(session);
+			assert.equal(live.length, 1, "restart recovery leaves one fresh live nudge");
+			assert.notEqual(live[0].seq, orphan.seq);
+			assert.match(liveNudgeTexts(session)[0], /At 90% \(fold line 65%\)/u);
+			assert.deepEqual(pruneEvents(session)[0].data.shadowedSeqs, [orphan.seq]);
+			assert.equal(nudgeRows(cfg).length, 1);
 		} finally {
 			rmSync(cfg.trimStateDir, { recursive: true, force: true });
 		}
@@ -1597,23 +1772,122 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		let releaseResolve;
 		const resolves = [];
 		const gate = new Promise((resolve) => { releaseResolve = resolve; });
-		const { ctx, hooks } = nudgeCtx({ llmService: { resolveModelInfo: async (...args) => { resolves.push(args); await gate; return { context: { contextWindow: 100_000 } }; } } });
+		const { ctx, hooks, sessions } = nudgeCtx({ llmService: { resolveModelInfo: async (...args) => { resolves.push(args); await gate; return { context: { contextWindow: 100_000 } }; } } });
 		const cfg = nudgeConfig();
 		const handle = applyContextTrim(ctx, cfg);
 		const listener = hooks["llm/stream"];
 		const sid = "sess-nudge-flight";
 		try {
-			await dispatch(listener, sid, 90_000); // d1: miss -> warm-up starts, pending on the gate
-			await dispatch(listener, sid, 90_000); // d2: still miss, single-flight window -> suppressed
-			await dispatch(listener, sid, 90_000); // d3: same
+			await dispatch(listener, sid, 90_000);
+			await dispatch(listener, sid, 90_000);
+			await dispatch(listener, sid, 90_000);
 			assert.equal(resolves.length, 1, "a pending warm-up suppresses duplicate resolves");
 			releaseResolve();
 			for (let i = 0; i < 20 && !handle.windowCache.has("p/m"); i++) await new Promise((resolve) => setImmediate(resolve));
-			const request4 = await dispatch(listener, sid, 1_000);
-			assert.match(request4.messages[0].content[0].text, /Advisory nudge/u, "the deferred nudge lands once the gate opens");
+			await dispatch(listener, sid, 1_000);
+			const session = sessions.get(sid);
+			assert.equal(liveNudges(session).length, 1, "the deferred nudge lands once the gate opens");
+			assert.match(liveNudgeTexts(session)[0], /Advisory nudge/u);
 			assert.equal(resolves.length, 1, "no further resolves after the settle");
 		} finally {
 			releaseResolve();
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
+
+	test("below-line sweep clears an orphaned nudge with no recorded episode", async () => {
+		const { ctx, hooks, sessions } = nudgeCtx();
+		const cfg = nudgeConfig();
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const sid = "sess-nudge-orphan-below";
+		try {
+			await dispatch(listener, sid, 90_000);
+			const session = sessions.get(sid);
+			await dispatch(listener, sid, 90_000);
+			assert.equal(liveNudges(session).length, 1);
+			await dispatch(listener, sid, 10_000); // pressure lags one dispatch: wire is still above the line
+			handle.advisoryNudgeBySession.clear(); // simulate an LRU eviction / process restart
+			await dispatch(listener, sid, 10_000);
+			assert.equal(liveNudges(session).length, 0, "the sweep clears the orphan without an episode");
+			assert.equal(pruneEvents(session).length, 1);
+			assert.match(readFileSync(join(cfg.trimStateDir, "decisions.log"), "utf8"), /advisory-nudge below-line .*pruned=1/u);
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
+	test("a recorded seq outside the scan window is still cleared below the line", async () => {
+		const { ctx, hooks, sessions } = nudgeCtx();
+		const cfg = nudgeConfig();
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const sid = "sess-nudge-out-of-window";
+		try {
+			await dispatch(listener, sid, 90_000);
+			const session = sessions.get(sid);
+			await dispatch(listener, sid, 90_000);
+			for (let i = 0; i < 60; i++) session.append("user/message", { role: "user", content: [{ type: "text", text: "filler " + i }], source: { kind: "user" } });
+			assert.equal(liveNudges(session).length, 1, "the nudge is live but outside the 50-node tail window");
+			await dispatch(listener, sid, 10_000); // above-line wire: in-band quiet
+			await dispatch(listener, sid, 10_000); // below-line wire: the union reaches the recorded seq
+			assert.equal(liveNudges(session).length, 0, "the out-of-window nudge was pruned via the recorded seq");
+			assert.equal(pruneEvents(session).length, 1);
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
+	test("an already-consumed prior seq is skipped, not re-shadowed", async () => {
+		const { ctx, hooks, sessions } = nudgeCtx();
+		const cfg = nudgeConfig();
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const sid = "sess-nudge-consumed";
+		try {
+			await dispatch(listener, sid, 90_000);
+			const session = sessions.get(sid);
+			await dispatch(listener, sid, 90_000);
+			const nudgeSeq = liveNudges(session)[0].seq;
+			session.surface.nodes = session.surface.nodes.filter((seq) => seq !== nudgeSeq); // a fold consumed the nudge
+			await dispatch(listener, sid, 96_000); // prime the critical-band wire (pressure lags one dispatch)
+			await dispatch(listener, sid, 96_000); // band change: the replace path runs on a vanished prior
+			assert.equal(liveNudges(session).length, 1);
+			assert.match(liveNudgeTexts(session)[0], /CRITICAL/u);
+			assert.equal(pruneEvents(session).length, 0, "the vanished seq was not re-shadowed");
+			await dispatch(listener, sid, 10_000); // below-line wire prime (critical band stays quiet in-band)
+			await dispatch(listener, sid, 10_000);
+			assert.equal(liveNudges(session).length, 0);
+			assert.equal(pruneEvents(session).length, 1, "the below-line sweep prunes exactly the live nudge");
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
+	test("clearing multiple live nudges prunes each seq with a point range", async () => {
+		const { ctx, hooks, sessions } = nudgeCtx();
+		const cfg = nudgeConfig();
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const sid = "sess-nudge-multi";
+		try {
+			await dispatch(listener, sid, 90_000);
+			const session = sessions.get(sid);
+			await dispatch(listener, sid, 90_000);
+			session.append("user/message", { id: "trim_nudge_manual", role: "user", content: [{ type: "text", text: "[SWITCHMAN:TRIM] Advisory nudge — stale duplicate" }], source: { kind: "user" } });
+			assert.equal(liveNudges(session).length, 2);
+			await dispatch(listener, sid, 10_000); // above-line wire: in-band quiet
+			await dispatch(listener, sid, 10_000); // below-line wire: sweep prunes both
+			assert.equal(liveNudges(session).length, 0);
+			const prunes = pruneEvents(session);
+			assert.equal(prunes.length, 2, "one point-range prune event per live seq");
+			for (const event of prunes) {
+				assert.equal(event.data.shadowedRange.start, event.data.shadowedRange.end, "point range only");
+				assert.equal(event.data.shadowedSeqs.length, 1);
+				assert.equal(event.data.shadowedTokenCount, 1);
+			}
+		} finally {
 			rmSync(cfg.trimStateDir, { recursive: true, force: true });
 		}
 	});

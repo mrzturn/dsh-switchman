@@ -545,6 +545,114 @@ export function createSurfaceFoldPass(deps = {}) {
 		}
 	}
 
+	function nudgeTextOf(message) {
+		try {
+			const content = message?.content;
+			if (typeof content === "string") return content;
+			if (!Array.isArray(content)) return "";
+			return content.map((part) => typeof part?.text === "string" ? part.text : "").join("");
+		} catch {
+			return "";
+		}
+	}
+	let nudgeCounter = 0; // unique suffix per speak: colliding explicit ids would collide in ref resolution
+	function nudgeMessage(sessionId, text) {
+		const token = String(sessionId ?? "").replace(/[^A-Za-z0-9_-]/gu, "_").slice(0, 128) || "session";
+		return {
+			id: "trim_nudge_" + token + "_" + (++nudgeCounter),
+			role: "user",
+			content: [{ type: "text", text: String(text ?? "") }],
+			source: { kind: "user" },
+		};
+	}
+	/** Surface nudge availability excludes sessions with an open compaction pair. */
+	function nudgeSupported(sessionId) {
+		try {
+			const session = sessionOf(sessionId);
+			return surfaceCapable(session) && !lockOpenCached(sessionId, session);
+		} catch {
+			return false;
+		}
+	}
+	/** Append one advisory nudge as a suffix-only user message. */
+	function nudgeAppend(sessionId, text) {
+		try {
+			const session = sessionOf(sessionId);
+			if (!surfaceCapable(session)) return null;
+			const event = session.append("user/message", nudgeMessage(sessionId, text));
+			return Number.isFinite(event?.seq) ? event.seq : null;
+		} catch {
+			return null;
+		}
+	}
+	/** Prune advisory nudge nodes with point-sized compaction events. Only
+	 * seqs still live on the surface are pruned: a fold may already have
+	 * consumed one, and re-shadowing a vanished seq fails the v4 validator.
+	 * Each seq gets its own prune event (start === end) so a non-contiguous
+	 * set can never cover unlisted live turns — matching the contiguous
+	 * range/seq pairing of the ladder and T1 passes. */
+	function nudgePrune(sessionId, seqs) {
+		try {
+			const session = sessionOf(sessionId);
+			if (!surfaceCapable(session) || !Array.isArray(seqs)) return false;
+			const nodes = session.surface.nodes;
+			if (!Array.isArray(nodes)) return false;
+			const live = [...new Set(seqs.filter((seq) => Number.isFinite(seq)))].filter((seq) => nodes.includes(seq));
+			if (live.length === 0) return true; // already consumed by a fold: nothing to undo
+			if (live.includes(nodes[0])) {
+				let headEvent;
+				try {
+					headEvent = typeof session.eventAt === "function" ? session.eventAt(nodes[0]) : undefined;
+				} catch {
+					headEvent = undefined;
+				}
+				const headMessage = headEvent === undefined ? null : messageOfEvent(session, headEvent);
+				// Fail closed: an unreadable head node or the protected system head
+				// must never be shadowed ("compaction cannot shadow the protected
+				// system head").
+				if (headMessage === null || headMessage === undefined || headMessage.role === "system") return false;
+			}
+			for (const seq of live) {
+				const event = session.append("compaction/prune", {
+					shadowedRange: { start: seq, end: seq },
+					shadowedSeqs: [seq],
+					shadowedTokenCount: 1,
+				});
+				if (!Number.isFinite(event?.seq)) return false;
+			}
+			return true;
+		} catch {
+			return false;
+		}
+	}
+	/** Find visible advisory nudges from the tail, bounded to recent surface nodes. */
+	function nudgeScan(sessionId) {
+		try {
+			const session = sessionOf(sessionId);
+			if (!surfaceCapable(session) || typeof session.eventAt !== "function") return [];
+			const nodes = session.surface.nodes;
+			const first = Math.max(0, nodes.length - 50);
+			const found = [];
+			for (let index = nodes.length - 1; index >= first; index--) {
+				const seq = nodes[index];
+				let event;
+				try {
+					event = session.eventAt(seq);
+				} catch {
+					continue;
+				}
+				const message = event === undefined ? null : messageOfEvent(session, event);
+				if (message === null || message === undefined) continue;
+				const hasNudgeId = typeof message.id === "string" && message.id.startsWith("trim_nudge_");
+				const hasNudgeText = nudgeTextOf(message).startsWith("[SWITCHMAN:TRIM] Advisory nudge");
+				if (hasNudgeId || hasNudgeText) found.push(seq);
+			}
+			return found;
+		} catch {
+			return [];
+		}
+	}
+
 	/** In-memory idempotence belt over the durable block marker: the same
 	 * (session, range, contentGeneration) is never replaced twice even if a
 	 * crash lost the ledger persist. Bounded like the other registries. */
@@ -1136,5 +1244,5 @@ export function createSurfaceFoldPass(deps = {}) {
 		warn(`[context-trim] agent/turn-stopping hook failed: ${error?.message ?? error}`);
 	}
 
-	return { sweep, captureFoldSeqs, enabledNow, supported };
+	return { sweep, captureFoldSeqs, enabledNow, supported, nudgeSupported, nudgeAppend, nudgePrune, nudgeScan };
 }

@@ -113,7 +113,7 @@ bash <安裝目錄>/skills/db-query/scripts/setup.sh
 自動化層級（`trimMode`）：
 
 - **`off`**——只測量：用量與快取命中取樣照常執行；無橫幅、無折疊。
-- **`advisory`**——對話模型自己折疊：向其暴露 `ctx_trim_fold` 與 `ctx_trim_status` 工具和協定頭。對話壓力達到有效視窗的 `trimAdvisoryPercent` 時，引擎向本次派發的 system 頭追加一次性摺疊提醒——升級到 critical 立即重發，回落到線下即清除。
+- **`advisory`**——對話模型自己折疊：向其暴露 `ctx_trim_fold` 與 `ctx_trim_status` 工具和協定頭。對話壓力達到有效視窗的 `trimAdvisoryPercent` 時，引擎將一次性固定摺疊提醒作為 `user/message` 後綴追加到即時對話 surface 尾端（不修改本次派發的 system 頭）——升級到 critical 立即重發，壓力回落到線下後清除。
 - **`auto`**（預設）——以上全部，外加閒置邊界上的自動折疊，分三級：增長閘門（自上次折疊後的低谷起算的增長 > `trimGrowthTokens`——該錨點保證高位折疊後閘門依然有效——且連續可壓縮增量 ≥ `trimIncrementTokens`）、壓力級（上下文視窗的 `trimPressurePercent`）、緊急級（`trimEmergencyPercent`——帶獨立冷卻的機械折疊）。
 
 所有鍵位於 設定 → dsh-switchman；預設值出自 `host/config.js`：

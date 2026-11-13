@@ -13,10 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Fixed
 - context-trim: `ctx_trim_status` / `ctx_trim_fold` now register successfully. Both definitions were passed in the simple tool shape WITHOUT the register-level `output` block (`schema` + `render`), which `tools.register` rejects — so the two tools silently failed to register in EVERY session (native and PTC alike; the rejection was swallowed into a warn) and the model-driven advisory fold path never existed. Both now carry the mandatory output block. Registered plugin tools bind into PTC `run_code` programs automatically (each program enumerates the calling agent's visible tool set), so the advisory nudge's fold instructions are finally actionable under PTC.
 
+#### Changed
+- context-trim: advisory pressure nudges now append a pinned `user/message` suffix to the live session-surface tail instead of mutating the dispatch system head. The speak is a pure suffix (prompt prefix untouched); a later clear or upgrade prunes only nudge nodes — each with a point-sized `compaction/prune` event, skipping seqs a fold already consumed — so prompt-cache reuse survives up to the nudge instead of invalidating the whole prefix. Below the fold line a tail sweep clears every live nudge it can see (the recorded seq joined with a last-50-node scan), covering restarts and registry evictions; each speak carries a unique `trim_nudge_*` id. Decision logs record successful `seq=...` and `orphan-pruned` rows and add skip reasons `surface-unavailable`, `append-failed`, and `prune-failed` while retaining `no-captured-model`, `bad-model-shape`, and `window-unknown`.
+
 ### 中文
 
 #### 修复
 - context-trim:`ctx_trim_status`/`ctx_trim_fold` 现在能注册成功了。此前两个定义用的是缺少 register 级 `output` 块(`schema`+`render`)的简易工具形状,`tools.register` 会直接拒绝——两个工具在所有会话(native 与 PTC)里都静默注册失败(拒绝被吞成 warn),模型驱动的 advisory 折叠路径从未存在过。现在两者都带上了必需的 output 块。插件注册的工具会自动进入 PTC `run_code` 程序的绑定表(每个程序按调用 agent 的可见工具集枚举),advisory 提醒里的折叠指引在 PTC 下终于可执行。
+
+#### 变更
+- context-trim：advisory 压力提醒现在以固定的 `user/message` 后缀追加到实时会话 surface 尾部，不再改写本次派发的 system 头。发声是纯后缀（prompt 前缀不动）；之后的清除/升档只 prune nudge 节点——每条 nudge 一个点范围的 `compaction/prune` 事件，并跳过已被折叠消费的 seq——prompt 缓存复用可以存活到 nudge 处，不再整段前缀失效。回落线下时做尾部清扫，清除能看到的所有存活 nudge（记录的 seq 并上最近 50 节点扫描），覆盖重启与注册表逐出；每次发声携带唯一 `trim_nudge_*` id。决策日志记录成功追加的 `seq=...` 与 `orphan-pruned` 行，并新增跳过原因 `surface-unavailable`、`append-failed` 和 `prune-failed`；原有 `no-captured-model`、`bad-model-shape` 和 `window-unknown` 保留。
 
 ## [1.11.5] — 2026-11-13
 

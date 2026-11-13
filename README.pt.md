@@ -113,7 +113,7 @@ Sessões longas ficam baratas: os trechos já consumidos da conversa viram resum
 Níveis de automação (`trimMode`):
 
 - **`off`** — só medição: a amostragem de uso e de acertos de cache continua rodando; sem banner, sem folds.
-- **`advisory`** — o modelo da sessão dobra sozinho: as ferramentas `ctx_trim_fold` e `ctx_trim_status` mais o cabeçalho de protocolo ficam expostas. Quando a pressão da sessão atinge `trimAdvisoryPercent` da janela efetiva, o motor acrescenta ao cabeçalho de sistema do despacho um lembrete de dobra de uso único — repetido imediatamente ao escalar para crítico e retirado quando a pressão volta abaixo da linha.
+- **`advisory`** — o modelo da sessão dobra sozinho: as ferramentas `ctx_trim_fold` e `ctx_trim_status` mais o cabeçalho de protocolo ficam expostas. Quando a pressão da sessão atinge `trimAdvisoryPercent` da janela efetiva, o motor acrescenta um lembrete de dobra fixado como sufixo `user/message` ao final da surface ativa da sessão (não ao cabeçalho system do despacho) — repetido imediatamente ao escalar para crítico e removido quando a pressão volta abaixo da linha.
 - **`auto`** (padrão) — tudo isso mais folds automáticos na fronteira de ociosidade, em três degraus: um portão de crescimento (crescimento > `trimGrowthTokens` medido a partir da mínima pós-dobra do último fold — a âncora que mantém o portão armado após dobras confirmadas em pontos altos da view — E um incremento comprimível contíguo ≥ `trimIncrementTokens`), um degrau de pressão (`trimPressurePercent` da janela de contexto) e um degrau de emergência (`trimEmergencyPercent` — um fold mecânico com cooldown próprio).
 
 Todas as chaves ficam em Configurações → dsh-switchman; os padrões vêm de `host/config.js`:

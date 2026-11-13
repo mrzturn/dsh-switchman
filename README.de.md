@@ -113,7 +113,7 @@ Lange Sessions bleiben günstig: verarbeitete Gesprächsbereiche werden zu kompa
 Automatisierungsstufen (`trimMode`):
 
 - **`off`** — nur messen: Usage- und Cache-Hit-Sampling läuft weiter; kein Banner, keine Folds.
-- **`advisory`** — das Session-Modell faltet selbst: die Tools `ctx_trim_fold` und `ctx_trim_status` plus der Protokollkopf werden dafür freigegeben. Erreicht der Sitzungsdruck `trimAdvisoryPercent` des effektiven Fensters, hängt die Engine dem Systemkopf des Dispatchs einen einmaligen Fold-Hinweis an — bei Eskalation auf critical sofort erneut, unterhalb der Linie wieder entfernt.
+- **`advisory`** — das Session-Modell faltet selbst: die Tools `ctx_trim_fold` und `ctx_trim_status` plus der Protokollkopf werden dafür freigegeben. Erreicht der Sitzungsdruck `trimAdvisoryPercent` des effektiven Fensters, hängt die Engine einen einmaligen, angehefteten Fold-Hinweis als `user/message`-Suffix an das Ende der Live-Session-Surface an (nicht an den Systemkopf des Dispatchs) — bei Eskalation auf critical sofort erneut, unterhalb der Linie wird er entfernt.
 - **`auto`** (Standard) — alles darüber hinaus plus automatische Folds an der Leerlauf-Grenze, in drei Stufen: eine Wachstumsschwelle (Zuwachs > `trimGrowthTokens`, gemessen ab dem Tiefpunkt nach dem letzten Fold — der Anker, der die Schwelle nach Folds auf hohem View-Stand scharf hält — UND ein zusammenhängender komprimierbarer Zuwachs ≥ `trimIncrementTokens`), eine Druckstufe (`trimPressurePercent` des Kontextfensters) und eine Notfallstufe (`trimEmergencyPercent` — ein mechanischer Fold mit eigener Abklingzeit).
 
 Alle Schlüssel liegen unter Einstellungen → dsh-switchman; Defaults aus `host/config.js`:

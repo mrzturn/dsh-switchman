@@ -113,7 +113,7 @@ bash <설치-디렉터리>/skills/db-query/scripts/setup.sh
 자동화 수준(`trimMode`):
 
 - **`off`** — 측정만: 사용량과 캐시 히트 샘플링은 계속 돌아간다; 배너 없음, fold 없음.
-- **`advisory`** — 세션 모델이 스스로 fold 한다: `ctx_trim_fold`와 `ctx_trim_status` 도구와 프로토콜 헤드를 노출. 세션 압력이 실효 윈도의 `trimAdvisoryPercent`에 도달하면 엔진이 해당 디스패치의 system 헤드에 1회성 fold 권고를 덧붙입니다 — critical로 상승하면 즉시 재알림, 선 아래로 내려가면 해제.
+- **`advisory`** — 세션 모델이 스스로 fold 한다: `ctx_trim_fold`와 `ctx_trim_status` 도구와 프로토콜 헤드를 노출. 세션 압력이 실효 윈도의 `trimAdvisoryPercent`에 도달하면 엔진이 한 번만 고정하는 fold 권고를 `user/message` 접미사로 실시간 세션 surface 끝에 추가합니다(디스패치 system 헤드는 수정하지 않음) — critical로 상승하면 즉시 다시 알리고, 압력이 선 아래로 내려가면 prune합니다.
 - **`auto`**(기본값) — 위의 모든 것에 더해 유휴 경계에서 자동 fold가 세 단계로 동작한다: 성장 게이트(지난 접기 후 저점부터 측정한 성장 > `trimGrowthTokens` — 높은 지점에서 접은 후에도 게이트가 계속 작동하도록 유지하는 앵커 — + 연속 압축 가능 증분이 `trimIncrementTokens` 이상), 압력 단계(컨텍스트 창의 `trimPressurePercent`), 비상 단계(`trimEmergencyPercent` — 독립 쿨다운을 가진 기계 fold).
 
 모든 키는 설정 → dsh-switchman에 있고, 기본값은 `host/config.js` 기준이다:

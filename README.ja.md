@@ -113,7 +113,7 @@ bash <インストールディレクトリ>/skills/db-query/scripts/setup.sh
 自動化レベル（`trimMode`）：
 
 - **`off`**——計測のみ：使用量とキャッシュヒットのサンプリングは動作；バナーなし、fold なし。
-- **`advisory`**——セッションモデルが自ら fold する：`ctx_trim_fold` と `ctx_trim_status` のツールとプロトコルヘッドを公開。セッション圧力が実効ウィンドウの `trimAdvisoryPercent` に達すると、エンジンはその dispatch の system ヘッドに 1 回限りの fold 催促を追加します——critical へのエスカレーションで即再通知、線を下回れば解除。
+- **`advisory`**——セッションモデルが自ら fold する：`ctx_trim_fold` と `ctx_trim_status` のツールとプロトコルヘッドを公開。セッション圧力が実効ウィンドウの `trimAdvisoryPercent` に達すると、エンジンは一度限りの固定 fold 催促を `user/message` サフィックスとしてライブの session surface の末尾に追加し（dispatch の system ヘッドは変更しません）、critical へのエスカレーションで即再通知し、圧力が線を下回ると prune します。
 - **`auto`**（既定）——advisory のすべてに加え、アイドル境界での自動 fold が3段階で動く：成長ゲート（前回の折り返し後の低点から測定した成長 > `trimGrowthTokens`——高位で折り返してもゲートが有効であり続けるためのアンカー——かつ連続圧縮可能インクリメントが `trimIncrementTokens` 以上）、圧力段（コンテキストウィンドウの `trimPressurePercent`）、緊急段（`trimEmergencyPercent`——独自クールダウン付きの機械 fold）。
 
 すべてのキーは「設定 → dsh-switchman」にあり、既定値は `host/config.js` 由来：

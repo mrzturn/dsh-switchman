@@ -296,19 +296,18 @@ function advisoryNudgeLines(config) {
 	return { line, critical };
 }
 
-/** The per-dispatch advisory nudge text. Deliberate, bounded exception to
- * the digit-free disclosure policy of TRIM_PROTOCOL_TEXT above: advisory
- * mode has NO engine-initiated folds (the modeNow gate), the static head
- * demonstrably does not move models on its own, and the model's own fold
- * is the only relief channel — so at a threshold crossing the engine
- * speaks once, with the live number, on the dispatch itself (never in
- * the registered section). */
+/** Advisory-mode nudge text. Deliberate, bounded exception to the
+ * digit-free disclosure policy of TRIM_PROTOCOL_TEXT above: advisory mode has
+ * NO engine-initiated folds (the modeNow gate), so the model's own fold is
+ * the only relief channel. At threshold, the live-number instruction is
+ * appended to the session surface tail, not injected into the registered
+ * system section. */
 export function advisoryNudgeText(pressurePercent, critical, foldLine = ADVISORY_NUDGE_PERCENT, criticalLine = ADVISORY_NUDGE_CRITICAL_PERCENT) {
 	const action = critical
 		? `Pressure is CRITICAL (${pressurePercent}% ≥ ${criticalLine}%): fold down to under ~50% of the context IN THIS TURN.`
 		: `At ${pressurePercent}% (fold line ${foldLine}%): ${foldLine}–${foldLine + 9}% → fold roughly half of the older history now; ≥${foldLine + 10}% → fold down to under ~50%.`;
 	return [
-		'[SWITCHMAN:TRIM] Advisory nudge — active for THIS turn only. The routine "no action expected" default is lifted for this turn.',
+		'[SWITCHMAN:TRIM] Advisory nudge — pinned to the session tail until pressure falls below the fold line.',
 		`Live context pressure on this session has reached the fold line. ${action}`,
 		"Act now: call ctx_trim_status to list compressible ranges, pick one contiguous range, and fold it with ctx_trim_fold (tool-call pairs fold together or not at all; existing summaries stay). Do not wait for a routine moment.",
 	].join("\n");
@@ -400,7 +399,7 @@ export function applyContextTrim(ctx, config) {
 		}
 	};
 
-	// Advisory nudge state: sessionId -> { at, critical }. Bounded like the
+	// Advisory nudge state: sessionId -> { at, critical, seq }. Bounded like the
 	// other per-session registries (200 entries).
 	const advisoryNudgeBySession = new Map();
 
@@ -418,37 +417,32 @@ export function applyContextTrim(ctx, config) {
 		});
 	}
 
-	/** Advisory-mode pressure nudge (text: advisoryNudgeText). Appends the
-	 * live instruction to the wire system message once the session crosses
-	 * the fold line. Pressure reuses the meter-duality bridge (wire
-	 * preferred, view estimate as floor) against the session model's window
-	 * read from the SYNC cache — a cache miss fires an async warm-up
-	 * (windowTokensFor) and defers the nudge to a later dispatch instead of
-	 * blocking this one. The host's system message is shared state: the head
-	 * is shallow-copied and the copy spliced in, mirroring injectView's
-	 * ladder (in-place when writable -> reference swap for frozen arrays ->
-	 * fail open). */
-	function appendAdvisoryNudge(options, sessionId, viewTokens) {
+	/** Advisory-mode pressure nudge (text: advisoryNudgeText). Appends the live
+	 * instruction to the session surface tail once pressure crosses the fold
+	 * line. Pressure reuses the meter-duality bridge (wire preferred, view
+	 * estimate as floor) against the session model's window read from the SYNC
+	 * cache — a cache miss fires an async warm-up (windowTokensFor) and defers
+	 * the nudge to a later dispatch instead of blocking this one — and it only
+	 * reaches the wire on the NEXT dispatch (the current request is already
+	 * assembled). The speak is a pure suffix, so the prompt prefix stays
+	 * untouched; a later clear or upgrade prunes only the nudge nodes, so
+	 * cache reuse survives up to the nudge instead of invalidating the whole
+	 * prefix as the old system-head splice did. */
+	function deliverAdvisoryNudge(sessionId, viewTokens) {
 		if (modeNow() !== "advisory") return;
-		const messages = options?.messages;
-		if (!Array.isArray(messages) || messages.length === 0) return;
-		const head = messages[0];
-		if (head?.role !== "system" || !Array.isArray(head.content)) return;
-		const block = head.content.find((entry) => entry !== null && typeof entry === "object" && typeof entry.text === "string");
-		if (block === undefined) return; // non-text system head — skip, never guess
 		const model = capturedModelBySession.get(sessionId) ?? null;
 		if (model === null) {
-			decisionLog(`advisory-nudge skip why=no-captured-model`);
+			decisionLog("advisory-nudge skip why=no-captured-model");
 			return;
 		}
 		if (typeof model.provider !== "string" || typeof model.model !== "string") {
-			decisionLog(`advisory-nudge skip why=bad-model-shape`);
+			decisionLog("advisory-nudge skip why=bad-model-shape");
 			return;
 		}
-		const cached = windowCache.get(`${model.provider}/${model.model}`);
+		const cached = windowCache.get(model.provider + "/" + model.model);
 		if (cached === undefined || Date.now() - cached.at >= 600_000) { // stale = miss, same TTL as windowTokensFor
 			warmWindowOnce(model, Date.now()); // single-flight warm-up; the nudge lands on a later dispatch
-			decisionLog(`advisory-nudge skip why=window-unknown`);
+			decisionLog("advisory-nudge skip why=window-unknown");
 			return;
 		}
 		if (cached.windowTokens === null) return; // resolution failed inside the TTL — skip quietly, no retry hammering
@@ -459,46 +453,67 @@ export function applyContextTrim(ctx, config) {
 		if (mass <= 0) return;
 		const pressurePercent = (mass / windowTokens) * 100;
 		const nudgeLines = advisoryNudgeLines(config);
+		const prior = advisoryNudgeBySession.get(sessionId);
 		if (pressurePercent < nudgeLines.line) {
-			if (advisoryNudgeBySession.delete(sessionId)) { // episode cleared falling back below the line — log once, not per dispatch
-				decisionLog(`advisory-nudge below-line pressure=${Math.round(pressurePercent)}% mass=${Math.round(mass)} resolved=${cached.windowTokens} cap=${windowCapNow()}`);
+			// Below the line every live nudge must go. The sweep is NOT gated
+			// on `prior`: restarts and registry evictions lose the episode while
+			// the node stays visible. The recorded seq joins the union even when
+			// it fell out of the 50-node scan window; nudgePrune skips seqs a
+			// fold already consumed, so a vanished prior.seq cannot wedge this.
+			const seqs = new Set(surfacePass.nudgeScan(sessionId));
+			if (Number.isFinite(prior?.seq)) seqs.add(prior.seq);
+			if (seqs.size > 0) {
+				if (!surfacePass.nudgePrune(sessionId, [...seqs])) {
+					decisionLog("advisory-nudge skip why=prune-failed pressure=" + Math.round(pressurePercent) + "%");
+					return;
+				}
+				advisoryNudgeBySession.delete(sessionId);
+				decisionLog("advisory-nudge below-line pressure=" + Math.round(pressurePercent) + "% mass=" + Math.round(mass) + " resolved=" + cached.windowTokens + " cap=" + windowCapNow() + " pruned=" + seqs.size);
+			} else if (prior !== undefined) {
+				advisoryNudgeBySession.delete(sessionId); // nothing visible left; close the episode quietly
 			}
 			return; // fresh episode on the next crossing
 		}
 		const critical = pressurePercent >= nudgeLines.critical;
-		const prior = advisoryNudgeBySession.get(sessionId);
 		const now = Date.now();
 		// Any band CHANGE re-speaks immediately: escalation high->critical, and
 		// intentionally also a downgrade back into high after a partial fold.
 		if (prior !== undefined && prior.critical === critical && now - prior.at < ADVISORY_NUDGE_REPEAT_MS) return;
-		const nudge = advisoryNudgeText(Math.round(pressurePercent), critical, nudgeLines.line, nudgeLines.critical);
-		const headCopy = {
-			...head,
-			content: head.content.map((entry) => (entry === block ? { ...entry, text: `${entry.text}\n\n${nudge}` } : entry)),
-		};
-		let landed = false;
-		try {
-			messages[0] = headCopy;
-			landed = true;
-		} catch {
-			/* frozen array — fall through to the reference swap */
+		if (!surfacePass.nudgeSupported(sessionId)) {
+			decisionLog("advisory-nudge skip why=surface-unavailable pressure=" + Math.round(pressurePercent) + "%");
+			return;
 		}
-		if (!landed) {
-			try {
-				options.messages = [headCopy, ...messages.slice(1)];
-				landed = true;
-			} catch {
-				/* frozen options — this dispatch cannot carry the nudge; fail open */
+
+		// Replace the recorded prior nudge, or clear orphans a restart left
+		// behind, before speaking fresh. nudgePrune only touches seqs still
+		// live on the surface, so a prior a fold already consumed is a no-op.
+		const priorSeq = Number.isFinite(prior?.seq) ? prior.seq : null;
+		if (priorSeq !== null) {
+			if (!surfacePass.nudgePrune(sessionId, [priorSeq])) {
+				decisionLog("advisory-nudge skip why=prune-failed pressure=" + Math.round(pressurePercent) + "%");
+				return;
+			}
+		} else {
+			const orphans = surfacePass.nudgeScan(sessionId);
+			if (orphans.length > 0) {
+				if (!surfacePass.nudgePrune(sessionId, orphans)) {
+					decisionLog("advisory-nudge skip why=prune-failed pressure=" + Math.round(pressurePercent) + "%");
+					return;
+				}
+				decisionLog("advisory-nudge orphan-pruned seqs=" + orphans.length + " pressure=" + Math.round(pressurePercent) + "%");
 			}
 		}
-		if (!landed) {
-			decisionLog(`advisory-nudge skip why=frozen-dispatch pressure=${Math.round(pressurePercent)}%`);
+		const nudge = advisoryNudgeText(Math.round(pressurePercent), critical, nudgeLines.line, nudgeLines.critical);
+		const seq = surfacePass.nudgeAppend(sessionId, nudge);
+		if (!Number.isFinite(seq)) {
+			advisoryNudgeBySession.delete(sessionId); // a pruned prior must not throttle the retry
+			decisionLog("advisory-nudge skip why=append-failed pressure=" + Math.round(pressurePercent) + "%");
 			return;
 		}
 		advisoryNudgeBySession.delete(sessionId); // re-insert: refresh recency so eviction drops the least recently nudged
-		advisoryNudgeBySession.set(sessionId, { at: now, critical });
+		advisoryNudgeBySession.set(sessionId, { at: now, critical, seq });
 		if (advisoryNudgeBySession.size > 200) advisoryNudgeBySession.delete(advisoryNudgeBySession.keys().next().value);
-		decisionLog(`session=${sessionId} advisory-nudge pressure=${Math.round(pressurePercent)}% mass=${Math.round(mass)} window=${windowTokens} level=${critical ? "critical" : "high"}`);
+		decisionLog("session=" + sessionId + " advisory-nudge pressure=" + Math.round(pressurePercent) + "% mass=" + Math.round(mass) + " window=" + windowTokens + " level=" + (critical ? "critical" : "high") + " seq=" + seq);
 	}
 
 	const captures = new Map(); // sessionId -> { messages, refs, viewTokens, model, at }
@@ -1377,7 +1392,7 @@ export function applyContextTrim(ctx, config) {
 						// own fold is advisory mode's ONLY relief channel — speak at
 						// the fold line. Fail-open, never breaks the dispatch.
 						try {
-							appendAdvisoryNudge(options, applied.sessionId, applied.viewTokens);
+							deliverAdvisoryNudge(applied.sessionId, applied.viewTokens);
 						} catch (error) {
 							decisionLog(`advisory-nudge-failed why=${error?.message ?? error}`);
 						}
