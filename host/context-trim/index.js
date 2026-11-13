@@ -422,11 +422,18 @@ export function applyContextTrim(ctx, config) {
 		const block = head.content.find((entry) => entry !== null && typeof entry === "object" && typeof entry.text === "string");
 		if (block === undefined) return; // non-text system head — skip, never guess
 		const model = capturedModelBySession.get(sessionId) ?? null;
-		if (model === null) return;
-		if (typeof model.provider !== "string" || typeof model.model !== "string") return;
+		if (model === null) {
+			decisionLog(`advisory-nudge skip why=no-captured-model`);
+			return;
+		}
+		if (typeof model.provider !== "string" || typeof model.model !== "string") {
+			decisionLog(`advisory-nudge skip why=bad-model-shape`);
+			return;
+		}
 		const cached = windowCache.get(`${model.provider}/${model.model}`);
 		if (cached === undefined || Date.now() - cached.at >= 600_000) { // stale = miss, same TTL as windowTokensFor
 			warmWindowOnce(model, Date.now()); // single-flight warm-up; the nudge lands on a later dispatch
+			decisionLog(`advisory-nudge skip why=window-unknown`);
 			return;
 		}
 		if (cached.windowTokens === null) return; // resolution failed inside the TTL — skip quietly, no retry hammering
@@ -437,8 +444,10 @@ export function applyContextTrim(ctx, config) {
 		if (mass <= 0) return;
 		const pressurePercent = (mass / windowTokens) * 100;
 		if (pressurePercent < ADVISORY_NUDGE_PERCENT) {
-			advisoryNudgeBySession.delete(sessionId); // fresh episode on the next crossing
-			return;
+			if (advisoryNudgeBySession.delete(sessionId)) { // episode cleared falling back below the line — log once, not per dispatch
+				decisionLog(`advisory-nudge below-line pressure=${Math.round(pressurePercent)}% mass=${Math.round(mass)} resolved=${cached.windowTokens} cap=${windowCapNow()}`);
+			}
+			return; // fresh episode on the next crossing
 		}
 		const critical = pressurePercent >= ADVISORY_NUDGE_CRITICAL_PERCENT;
 		const prior = advisoryNudgeBySession.get(sessionId);
@@ -466,7 +475,10 @@ export function applyContextTrim(ctx, config) {
 				/* frozen options — this dispatch cannot carry the nudge; fail open */
 			}
 		}
-		if (!landed) return;
+		if (!landed) {
+			decisionLog(`advisory-nudge skip why=frozen-dispatch pressure=${Math.round(pressurePercent)}%`);
+			return;
+		}
 		advisoryNudgeBySession.delete(sessionId); // re-insert: refresh recency so eviction drops the least recently nudged
 		advisoryNudgeBySession.set(sessionId, { at: now, critical });
 		if (advisoryNudgeBySession.size > 200) advisoryNudgeBySession.delete(advisoryNudgeBySession.keys().next().value);
@@ -724,6 +736,7 @@ export function applyContextTrim(ctx, config) {
 			if (value === null) decisionLog(`window-resolve-failed key=${key} why=no context metadata`);
 			windowCache.set(key, { windowTokens: value, at: now });
 			if (windowCache.size > 200) windowCache.delete(windowCache.keys().next().value);
+			if (value !== null) decisionLog(`window-resolved key=${key} window=${value}`);
 			return value;
 		} catch (error) {
 			windowCache.set(key, { windowTokens: null, at: now });
