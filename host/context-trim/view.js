@@ -250,16 +250,31 @@ export function renderSummaryText(block) {
 	return `[SWITCHMAN:TRIM] ${block.summary}`;
 }
 
+/** Wire-id prefix of every fold-summary synthetic message. The single
+ * definition: summaryMessageOf builds ids from it, isFoldSummaryMessage
+ * recognizes them, and ladder relocation re-derives the same ids. */
+export const FOLD_SUMMARY_ID_PREFIX = "acp_summary_";
+
 /** The ONE synthetic message replacing a folded range (brief: synthetic
  * user message; id carries the acp_summary_ prefix downstream tooling
  * skips). Pure — same block, same bytes. The ladder replaces messages BY
  * this id (id-suffix = block id), which is why ids must stay stable. */
 export function summaryMessageOf(block) {
 	return {
-		id: `acp_summary_${block.id}`,
+		id: `${FOLD_SUMMARY_ID_PREFIX}${block.id}`,
 		role: "user",
 		content: [{ type: "text", text: renderSummaryText(block) }],
 	};
+}
+
+/** True when one wire message is a prior fold's synthetic summary
+ * (acp_summary_<blockId>). Recognition rides the id prefix only — never
+ * the source kind (the v4 validator rejects compact-checkpoint sources
+ * outside a compaction/start..end pair). Range selection and the advisory
+ * fold tool use this to KEEP summaries out of new raw folds: summaries
+ * stay live on the surface and consolidate only through ladder T2/T3. */
+export function isFoldSummaryMessage(message) {
+	return typeof message?.id === "string" && message.id.startsWith(FOLD_SUMMARY_ID_PREFIX);
 }
 
 /** Locate a block's range in a positions map at/after afterIdx. Strict:
@@ -310,7 +325,7 @@ function locateBlock(positions, block, afterIdx) {
  * -> index, for every synthetic message. One index per id (a block renders
  * at most once — single consumption). */
 function summaryPositionsOf(messages) {
-	const prefix = "acp_summary_";
+	const prefix = FOLD_SUMMARY_ID_PREFIX;
 	const positions = new Map();
 	messages.forEach((message, index) => {
 		const id = message?.id;

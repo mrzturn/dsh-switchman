@@ -32,7 +32,7 @@
  * which keeps the decision unit-testable (golden thresholds).
  */
 
-import { estimateTokensOf, refPositions, segmentBounds } from "./view.js";
+import { estimateTokensOf, isFoldSummaryMessage, refPositions, segmentBounds } from "./view.js";
 
 /** Hard minimum wall-clock interval between side-model folds. */
 export const FOLD_MIN_INTERVAL_MS = 60_000;
@@ -50,9 +50,15 @@ export const LADDER_MIN_INTERVAL_MS = 120_000;
  * first segment boundary strictly after the frontier AND after the task
  * intent (the first user message — bili's protected zone: the session's
  * opening task statement is never folded) to the last segment end that
- * still clears the protected tail. Returns { startIdx, endIdx } or null
- * when nothing is foldable (empty history, everything folded, or
- * protected tail covers it all). */
+ * still clears the protected tail. Prior fold summaries (acp_summary_*,
+ * which the surface pass relocates right after the intent segment) are
+ * NEVER inside the range: they stay live on the surface and consolidate
+ * only through ladder T2/T3 distillation. This exclusion is load-bearing —
+ * the frontier message is itself shadowed once its fold ships, so without
+ * it the fallback start slid onto the last summary and every later fold
+ * re-absorbed the previous summary (the rolling-absorb regression).
+ * Returns { startIdx, endIdx } or null when nothing is foldable (empty
+ * history, everything folded, or protected tail covers it all). */
 export function computeFoldableRange(messages, ledger, protectedTail) {
 	if (!Array.isArray(messages) || messages.length === 0) return null;
 	const tail = Number.isInteger(protectedTail) && protectedTail > 0 ? protectedTail : 0;
@@ -88,6 +94,13 @@ export function computeFoldableRange(messages, ledger, protectedTail) {
 	let best = null;
 	for (const [start, end] of segmentBounds(messages)) {
 		if (start < startFrom) continue; // behind the frontier / intent
+		if (isFoldSummaryMessage(messages[start])) {
+			// A summary is its own segment (plain user message, no tool pair).
+			// Ahead of the first raw segment: skip the summary run. After raw
+			// segments have begun: stop — never bridge a span across one.
+			if (best !== null) break;
+			continue;
+		}
 		if (end >= tailStart) break; // segment would cut into the protected tail
 		if (best === null) best = { startIdx: start, endIdx: end };
 		else best.endIdx = end; // extend the contiguous span

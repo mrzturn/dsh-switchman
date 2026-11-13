@@ -84,7 +84,7 @@
  * and every no-op with pending work is logged to decisions.log.
  */
 
-import { refOf, summaryMessageOf } from "./view.js";
+import { refOf, summaryMessageOf, isFoldSummaryMessage, FOLD_SUMMARY_ID_PREFIX } from "./view.js";
 
 /** Ladder-block probe (tier ≥ 2): a distillation whose surface material is
  * the REPLACEMENT NODES of its consumed blocks, not a raw ref range. */
@@ -753,7 +753,7 @@ export function createSurfaceFoldPass(deps = {}) {
 				const idIndexOf = new Map();
 				for (let i = 0; i < nodeMessages.length; i++) {
 					const message = nodeMessages[i];
-					if (message !== null && typeof message === "object" && typeof message.id === "string" && message.id.startsWith("acp_summary_")) {
+					if (isFoldSummaryMessage(message)) {
 						idIndexOf.set(message.id, i);
 					}
 				}
@@ -765,7 +765,7 @@ export function createSurfaceFoldPass(deps = {}) {
 						atSeqs.push(atSeq);
 						continue;
 					}
-					const relocatedIdx = idIndexOf.get(`acp_summary_${entry.id}`);
+					const relocatedIdx = idIndexOf.get(`${FOLD_SUMMARY_ID_PREFIX}${entry.id}`);
 					if (relocatedIdx === undefined) {
 						unresolved = entry;
 						break;
@@ -795,7 +795,7 @@ export function createSurfaceFoldPass(deps = {}) {
 				// picked up a stranger's acp_summary node is not this fold's
 				// material (the length check alone cannot tell them apart).
 				if (spanExact) {
-					const expectedIds = new Set(consumed.map((entry) => `acp_summary_${entry.id}`));
+				const expectedIds = new Set(consumed.map((entry) => `${FOLD_SUMMARY_ID_PREFIX}${entry.id}`));
 					for (let i = ladderFirstIdx; i <= ladderLastIdx; i++) {
 						const message = nodeMessages[i];
 						if (message === null || message === undefined || typeof message.id !== "string" || !expectedIds.has(message.id)) {
@@ -807,7 +807,7 @@ export function createSurfaceFoldPass(deps = {}) {
 				if (spanExact) {
 					for (let i = ladderFirstIdx; i <= ladderLastIdx; i++) {
 						const message = nodeMessages[i];
-						if (message === null || message === undefined || typeof message.id !== "string" || !message.id.startsWith("acp_summary_")) {
+					if (!isFoldSummaryMessage(message)) {
 							spanExact = false;
 							break;
 						}

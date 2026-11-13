@@ -406,6 +406,60 @@ describe("trigger: tiers and gates", () => {
 		assert.deepEqual(computeFoldableRange(makeMessages(20), null, 6), { startIdx: 1, endIdx: 13 });
 	});
 
+	test("computeFoldableRange never folds prior fold summaries (acp_summary_*)", () => {
+		// Post-fold surface shape: [intent user, summary run, live raw..., tail].
+		// Each fold splices its replacement at its range start, so summaries pile
+		// up right after the task-intent segment — while the ledger frontier is
+		// already shadowed off the surface. The range must start AFTER the run.
+		const messages = [
+			{ role: "user", content: [{ type: "text", text: "task" }] },
+			{ id: "acp_summary_b1", role: "user", content: [{ type: "text", text: "[SWITCHMAN:TRIM] s1" }] },
+			{ id: "acp_summary_b2", role: "user", content: [{ type: "text", text: "[SWITCHMAN:TRIM] s2" }] },
+			...makeMessages(14),
+		];
+		assert.deepEqual(computeFoldableRange(messages, { frontier: "gone-ref" }, 6), { startIdx: 3, endIdx: 10 });
+		assert.deepEqual(computeFoldableRange(messages, null, 6), { startIdx: 3, endIdx: 10 });
+		// Summaries alone behind the intent line: nothing raw is foldable.
+		const onlySummaries = [
+			{ role: "user", content: [{ type: "text", text: "task" }] },
+			{ id: "acp_summary_b1", role: "user", content: [{ type: "text", text: "[SWITCHMAN:TRIM] s1" }] },
+		];
+		assert.equal(computeFoldableRange(onlySummaries, null, 6), null);
+	});
+
+	test("computeFoldableRange never bridges a span across a summary segment", () => {
+		// Defensive shape (branch rebuild / legacy oddity): raw content on both
+		// sides of a summary. The span stops before the summary — folding across
+		// it would shadow the replacement node and break ladder bookkeeping.
+		const messages = [
+			{ role: "user", content: [{ type: "text", text: "task" }] },
+			...makeMessages(4),
+			{ id: "acp_summary_b1", role: "user", content: [{ type: "text", text: "[SWITCHMAN:TRIM] s1" }] },
+			...makeMessages(14, 7),
+		];
+		assert.deepEqual(computeFoldableRange(messages, null, 6), { startIdx: 1, endIdx: 4 });
+	});
+
+	test("computeFoldableRange with a resolvable frontier: skip the leading summary run, stop at the next one", () => {
+		// Live-frontier post-fold shape: [intent, summary, raw..., frontier,
+		// raw..., summary, raw...]. The summary run ahead of the frontier is
+		// skipped, the span starts strictly after the frontier, and it stops
+		// before the second summary — raw beyond it is left for a later fold.
+		const frontierMsg = { role: "user", content: [{ type: "text", text: `frontier — ${"y".repeat(40)}` }] };
+		const messages = [
+			{ role: "user", content: [{ type: "text", text: "task" }] },
+			{ id: "acp_summary_b1", role: "user", content: [{ type: "text", text: "[SWITCHMAN:TRIM] s1" }] },
+			...makeMessages(4),
+			frontierMsg,
+			...makeMessages(6, 3),
+			{ id: "acp_summary_b2", role: "user", content: [{ type: "text", text: "[SWITCHMAN:TRIM] s2" }] },
+			...makeMessages(8, 9),
+		];
+		assert.deepEqual(computeFoldableRange(messages, { frontier: refOf(frontierMsg, 6) }, 6), { startIdx: 7, endIdx: 12 });
+		// Null ledger: the summary run right after the intent line is skipped the same way.
+		assert.deepEqual(computeFoldableRange(messages, null, 6), { startIdx: 2, endIdx: 12 });
+	});
+
 	test("growth tier fires only above BOTH gates", () => {
 		// growth 100k - 0 > 22.5k; increment of 34 msgs big enough → fold
 		const fire = evaluateTrigger({ ...base, foldable: foldable() });
@@ -882,6 +936,33 @@ describe("assembly: applyContextTrim with a mock ctx", () => {
 		const ledger = emptyLedger("sess-pair-view");
 		ledger.blocks.push({ refRange: { firstId: refOf(cap[0], 0), lastId: refOf(cap[1], 1) }, count: 2, approxTokens: 4, summary: "bad", kind: "summary", tier: "model" });
 		assert.equal(buildView(cap, ledger, { protectedTail: 0 }).applied, 0);
+	});
+
+	test("ctx_trim_fold rejects a range covering a previous fold summary (acp_summary_*)", async () => {
+		let listener = null;
+		const fiber = { on: (event, fn) => { listener = fn; }, off: () => {}, effect: () => {} };
+		const { ctx, registeredTools, setSessionId } = mockCtx({ llmFiber: fiber });
+		const stateDir = mkdtempSync(join(tmpdir(), "trim-asm-sumguard-"));
+		const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+		setSessionId("sess-sumguard");
+		const messages = [
+			{ role: "user", content: "task" },
+			{ id: "acp_summary_b1", role: "user", content: "[SWITCHMAN:TRIM] earlier fold summary" },
+			{ role: "user", content: "q" },
+			{ role: "assistant", content: "a" },
+		];
+		for (let i = 0; i < 8; i++) messages.push({ role: "user", content: `filler ${i}` });
+		listener({ sessionId: "sess-sumguard", messages, provider: "p", model: "m" }, () => null);
+		const foldTool = registeredTools.find((t) => t.name === "ctx_trim_fold");
+		const cap = handle.captures.get("sess-sumguard").messages;
+		// Span [0..2] covers the summary node at index 1 → hard reject, no block.
+		const rejected = await foldTool.execute({ firstId: refOf(cap[0], 0), lastId: refOf(cap[2], 2), count: 3, summary: "covers summary" });
+		assert.match(rejected, /acp_summary_/u);
+		assert.equal(handle.store.ledgerOf("sess-sumguard").blocks.length, 0);
+		// The guard is precise: the same span minus the summary node commits.
+		const clean = await foldTool.execute({ firstId: refOf(cap[2], 2), lastId: refOf(cap[3], 3), count: 2, summary: "clean range" });
+		assert.match(clean, /Folded 2 messages/u);
+		assert.equal(handle.store.ledgerOf("sess-sumguard").blocks.length, 1);
 	});
 	test("host-compaction epoch boundary re-anchors the growth baseline once per epoch", async () => {
 		let listener = null;

@@ -19,6 +19,13 @@ host realities forced the design below: the current agent loop deep-freezes the
 request arrays / option objects it assembles, and the watermark must never
 report tokens the model cannot actually see.
 
+Range selection keeps prior fold summaries out of raw folds: once a fold ships,
+its frontier ref is shadowed off the live surface, so the range start falls back
+past the task-intent guard — `computeFoldableRange` therefore skips
+`acp_summary_*` segments explicitly (and never bridges a span across one), and
+`ctx_trim_fold` rejects ranges covering a summary. Summaries persist on the
+surface and consolidate only through ladder T2/T3 distillation.
+
 ## The four-value `injectView` contract
 
 Why it exists: some dispatches hand out fully frozen request arrays or option

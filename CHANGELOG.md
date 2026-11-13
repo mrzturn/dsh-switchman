@@ -10,7 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### English
 
+#### Fixed
+- context-trim: raw folds no longer re-absorb the previous fold's summary. Once a fold ships, its frontier ref is shadowed off the live surface, so the foldable-range start silently slid onto the relocated `acp_summary_*` node and every later fold swallowed the prior summary (rolling absorb). Range selection now skips summary segments and never bridges a span across one; `ctx_trim_fold` rejects ranges covering a summary. Summaries persist and consolidate only through ladder T2/T3 distillation.
+
 ### 中文
+
+#### 修复
+- context-trim:raw 折叠不再吞掉上一次折叠的摘要。折叠落地后 frontier 引用即被 shadow,可折叠范围起点会滑到重定位后的 `acp_summary_*` 节点上,导致每次折叠都吸收上一份摘要(滚动吸收)。范围选择现在跳过摘要 segment 且绝不跨摘要拼接跨度;`ctx_trim_fold` 拒绝覆盖摘要的范围。摘要持久保留,仅通过 T2/T3 阶梯蒸馏合并。
 
 ## [1.11.5] — 2026-11-13
 

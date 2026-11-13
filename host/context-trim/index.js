@@ -32,7 +32,7 @@
 
 import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { buildView, estimateTokensOf, injectView, ledgerIsStale, messageTokens, rangeIsSegmentAligned, refOf, refPositions } from "./view.js";
+import { buildView, estimateTokensOf, injectView, isFoldSummaryMessage, ledgerIsStale, messageTokens, rangeIsSegmentAligned, refOf, refPositions } from "./view.js";
 import { computeFoldableRange, evaluateTrigger, EMERGENCY_COOLDOWN_MS } from "./trigger.js";
 import { LADDER_SYSTEM_PROMPT, mechanicalSummary, renderLadderMaterial, renderMaterial, summarizeWithModel } from "./summarizer.js";
 import { createStore } from "./state.js";
@@ -1110,6 +1110,15 @@ export function applyContextTrim(ctx, config) {
 				}
 				if (firstIdx < 0) { firstIdx = firstList[0]; lastIdx = lastList[lastList.length - 1]; }
 				if (lastIdx < firstIdx) return "lastId sorts before firstId in the current history.";
+				// Prior fold summaries are never raw-fold material: a T1 fold
+				// covering an acp_summary_* node would shadow the replacement
+				// node and break the ladder's consumed-run bookkeeping.
+				// Summaries consolidate only through ladder T2/T3 distillation.
+				for (let i = firstIdx; i <= lastIdx; i++) {
+					if (isFoldSummaryMessage(capture.messages[i])) {
+						return "Range covers a previous fold's summary (acp_summary_*) — summaries are preserved and consolidate via T2/T3 ladder; pick a range that excludes them.";
+					}
+				}
 				const { protectedTail } = thresholdsNow();
 				if (lastIdx >= capture.messages.length - Math.max(0, protectedTail)) return `Range reaches into the protected tail (last ${protectedTail} messages are never folded).`;
 				if (!rangeIsSegmentAligned(capture.messages, firstIdx, lastIdx)) return "Range splits a tool-call pair — fold whole assistant/tool segments (extend firstId/lastId to the segment boundaries).";
