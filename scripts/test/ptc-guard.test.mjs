@@ -6,8 +6,9 @@
  * exactly knownNames ["run_code"]), the native executor (no knownNames) and
  * every unusable probe shape render an empty section (fail-open, status quo),
  * and the clause text carries the anchor plus the `await tools.name(args)`
- * SDK call shape quoted from the run_code tool's own description. It also
- * pins the sandbox_permissions never-set rule added after session 22ced69f.
+ * SDK call shape quoted from the run_code tool's own description. It also pins
+ * grep regex escape/recovery guidance and the sandbox_permissions never-set rule
+ * added after session 22ced69f.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -108,6 +109,14 @@ test('section text renders the clause for a PTC scope and "" otherwise', () => {
 	assert.match(rendered, /Never set `sandbox_permissions` on any call, direct or SDK/);
 	assert.match(rendered, /not strictly wider than this call's current \.\.\. mode/);
 	assert.match(rendered, /retry without the field/);
+	assert.match(rendered, /`grep\.pattern` is a regular expression/);
+	assert.ok(rendered.includes('write `"\\\\("` to pass `\\(`'));
+	assert.match(rendered, /String\.raw/);
+	assert.match(rendered, /unclosed group/);
+	assert.match(rendered, /never repeat it unchanged/);
+	assert.match(rendered, /Top-level declarations persist across `run_code` calls/);
+	assert.ok(rendered.includes("never redeclare an existing `const`/`let`/`class` binding"));
+	assert.match(rendered, /Identifier \.\.\. has already been declared/);
 });
 
 test("section text is empty for a native scope and every fail-open shape", () => {
@@ -130,7 +139,7 @@ test("section text is empty for a native scope and every fail-open shape", () =>
 
 test("renderPtcGuard is byte-stable and interpolation-safe", () => {
 	assert.equal(renderPtcGuard(), renderPtcGuard());
-	assert.equal(renderPtcGuard().split("\n").length, 5);
+	assert.equal(renderPtcGuard().split("\n").length, 7);
 	assert.ok(renderPtcGuard().includes("{ name:"));
 });
 

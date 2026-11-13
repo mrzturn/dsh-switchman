@@ -89,6 +89,8 @@ function renderPtcGuard() {
 		`- Every other tool MUST be invoked as an awaited SDK function inside a ${RUN_CODE_NAME} program: \`await tools.name(args)\` — e.g. \`await tools.skill({ name: "git-commit-message" })\` or \`await tools.spawn_teammate({ ... })\`.`,
 		`- A direct call fails with: unknown tool "x": only \`${RUN_CODE_NAME}\` is callable directly — call \`x\` from inside a \`${RUN_CODE_NAME}\` program instead. Never retry the direct form; wrap the call.`,
 		`- Wherever this prompt says "call the X tool" (skill catalog, doctrines, per-turn reminders), read it as "call X inside a ${RUN_CODE_NAME} program". Batch independent calls as parallel awaits inside ONE program.`,
+		`- \`grep.pattern\` is a regular expression. In a normal JavaScript string inside \`${RUN_CODE_NAME}\`, double backslashes: write \`"\\\\("\` to pass \`\\(\` to grep; \`String.raw\` tagged templates also preserve backslashes. If grep reports \`unclosed group\`, fix the pattern before retrying; never repeat it unchanged.`,
+		`- Top-level declarations persist across \`${RUN_CODE_NAME}\` calls in this Agent: never redeclare an existing \`const\`/\`let\`/\`class\` binding; use a fresh identifier or reuse a mutable \`var\`. If you see \`Identifier ... has already been declared\`, retry with a fresh name—the SyntaxError happens before the program body runs.`,
 		`- Never set \`sandbox_permissions\` on any call, direct or SDK: it is a privilege-escalation request and fails with "not strictly wider than this call's current ... mode" whenever the session already runs at least that access level — retry without the field.`,
 	].join("\n");
 }
