@@ -7,8 +7,8 @@
  * every unusable probe shape render an empty section (fail-open, status quo),
  * and the clause text carries the anchor plus the `await tools.name(args)`
  * SDK call shape quoted from the run_code tool's own description. It also pins
- * grep regex escape/recovery guidance and the sandbox_permissions never-set rule
- * added after session 22ced69f.
+ * routine run_code argument handling, invalid-justification retry behavior,
+ * grep regex escape/recovery, and the sandbox_permissions never-set rule.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -107,6 +107,16 @@ test('section text renders the clause for a PTC scope and "" otherwise', () => {
 	assert.match(rendered, /await tools\.spawn_teammate\(\{ \.\.\. \}\)/);
 	assert.match(rendered, /unknown tool "x"/);
 	assert.match(rendered, /Never set `sandbox_permissions` on any call, direct or SDK/);
+	assert.ok(rendered.includes('For routine `run_code` calls'));
+	assert.match(rendered, /pass only `code`, `description`, and `timeoutMs`; omit both `sandbox_permissions` and `justification`/);
+	assert.match(rendered, /invalid justification, never repeat it unchanged; retry without those fields/);
+	assert.match(rendered, /parser error such as "Expected ident"/);
+	assert.match(rendered, /long prompt text/);
+	assert.match(rendered, /double-quoted JavaScript string/);
+	assert.match(rendered, /JSON\.stringify\(text\)/);
+	assert.ok(rendered.includes('getResource(".")'));
+	assert.ok(rendered.includes('System.getProperty("user.dir")'));
+	assert.ok(rendered.includes('when present, the appended "File sandbox: ..." reports execution context, not the cause'));
 	assert.match(rendered, /not strictly wider than this call's current \.\.\. mode/);
 	assert.match(rendered, /retry without the field/);
 	assert.match(rendered, /`grep\.pattern` is a regular expression/);
@@ -145,7 +155,7 @@ test("section text is empty for a native scope and every fail-open shape", () =>
 
 test("renderPtcGuard is byte-stable and interpolation-safe", () => {
 	assert.equal(renderPtcGuard(), renderPtcGuard());
-	assert.equal(renderPtcGuard().split("\n").length, 8);
+	assert.equal(renderPtcGuard().split("\n").length, 11);
 	assert.ok(renderPtcGuard().includes("{ name:"));
 });
 
