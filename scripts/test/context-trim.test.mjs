@@ -760,7 +760,15 @@ describe("assembly: applyContextTrim with a mock ctx", () => {
 		assert.equal(typeof hooks["agent/status"], "function");
 		assert.ok(registeredTools.some((t) => t.name === "ctx_trim_status"));
 		assert.ok(registeredTools.some((t) => t.name === "ctx_trim_fold"));
-		assert.equal(injects.length, 1);
+		assert.ok(registeredTools.some((t) => t.name === "ctx_trim_fold"));
+		// Register-level shape (installed-host contract): bare tools.register runs
+		// no defineTool DSL compilation and rejects definitions without an output
+		// block — a missing block silently killed both trim tools everywhere.
+		for (const def of registeredTools.filter((t) => t.name.startsWith("ctx_trim_"))) {
+			assert.equal(def.output?.schema?.type, "string", `${def.name} must declare output.schema`);
+			assert.equal(typeof def.output?.render, "function", `${def.name} must declare output.render`);
+			assert.deepEqual(def.output.render({}, "ok"), [{ type: "text", text: "ok" }]);
+		}
 		assert.deepEqual(injects[0].deps, ["llm"]);
 		assert.equal(mounted.length, 1);
 		assert.equal(mounted[0][0], "llm/stream");

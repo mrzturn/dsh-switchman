@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### English
+
+#### Fixed
+- context-trim: `ctx_trim_status` / `ctx_trim_fold` now register successfully. Both definitions were passed in the simple tool shape WITHOUT the register-level `output` block (`schema` + `render`), which `tools.register` rejects — so the two tools silently failed to register in EVERY session (native and PTC alike; the rejection was swallowed into a warn) and the model-driven advisory fold path never existed. Both now carry the mandatory output block. Registered plugin tools bind into PTC `run_code` programs automatically (each program enumerates the calling agent's visible tool set), so the advisory nudge's fold instructions are finally actionable under PTC.
+
+### 中文
+
+#### 修复
+- context-trim:`ctx_trim_status`/`ctx_trim_fold` 现在能注册成功了。此前两个定义用的是缺少 register 级 `output` 块(`schema`+`render`)的简易工具形状,`tools.register` 会直接拒绝——两个工具在所有会话(native 与 PTC)里都静默注册失败(拒绝被吞成 warn),模型驱动的 advisory 折叠路径从未存在过。现在两者都带上了必需的 output 块。插件注册的工具会自动进入 PTC `run_code` 程序的绑定表(每个程序按调用 agent 的可见工具集枚举),advisory 提醒里的折叠指引在 PTC 下终于可执行。
+
 ## [1.11.5] — 2026-11-13
 
 ### English

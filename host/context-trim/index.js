@@ -1235,7 +1235,15 @@ export function applyContextTrim(ctx, config) {
 			name: "ctx_trim_status",
 			description: "List this session's compressible context ranges with their true sizes: the fold ledger, the raw range a fold would cover, and distillation targets. Read-only. Contains sizes only — never progress percentages.",
 			parameters: { type: "object", properties: {}, additionalProperties: false },
-			required: [],
+			// Register-level shape: bare ctx.tools.register runs no defineTool DSL
+			// compilation and REJECTS a definition without an output block — the
+			// missing block silently killed both tools in every session (native
+			// and PTC). The execute bodies return plain strings, rendered as one
+			// text block.
+			output: {
+				schema: { type: "string" },
+				render: (_args, value) => [{ type: "text", text: value }],
+			},
 			async execute() {
 				const sessionId = sessionIdOf({});
 				if (sessionId === null) return "No session context available.";
@@ -1284,6 +1292,11 @@ export function applyContextTrim(ctx, config) {
 				},
 				required: ["firstId", "lastId", "count", "summary"],
 				additionalProperties: false,
+			},
+			// Register-level output block — see ctx_trim_status above.
+			output: {
+				schema: { type: "string" },
+				render: (_args, value) => [{ type: "text", text: value }],
 			},
 			async execute(args) {
 				const sessionId = sessionIdOf({});
