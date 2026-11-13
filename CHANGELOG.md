@@ -10,15 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### English
 
+### 中文
+
+## [1.11.5] — 2026-11-13
+
+### English
+
 #### Changed
 
 - **Model-aware reasoning-effort routing**: summary folds and T2/T3 distillations follow the session model route without inheriting the session call's effort; when unpinned they choose the lowest enabled reasoning level, use `off` for toggle-only models, and leave the model default intact when reasoning is unsupported or metadata is unavailable. Fold-fallback routes receive an independent pin with the same recommendation. Intent-recognition fallback routes now also accept an independent effort pin and otherwise use the selected model's default.
+- **Persistent PTC guidance and error recovery**: reinforces the PTC guard's `run_code`-only invocation rule and adds concrete recovery guidance: omit `sandbox_permissions` and `justification` in routine calls; treat `Expected ident` as submitted-code syntax and correct it rather than replaying unchanged; safely quote or serialize long prompt text. When present, `File sandbox` notes describe execution context, not the cause.
 
 ### 中文
 
 #### 变更
 
 - **思考等级路由**：摘要折叠与 T2/T3 阶梯蒸馏跟随会话模型路由，但不继承会话调用的思考等级；未手动指定时按元数据选择最低启用档，仅开关模型取 `off`，不支持思考或元数据不可用时不发送覆盖、沿用模型默认值。折叠异常兜底模型可独立配置并使用相同推荐规则；意图识别兜底模型也支持独立配置思考等级，未配置则使用该模型默认值。
+- **持久 PTC 指引与错误恢复**：强化 PTC 守卫中的 `run_code` 唯一直接调用规则，并补充具体恢复指引：常规调用不传 `sandbox_permissions`/`justification`；将 `Expected ident` 视为提交代码语法错误并先修正，不原样重试；长提示文本采用正确引号转义或序列化。仅在出现时将 `File sandbox` 说明视为执行环境信息，而非错误原因。
 
 ## [1.11.4] — 2026-11-12
 
@@ -167,5 +175,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **兼容下限**：`engines.dsh` 提升至 `>=0.2.2-rc.1`（原 `>=0.2.1-rc.1`）。`cordis.patch.yml` 的四个预设覆盖与 0.2.2-rc.1 出厂预设逐字段一致：`tool-fs` `applyPatch: false`、`tool-fs-search` `sampleOverCapGlobResults: false`、subagent spawn 行 `modelSelection` + `modelDiscovery`、`profileContext` disabled 表达式守卫、无 `list-agents` 行。
 
-[1.11.0]: https://github.com/mrzturn/dsh-switchman/compare/v1.10.3...v1.11.0
+[Unreleased]: https://github.com/mrzturn/dsh-switchman/compare/v1.11.5...HEAD
+[1.11.5]: https://github.com/mrzturn/dsh-switchman/compare/v1.11.4...v1.11.5
+[1.11.4]: https://github.com/mrzturn/dsh-switchman/compare/v1.11.3...v1.11.4
+[1.11.3]: https://github.com/mrzturn/dsh-switchman/compare/v1.11.2...v1.11.3
+[1.11.2]: https://github.com/mrzturn/dsh-switchman/compare/v1.11.1...v1.11.2
+
 [1.11.1]: https://github.com/mrzturn/dsh-switchman/compare/v1.11.0...v1.11.1
