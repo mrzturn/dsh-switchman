@@ -268,11 +268,12 @@ export const Config = z.object({
 	 *  at this percent of the window; cooldown-gated. */
 	trimEmergencyPercent: z.number().min(1).max(100).default(95).volatile(),
 	/** Advisory mode speak line: the model is nudged to fold when pressure
-	 *  reaches this percent of the window (the protocol's own fold line). */
-	trimAdvisoryPercent: z.number().min(1).max(100).default(80).volatile(),
+	 *  reaches this percent of the window (default sits below the protocol's
+	 *  own 80% fold line, nudging while folding headroom is still comfortable). */
+	trimAdvisoryPercent: z.number().min(1).max(100).default(65).volatile(),
 	/** Advisory mode escalation line: at this percent the nudge escalates to a
 	 *  fold-down-this-turn order; must stay above trimAdvisoryPercent (an
-	 *  inverted or out-of-range pair falls back to 80/95). */
+	 *  inverted or out-of-range pair falls back to 65/95). */
 	trimAdvisoryCriticalPercent: z.number().min(1).max(100).default(95).volatile(),
 	/** [2026-11-07]-[growth/increment constants are absolute tokens
 	 *  calibrated for the default 150k effective window]-[scaling

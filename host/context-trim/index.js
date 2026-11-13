@@ -275,16 +275,18 @@ export const TRIM_PROTOCOL_TEXT = [
 	"- Tool-call pairs (an assistant tool call and its results) must always be folded together or not at all.",
 ].join("\n");
 
-// Advisory nudge thresholds: defaults follow the protocol's own 80% fold
-// line, escalating to critical wording at 95%; at most one nudge per session
-// per 10 minutes (an instant re-nudge when the level band changes). Both
-// lines are config-tunable via trimAdvisoryPercent / trimAdvisoryCriticalPercent.
-export const ADVISORY_NUDGE_PERCENT = 80;
+// Advisory nudge thresholds: the default speak line (65%) deliberately sits
+// below the protocol's own 80% fold line so the model is nudged while it
+// still has comfortable headroom; critical wording escalates at 95%. At most
+// one nudge per session per 10 minutes (an instant re-nudge when the level
+// band changes). Both lines are config-tunable via trimAdvisoryPercent /
+// trimAdvisoryCriticalPercent.
+export const ADVISORY_NUDGE_PERCENT = 65;
 export const ADVISORY_NUDGE_CRITICAL_PERCENT = 95;
 export const ADVISORY_NUDGE_REPEAT_MS = 600_000;
 
 /** Effective advisory lines for one dispatch: config-tunable, falling back to
- * the protocol's own 80/95 fold line when absent, inverted, or out of range —
+ * the configured defaults (65/95) when absent, inverted, or out of range —
  * a broken pair never silences the nudge. */
 function advisoryNudgeLines(config) {
 	const line = readNumber(config, "trimAdvisoryPercent", ADVISORY_NUDGE_PERCENT);

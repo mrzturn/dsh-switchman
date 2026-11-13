@@ -279,7 +279,7 @@ window.__ModuleLoader__.load({
 			{ field: 'trimIncrementTokens', min: 1000, def: 25000 },
 			{ field: 'trimPressurePercent', min: 5, max: 100, def: 65 },
 			{ field: 'trimEmergencyPercent', min: 5, max: 100, def: 95 },
-			{ field: 'trimAdvisoryPercent', min: 5, max: 100, def: 80 },
+			{ field: 'trimAdvisoryPercent', min: 5, max: 100, def: 65 },
 			{ field: 'trimAdvisoryCriticalPercent', min: 5, max: 100, def: 95 },
 			{ field: 'trimWindowTokens', min: 0, def: 0 },
 			{ field: 'trimProtectedTail', min: 0, max: 100, def: 10 },

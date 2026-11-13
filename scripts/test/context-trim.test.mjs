@@ -1400,7 +1400,7 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		assert.equal(advisoryNudgeText(83, false), advisoryNudgeText(83, false));
 		const high = advisoryNudgeText(83, false);
 		assert.match(high, /\[SWITCHMAN:TRIM\] Advisory nudge/u);
-		assert.match(high, /At 83% \(fold line 80%\)/u);
+		assert.match(high, /At 83% \(fold line 65%\)/u);
 		assert.match(high, /ctx_trim_status/u);
 		assert.match(high, /ctx_trim_fold/u);
 		const critical = advisoryNudgeText(97, true);
@@ -1423,7 +1423,7 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 			// d2 crosses the line: the head is swapped for a COPY carrying the nudge.
 			const request2 = await dispatch(listener, "sess-nudge-high", 90_000);
 			assert.match(request2.messages[0].content[0].text, /\[SWITCHMAN:TRIM\] Advisory nudge/u);
-			assert.match(request2.messages[0].content[0].text, /At 90% \(fold line 80%\)/u);
+			assert.match(request2.messages[0].content[0].text, /At 90% \(fold line 65%\)/u);
 			assert.ok(request2.messages[0].content[0].text.startsWith(HEAD_TEXT), "the nudge rides after the original head text");
 			assert.match(nudgeRows(cfg).join("\n"), /session=sess-nudge-high advisory-nudge pressure=90% mass=90000 window=100000 level=high/u);
 			// d3 same band inside the repeat window: quiet.
@@ -1496,11 +1496,11 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
 		const sid = "sess-nudge-inverted";
 		try {
-			await dispatch(listener, sid, 70_000); // prime; the NEXT dispatch evaluates 70% — below the default line
-			const r2 = await dispatch(listener, sid, 85_000); // sees 70%: quiet; plants the 85% wire
+			await dispatch(listener, sid, 50_000); // prime; the NEXT dispatch evaluates 50% — below the default line
+			const r2 = await dispatch(listener, sid, 85_000); // sees 50%: quiet; plants the 85% wire
 			assert.equal(r2.messages[0].content[0].text, HEAD_TEXT);
-			const r3 = await dispatch(listener, sid, 85_000); // sees 85% >= default 80% -> speaks with the DEFAULT line
-			assert.match(r3.messages[0].content[0].text, /At 85% \(fold line 80%\)/u);
+			const r3 = await dispatch(listener, sid, 85_000); // sees 85% >= default 65% -> speaks with the DEFAULT line
+			assert.match(r3.messages[0].content[0].text, /At 85% \(fold line 65%\)/u);
 		} finally {
 			rmSync(cfg.trimStateDir, { recursive: true, force: true });
 		}
