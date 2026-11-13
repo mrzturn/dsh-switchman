@@ -170,6 +170,7 @@ test("frozen dispatch: fold commits, turn-stopping appends the surface replace p
 	// excludes the folded range — there is no pending view delta to inject
 	// ("nothing-to-apply"). Pre-fix these read "none": the wire carried the raw
 	// history all the way to the next turn boundary.
+	assert.equal(await poll(() => block.surfaceReplaced !== undefined), true, "stream-path sweep must ship before the frozen re-sends");
 	for (let i = 0; i < 2; i++) {
 		await (async () => { const stream = listener(Object.freeze({ sessionId: "surf-1", messages: Object.freeze(session.deriveMessages()), provider: "p", model: "m" }), async function* () { yield { type: "finish", usage: { input_tokens: 1 } }; }); for await (const c of stream) void c; })();
 	}
