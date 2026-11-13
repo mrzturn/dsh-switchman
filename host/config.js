@@ -267,6 +267,13 @@ export const Config = z.object({
 	/** Emergency tier (tier c): forced MECHANICAL fold (no side-model call)
 	 *  at this percent of the window; cooldown-gated. */
 	trimEmergencyPercent: z.number().min(1).max(100).default(95).volatile(),
+	/** Advisory mode speak line: the model is nudged to fold when pressure
+	 *  reaches this percent of the window (the protocol's own fold line). */
+	trimAdvisoryPercent: z.number().min(1).max(100).default(80).volatile(),
+	/** Advisory mode escalation line: at this percent the nudge escalates to a
+	 *  fold-down-this-turn order; must stay above trimAdvisoryPercent (an
+	 *  inverted or out-of-range pair falls back to 80/95). */
+	trimAdvisoryCriticalPercent: z.number().min(1).max(100).default(95).volatile(),
 	/** [2026-11-07]-[growth/increment constants are absolute tokens
 	 *  calibrated for the default 150k effective window]-[scaling
 	 *  trimWindowTokens down without scaling trimGrowthTokens /

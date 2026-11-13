@@ -653,6 +653,8 @@
         trimIncrementTokens: 25000
         trimPressurePercent: 65
         trimEmergencyPercent: 95
+        trimAdvisoryPercent: 80
+        trimAdvisoryCriticalPercent: 95
         trimWindowTokens: 0
         trimProtectedTail: 10
         trimMaxFoldsPerHour: 30

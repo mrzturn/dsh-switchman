@@ -24,7 +24,8 @@
  *
  * Config fields (host/config.js, all volatile): trimEnabled, trimMode
  * ("off"|"advisory"|"auto"), trimGrowthTokens, trimIncrementTokens,
- * trimPressurePercent, trimEmergencyPercent, trimWindowTokens,
+ * trimPressurePercent, trimEmergencyPercent, trimAdvisoryPercent,
+ * trimAdvisoryCriticalPercent, trimWindowTokens,
  * trimProtectedTail, trimMaxFoldsPerHour, trimSideModel, trimFoldFallbackModel, trimStateDir,
  * trimLadderEnabled, trimLadderT2Tokens, trimLadderT2MinBlocks,
  * trimLadderT3Tokens, trimLadderT3MinBlocks.
@@ -274,12 +275,24 @@ export const TRIM_PROTOCOL_TEXT = [
 	"- Tool-call pairs (an assistant tool call and its results) must always be folded together or not at all.",
 ].join("\n");
 
-// Advisory nudge thresholds: fire at the protocol's own 80% fold line,
-// escalate to critical wording at 95%; at most one nudge per session per
-// 10 minutes (an instant re-nudge when the level band changes).
+// Advisory nudge thresholds: defaults follow the protocol's own 80% fold
+// line, escalating to critical wording at 95%; at most one nudge per session
+// per 10 minutes (an instant re-nudge when the level band changes). Both
+// lines are config-tunable via trimAdvisoryPercent / trimAdvisoryCriticalPercent.
 export const ADVISORY_NUDGE_PERCENT = 80;
 export const ADVISORY_NUDGE_CRITICAL_PERCENT = 95;
 export const ADVISORY_NUDGE_REPEAT_MS = 600_000;
+
+/** Effective advisory lines for one dispatch: config-tunable, falling back to
+ * the protocol's own 80/95 fold line when absent, inverted, or out of range —
+ * a broken pair never silences the nudge. */
+function advisoryNudgeLines(config) {
+	const line = readNumber(config, "trimAdvisoryPercent", ADVISORY_NUDGE_PERCENT);
+	const critical = readNumber(config, "trimAdvisoryCriticalPercent", ADVISORY_NUDGE_CRITICAL_PERCENT);
+	const sane = (v) => Number.isFinite(v) && v > 0 && v <= 100;
+	if (!sane(line) || !sane(critical) || line >= critical) return { line: ADVISORY_NUDGE_PERCENT, critical: ADVISORY_NUDGE_CRITICAL_PERCENT };
+	return { line, critical };
+}
 
 /** The per-dispatch advisory nudge text. Deliberate, bounded exception to
  * the digit-free disclosure policy of TRIM_PROTOCOL_TEXT above: advisory
@@ -288,10 +301,10 @@ export const ADVISORY_NUDGE_REPEAT_MS = 600_000;
  * is the only relief channel — so at a threshold crossing the engine
  * speaks once, with the live number, on the dispatch itself (never in
  * the registered section). */
-export function advisoryNudgeText(pressurePercent, critical) {
+export function advisoryNudgeText(pressurePercent, critical, foldLine = ADVISORY_NUDGE_PERCENT, criticalLine = ADVISORY_NUDGE_CRITICAL_PERCENT) {
 	const action = critical
-		? `Pressure is CRITICAL (${pressurePercent}% ≥ ${ADVISORY_NUDGE_CRITICAL_PERCENT}%): fold down to under ~50% of the context IN THIS TURN.`
-		: `At ${pressurePercent}% (fold line ${ADVISORY_NUDGE_PERCENT}%): 80–89% → fold roughly half of the older history now; ≥90% → fold down to under ~50%.`;
+		? `Pressure is CRITICAL (${pressurePercent}% ≥ ${criticalLine}%): fold down to under ~50% of the context IN THIS TURN.`
+		: `At ${pressurePercent}% (fold line ${foldLine}%): ${foldLine}–${foldLine + 9}% → fold roughly half of the older history now; ≥${foldLine + 10}% → fold down to under ~50%.`;
 	return [
 		'[SWITCHMAN:TRIM] Advisory nudge — active for THIS turn only. The routine "no action expected" default is lifted for this turn.',
 		`Live context pressure on this session has reached the fold line. ${action}`,
@@ -443,19 +456,20 @@ export function applyContextTrim(ctx, config) {
 		const mass = Math.max(Number.isFinite(wire) ? wire : 0, Number.isFinite(viewTokens) ? viewTokens : 0);
 		if (mass <= 0) return;
 		const pressurePercent = (mass / windowTokens) * 100;
-		if (pressurePercent < ADVISORY_NUDGE_PERCENT) {
+		const nudgeLines = advisoryNudgeLines(config);
+		if (pressurePercent < nudgeLines.line) {
 			if (advisoryNudgeBySession.delete(sessionId)) { // episode cleared falling back below the line — log once, not per dispatch
 				decisionLog(`advisory-nudge below-line pressure=${Math.round(pressurePercent)}% mass=${Math.round(mass)} resolved=${cached.windowTokens} cap=${windowCapNow()}`);
 			}
 			return; // fresh episode on the next crossing
 		}
-		const critical = pressurePercent >= ADVISORY_NUDGE_CRITICAL_PERCENT;
+		const critical = pressurePercent >= nudgeLines.critical;
 		const prior = advisoryNudgeBySession.get(sessionId);
 		const now = Date.now();
 		// Any band CHANGE re-speaks immediately: escalation high->critical, and
 		// intentionally also a downgrade back into high after a partial fold.
 		if (prior !== undefined && prior.critical === critical && now - prior.at < ADVISORY_NUDGE_REPEAT_MS) return;
-		const nudge = advisoryNudgeText(Math.round(pressurePercent), critical);
+		const nudge = advisoryNudgeText(Math.round(pressurePercent), critical, nudgeLines.line, nudgeLines.critical);
 		const headCopy = {
 			...head,
 			content: head.content.map((entry) => (entry === block ? { ...entry, text: `${entry.text}\n\n${nudge}` } : entry)),

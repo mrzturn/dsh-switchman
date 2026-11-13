@@ -1463,6 +1463,49 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		}
 	});
 
+	test("custom advisory lines ride the config: speak and escalate at the configured percents", async () => {
+		const { ctx, hooks } = nudgeCtx();
+		const cfg = { ...nudgeConfig(), trimAdvisoryPercent: 50, trimAdvisoryCriticalPercent: 70 };
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const sid = "sess-nudge-custom";
+		try {
+			await dispatch(listener, sid, 40_000); // prime; the NEXT dispatch evaluates 40% — below the custom line
+			const r2 = await dispatch(listener, sid, 55_000); // sees 40%: quiet; plants the 55% wire
+			assert.equal(r2.messages[0].content[0].text, HEAD_TEXT);
+			const r3 = await dispatch(listener, sid, 55_000); // sees 55% >= 50% -> speaks with the custom line
+			assert.match(r3.messages[0].content[0].text, /At 55% \(fold line 50%\)/u);
+			assert.match(r3.messages[0].content[0].text, /50–59%/u);
+			const r4 = await dispatch(listener, sid, 75_000); // sees 55%: same band inside the repeat window -> quiet
+			assert.equal(r4.messages[0].content[0].text, HEAD_TEXT);
+			const r5 = await dispatch(listener, sid, 75_000); // sees 75% >= 70% -> critical, no repeat wait
+			assert.match(r5.messages[0].content[0].text, /CRITICAL \(75% ≥ 70%\)/u);
+			const levels = nudgeRows(cfg).map((line) => (line.includes("level=critical") ? "C" : "H"));
+			assert.deepEqual(levels, ["H", "C"]);
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
+
+	test("an inverted advisory pair falls back to the protocol defaults", async () => {
+		const { ctx, hooks } = nudgeCtx();
+		const cfg = { ...nudgeConfig(), trimAdvisoryPercent: 90, trimAdvisoryCriticalPercent: 80 };
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const sid = "sess-nudge-inverted";
+		try {
+			await dispatch(listener, sid, 70_000); // prime; the NEXT dispatch evaluates 70% — below the default line
+			const r2 = await dispatch(listener, sid, 85_000); // sees 70%: quiet; plants the 85% wire
+			assert.equal(r2.messages[0].content[0].text, HEAD_TEXT);
+			const r3 = await dispatch(listener, sid, 85_000); // sees 85% >= default 80% -> speaks with the DEFAULT line
+			assert.match(r3.messages[0].content[0].text, /At 85% \(fold line 80%\)/u);
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
+
 	test("auto and off modes never nudge, even far past the line", async () => {
 		for (const mode of ["auto", "off"]) {
 			const { ctx, hooks } = nudgeCtx();

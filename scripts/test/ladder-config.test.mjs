@@ -58,6 +58,8 @@ function fullValues(overrides = {}) {
 		trimIncrementTokens: 50000,
 		trimPressurePercent: 60,
 		trimEmergencyPercent: 95,
+		trimAdvisoryPercent: 80,
+		trimAdvisoryCriticalPercent: 95,
 		trimWindowTokens: 0,
 		trimProtectedTail: 6,
 		trimMaxFoldsPerHour: 6,
@@ -104,6 +106,8 @@ test("coerceValues round-trips every trim field the client page sends", () => {
 	assert.equal(coerced.trimIncrementTokens, 50000);
 	assert.equal(coerced.trimPressurePercent, 60);
 	assert.equal(coerced.trimEmergencyPercent, 95);
+	assert.equal(coerced.trimAdvisoryPercent, 80);
+	assert.equal(coerced.trimAdvisoryCriticalPercent, 95);
 	assert.equal(coerced.trimWindowTokens, 0);
 	assert.equal(coerced.trimProtectedTail, 6);
 	assert.equal(coerced.trimMaxFoldsPerHour, 6);
@@ -236,7 +240,6 @@ test("fence equality is key-order insensitive (2026-11-07 phantom-409)", () => {
 		intentCandidates: fenceLeft.intentCandidates.map((c, i) => (i === 0 ? { ...c, id: c.id + "-renamed" } : c)),
 	};
 	assert.equal(sameValues(nested, fenceRight), false, "fence rejects nested field delta");
-assert.equal(sameValues(nested, fenceRight), false, "fence rejects nested field delta");
 });
 
 test("config route serves the snapshot on GET (route-level regression guard)", async () => {
