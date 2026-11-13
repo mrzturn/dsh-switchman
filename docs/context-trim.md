@@ -277,9 +277,13 @@ a same-turn `ctx_trim_fold`. Rules:
 - `off` and `auto` modes never nudge. The lines are config fields
   (`config.js:273-277`); an inverted or out-of-range pair falls back to 65/95
   instead of silencing the nudge (`advisoryNudgeLines`, `index.js:291`).
-- During host handover the options object is frozen and the nudge cannot
-  attach (`skip why=frozen-dispatch`) — the handover compaction itself is the
-  fold.
+- Some hosts freeze the assembled request on EVERY dispatch (the current agent
+  loop deep-freezes its requests), not only during handover — there the nudge
+  can never attach (every attempt logs `skip why=frozen-dispatch`) and advisory
+  mode degrades to the `ctx_trim_fold`/`ctx_trim_status` tools alone. Where the
+  fold tools are not exposed to the session model either, `auto` mode's
+  engine-side folds are the only working automatic path; the handover
+  compaction remains the backstop.
 
 Every exit is visible in `decisions.log` (vocabulary below):
 `advisory-nudge pressure=… level=…`, `advisory-nudge skip why=…`, and
