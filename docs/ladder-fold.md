@@ -151,6 +151,7 @@ meaning; epoch detection (`ledgerIsStale`) unchanged.
   message refs; drop process, repetition, settled details; same language as
   the material; output only the summary. The output replaces its inputs
   permanently — say so.
+- Ladder calls share the configured summary side-model route and its model-aware effort policy; they do not inherit the session step's effort as an implicit pin.
 - Ladder folds never run mechanically: if the side model is unavailable the
   cycle skips and the failure ladder backs off (emergency relief remains a
   raw-material mechanical T1 — mechanical summary-of-summaries reclaims

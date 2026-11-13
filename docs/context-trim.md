@@ -353,4 +353,13 @@ deterministic view rebuild, protected tail, tool-pair-balanced fold boundaries,
 cadence throttle, host-compaction epoch re-anchoring, and unconditional
 fail-open on internal errors (degrade to pass-through, never a broken request).
 Fork inheritance of fold state (copy-on-fork, idempotent) is likewise
+Fork inheritance of fold state (copy-on-fork, idempotent) is likewise
 unchanged.
+
+## Model routing and reasoning effort
+
+The summary side model is routed independently from the session's active call. When `trimSideModel` is unset, the summary route follows the session's provider and model, but it does not inherit that call's `reasoningEffort`. An explicit effort pin takes precedence; otherwise, the resolver uses model capability metadata to select the lowest enabled reasoning level. A model exposing only a thinking on/off switch resolves to `off`. If reasoning is unsupported or the metadata is unavailable, no effort override is sent and the model's adapter default remains in force.
+
+A configured `trimFoldFallbackModel` has its own effort pin. When that pin is unset, the same model-aware recommendation is applied to the fallback route; it does not reuse the summary model's selected level. If both summary and fallback calls fail, the pressure fold degrades to a mechanical fold. T2/T3 ladder distillations use the summary route and this same effort policy; they do not have a separate model route or inherit an effort from the triggering session step.
+
+Intent-recognition fallback routing is separate from context-trim routing: `intentFallbackRoute` carries its own optional effort pin, and an unset pin leaves the selected fallback model's default effort in place. It does not inherit the classifier route's `intentClassifierEffort`.

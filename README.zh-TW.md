@@ -33,7 +33,7 @@ dsh-switchman 是一個 [DeepSeek Harness](https://github.com/deepseek-ai/deepse
 
 **7. `/vision`：純文字模型也能處理圖。** 主力模型讀不了圖時，DSH 會在入口直接拒掉帶圖訊息。貼上圖、輸入 `/vision 這張圖錯在哪`，圖片會被交給多模態池的模型去讀，結論回到目前對話。輸入框上方會提前提示「目前模型不支援讀圖」；直接傳圖被拒時，自動改寫成 `/vision` 重送一次，不用手動重來；多模態池沒設時指令會拒絕並給出設定指引。
 
-**8. 意圖識別自動選模型：訊息進來，模型自動落位。** 設定頁新增【意圖識別】分組：主開關（預設關閉，開啟需設定分類器並至少一個候選）、分類器小模型路由（provider + model + 可選 effort，TypeSafe Jev 類決策模型與通用對話模型都支援，輸出寬容解析）、分類器類型三選（auto / decision / chat）、獨立候選模型清單（每個候選 provider + model + 可選 effort + 一句能力描述）、快取視窗秒數（預設 300，對齊廠商 prompt cache 約 5 分鐘）、切換信心閾值（預設 80）、分類逾時（預設 60000ms）、歷史訊息則數（預設 6）與字元預算（預設 2400）、可選備援模型。模型選擇器出現「Auto · Switchman」分組下的「Auto」入口（用戶端渲染為在地化的「自動（意圖識別）」）；選中後每條使用者訊息先由分類器判定最合適的候選，同一輪鎖定決策：信心不足或仍在快取視窗內時優先沿用目前模型（快取續用），信心足夠高或目前模型不在候選裡才切換；切換在呼叫層靜默完成，不往對話裡插「模型已切換」。輸入框上方有狀態 chip（自動路由時顯示目前路由模型與上次決策信心），候選與閾值隨時回設定頁查看。
+**8. 意圖識別自動選模型：訊息進來，模型自動落位。** 設定頁新增【意圖識別】分組：主開關（預設關閉，開啟需設定分類器並至少一個候選）、分類器小模型路由（provider + model + 可選 effort，TypeSafe Jev 類決策模型與通用對話模型都支援，輸出寬容解析）、分類器類型三選（auto / decision / chat）、獨立候選模型清單（每個候選 provider + model + 可選 effort + 一句能力描述）、快取視窗秒數（預設 300，對齊廠商 prompt cache 約 5 分鐘）、切換信心閾值（預設 80）、分類逾時（預設 60000ms）、歷史訊息則數（預設 6）與字元預算（預設 2400）、可選備援模型（可獨立固定可選 effort；未固定時使用所選備援模型的預設 effort，與分類器 effort 分開）。模型選擇器出現「Auto · Switchman」分組下的「Auto」入口（用戶端渲染為在地化的「自動（意圖識別）」）；選中後每條使用者訊息先由分類器判定最合適的候選，同一輪鎖定決策：信心不足或仍在快取視窗內時優先沿用目前模型（快取續用），信心足夠高或目前模型不在候選裡才切換；切換在呼叫層靜默完成，不往對話裡插「模型已切換」。輸入框上方有狀態 chip（自動路由時顯示目前路由模型與上次決策信心），候選與閾值隨時回設定頁查看。
 
 只有一個模型也值得裝——水位控制和分級驗證與模型數量無關，單模型長對話同樣受益。
 
@@ -129,8 +129,8 @@ bash <安裝目錄>/skills/db-query/scripts/setup.sh
 | `trimWindowTokens` | `0` | 視窗上限：壓力與緊急檔按 min(模型視窗, 上限) 計算。`0` = 跟隨 `wmForceTokens`。 |
 | `trimProtectedTail` | `10` | 最後 N 則訊息永不折疊。 |
 | `trimMaxFoldsPerHour` | `30` | 每滾動小時 side model 折疊的節奏上限（緊急級豁免）。 |
-| `trimSideModel` | 未設定 | 寫摘要的 side model 路由。留空 = 繼承對話目前模型。 |
-| `trimFoldFallbackModel` | 未設定 | 摘要 side model 失敗時摺疊改用的重試路由；壓力檔仍失敗則退回機械摺疊。留空 = 無備援。盡量選擇冷卻、風控與並行餘量充足的路由。 |
+| `trimSideModel` | 未設定 | 寫摘要的 side model 路由。留空 = 跟隨對話目前 provider/model，不繼承呼叫的 effort；ladder distillation 也使用此路由。摘要 effort 可獨立手動固定；未固定時依模型 metadata 建議最低啟用的 reasoning 層級，僅有開/關選項時選 off。不支援 reasoning 或 metadata 不可用時不傳 effort，沿用模型/配接器預設行為。 |
+| `trimFoldFallbackModel` | 未設定 | 摘要 side model 失敗時摺疊改用的重試路由；壓力檔仍失敗則退回機械摺疊。留空 = 無備援。手動選擇的折疊備援模型可獨立固定 effort；未設定時依與摘要模型相同的模型 metadata 規則建議，metadata 缺失則使用該模型預設值。盡量選擇冷卻、風控與並行餘量充足的路由。 |
 | `trimStateDir` | 未設定 | 折疊狀態目錄覆蓋。留空 = `<dshHome>/.dsh-switchman/state/trim/`。 |
 | `surfaceFold` | `true` | 把已提交的 fold 送上對話表面（shadow-price 計量事件 + `surfaceOp` replace 事件對）。關閉則維持僅拼接的 view。 |
 

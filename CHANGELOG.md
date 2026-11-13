@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 格式参照 Keep a Changelog;版本遵循语义化版本。
 
+## [Unreleased]
+
+### English
+
+#### Changed
+
+- **Model-aware reasoning-effort routing**: summary folds and T2/T3 distillations follow the session model route without inheriting the session call's effort; when unpinned they choose the lowest enabled reasoning level, use `off` for toggle-only models, and leave the model default intact when reasoning is unsupported or metadata is unavailable. Fold-fallback routes receive an independent pin with the same recommendation. Intent-recognition fallback routes now also accept an independent effort pin and otherwise use the selected model's default.
+
+### 中文
+
+#### 变更
+
+- **思考等级路由**：摘要折叠与 T2/T3 阶梯蒸馏跟随会话模型路由，但不继承会话调用的思考等级；未手动指定时按元数据选择最低启用档，仅开关模型取 `off`，不支持思考或元数据不可用时不发送覆盖、沿用模型默认值。折叠异常兜底模型可独立配置并使用相同推荐规则；意图识别兜底模型也支持独立配置思考等级，未配置则使用该模型默认值。
+
 ## [1.11.4] — 2026-11-12
 
 ### English
