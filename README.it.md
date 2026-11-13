@@ -102,7 +102,7 @@ Questi sono tutti i valori così come si presentano dopo una nuova installazione
 
 **Instradamento per intent** (non disponibile per predefinito; servono classificatore + almeno un candidato + l'interruttore principale): `intentEnabled` = spento (spento, la voce Auto resta nascosta e le sessioni che l'avevano già scelta percorrono la catena di fallback); route del classificatore non impostata; tipo di classificatore `chat`; lista dei candidati vuota (le categorie preinstallate entrano nell'instradamento solo con un modello assegnato); finestra di cache `300` s / soglia di confidenza del cambio `80` / timeout di classificazione `60000` ms; cronologia di `6` messaggi / `2400` caratteri; `intentContextWindow` = `200000`.
 
-**Trim del contesto**: `trimEnabled` = acceso; `trimMode` = `auto` (del tutto automatico); cancello di crescita `22500` + incremento `25000` token; pressione `65%` / emergenza `95%`; coda protetta `10` messaggi; tetto di cadenza dei fold `30` all'ora; modello secondario non impostato (eredita il modello della sessione) — dettagli nella sezione «Trim automatico del contesto» più sotto.
+**Trim del contesto**: `trimEnabled` = acceso; `trimMode` = `auto` (del tutto automatico); cancello di crescita `22500` + incremento `25000` token; pressione `65%` / emergenza `95%`; avvisi advisory `65%` / `95%`; coda protetta `10` messaggi; tetto di cadenza dei fold `30` all'ora; modello secondario non impostato (eredita il modello della sessione) — dettagli nella sezione «Trim automatico del contesto» più sotto.
 
 **Note di serie**: ① l'instradamento per intent non disponibile di serie è una scelta voluta — tre passi per attivarlo (classificatore, candidati, interruttore); ② la finestra effettiva di Auto vale di serie 200000 — la barriera di sicurezza garantisce 0.8×finestra ≥ force (150000), così la linea di compattazione del cuore (160000) resta sempre dopo la linea di consegna morbida (150000); ③ di serie la cosa più percettibile è il terzetto di soglie: 80k ricorda di delegare / 95k stringe la lettura / 150k consegna da sola (documento + compattazione) — senza alcuna impostazione.
 
@@ -113,7 +113,7 @@ Le sessioni lunghe restano economiche: le porzioni di conversazione già consuma
 Livelli di automazione (`trimMode`):
 
 - **`off`** — solo misura: il campionamento di uso e hit di cache continua; niente banner, niente fold.
-- **`advisory`** — il modello della sessione si ripiega da sé: vengono esposti gli strumenti `ctx_trim_fold` e `ctx_trim_status` più l'intestazione di protocollo.
+- **`advisory`** — il modello della sessione si ripiega da sé: vengono esposti gli strumenti `ctx_trim_fold` e `ctx_trim_status` più l'intestazione di protocollo. Quando la pressione della sessione raggiunge `trimAdvisoryPercent` della finestra effettiva, il motore aggiunge all'intestazione di sistema del dispatch un sollecito di ripiegamento monouso — ripetuto immediatamente all'escalation a critical, rimosso quando la pressione rientra sotto la linea.
 - **`auto`** (predefinito) — tutto quanto sopra più fold automatici al confine di inattività, su tre scalini: un cancello di crescita (crescita > `trimGrowthTokens` misurata dal minimo post-ripiegamento dell'ultimo fold — l'ancora che mantiene il cancello armato dopo ripiegamenti confermati su punti alti della view — E un incremento comprimibile contiguo ≥ `trimIncrementTokens`), uno scalino di pressione (`trimPressurePercent` della finestra di contesto) e uno scalino di emergenza (`trimEmergencyPercent` — un fold meccanico con il proprio raffreddamento).
 
 Tutte le chiavi stanno in Impostazioni → dsh-switchman; i valori predefiniti vengono da `host/config.js`:
@@ -126,6 +126,8 @@ Tutte le chiavi stanno in Impostazioni → dsh-switchman; i valori predefiniti v
 | `trimIncrementTokens` | `25000` | Compagno del cancello: anche l'incremento comprimibile contiguo deve raggiungere questa taglia. |
 | `trimPressurePercent` | `65` | Scalino di pressione: ripiega quando l'uso della view raggiunge questa percentuale della finestra di contesto. |
 | `trimEmergencyPercent` | `95` | Scalino di emergenza: fold meccanico forzato (nessuna chiamata al modello secondario) a questa percentuale. |
+| `trimAdvisoryPercent` | `65` | Linea di sollecito advisory: a questa percentuale della finestra effettiva il motore invita il modello a ripiegare subito con `ctx_trim_fold` (solo modalità advisory). |
+| `trimAdvisoryCriticalPercent` | `95` | Linea critica: al raggiungimento ripete subito il sollecito, bypassando il throttle di 10 minuti sulla stessa fascia. |
 | `trimWindowTokens` | `0` | Limite di finestra effettivo per il calcolo delle soglie: calcolato su min(finestra del modello, limite). `0` = segue `wmForceTokens`. |
 | `trimProtectedTail` | `10` | Gli ultimi N messaggi non vengono mai ripiegati. |
 | `trimMaxFoldsPerHour` | `30` | Tetto di cadenza dei fold per ora mobile per il modello secondario (quelli di emergenza ne sono esenti). |

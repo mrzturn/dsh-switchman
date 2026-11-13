@@ -102,7 +102,7 @@ Alles Folgende sind die vollständigen Werte direkt nach der Neuinstallation (ma
 
 **Intent-Routing** (ab Werk unbrauchbar; nötig sind Klassifikator + mindestens ein Kandidat + der Hauptschalter): `intentEnabled` = aus (ist er aus, bleibt der Auto-Eintrag verborgen, und Sessions, die bereits Auto gewählt hatten, laufen über die Fallback-Kette); Klassifikator-Route nicht gesetzt; Klassifikatortyp `chat`; Kandidatenliste leer (die mitgelieferten Kategorien nehmen erst mit eingetragenem Modell am Routing teil); Cache-Fenster `300` s / Umschalt-Vertrauensschwelle `80` / Klassifikations-Timeout `60000` ms; Verlauf `6` Nachrichten / `2400` Zeichen; `intentContextWindow` = `200000`.
 
-**Kontext-Trimming**: `trimEnabled` = an; `trimMode` = `auto` (vollautomatisch); Wachstumsschwelle `22500` + Zuwachs `25000` Tokens; Druck `65%` / Notfall `95%`; geschütztes Ende `10` Nachrichten; Fold-Takt-Obergrenze `30` pro Stunde; Nebenmodell nicht gesetzt (erbt das Session-Modell) — Details im Abschnitt „Automatisches Kontext-Trimming“ unten.
+**Kontext-Trimming**: `trimEnabled` = an; `trimMode` = `auto` (vollautomatisch); Wachstumsschwelle `22500` + Zuwachs `25000` Tokens; Druck `65%` / Notfall `95%`; Advisory-Hinweis `65%` / `95%`; geschütztes Ende `10` Nachrichten; Fold-Takt-Obergrenze `30` pro Stunde; Nebenmodell nicht gesetzt (erbt das Session-Modell) — Details im Abschnitt „Automatisches Kontext-Trimming“ unten.
 
 **Out-of-the-Box-Anmerkungen**: ① dass Intent-Routing ab Werk unbrauchbar ist, ist Absicht — drei Schritte zum Einschalten (Klassifikator, Kandidaten, Schalter); ② das wirksame Auto-Fenster steht ab Werk auf 200000 — die Leitplanke garantiert 0.8×Fenster ≥ force (150000), die Kern-Komprimierlinie (160000) liegt also stets hinter der Linie der weichen Übergabe (150000); ③ am spürbarsten ab Werk ist das Wasserstands-Trio: 80k mahnt zur Delegation / 95k strafft das Lesen / 150k übergibt automatisch (Dokument schreiben + Komprimierung) — ganz ohne Einstellungen.
 
@@ -113,7 +113,7 @@ Lange Sessions bleiben günstig: verarbeitete Gesprächsbereiche werden zu kompa
 Automatisierungsstufen (`trimMode`):
 
 - **`off`** — nur messen: Usage- und Cache-Hit-Sampling läuft weiter; kein Banner, keine Folds.
-- **`advisory`** — das Session-Modell faltet selbst: die Tools `ctx_trim_fold` und `ctx_trim_status` plus der Protokollkopf werden dafür freigegeben.
+- **`advisory`** — das Session-Modell faltet selbst: die Tools `ctx_trim_fold` und `ctx_trim_status` plus der Protokollkopf werden dafür freigegeben. Erreicht der Sitzungsdruck `trimAdvisoryPercent` des effektiven Fensters, hängt die Engine dem Systemkopf des Dispatchs einen einmaligen Fold-Hinweis an — bei Eskalation auf critical sofort erneut, unterhalb der Linie wieder entfernt.
 - **`auto`** (Standard) — alles darüber hinaus plus automatische Folds an der Leerlauf-Grenze, in drei Stufen: eine Wachstumsschwelle (Zuwachs > `trimGrowthTokens`, gemessen ab dem Tiefpunkt nach dem letzten Fold — der Anker, der die Schwelle nach Folds auf hohem View-Stand scharf hält — UND ein zusammenhängender komprimierbarer Zuwachs ≥ `trimIncrementTokens`), eine Druckstufe (`trimPressurePercent` des Kontextfensters) und eine Notfallstufe (`trimEmergencyPercent` — ein mechanischer Fold mit eigener Abklingzeit).
 
 Alle Schlüssel liegen unter Einstellungen → dsh-switchman; Defaults aus `host/config.js`:
@@ -126,6 +126,8 @@ Alle Schlüssel liegen unter Einstellungen → dsh-switchman; Defaults aus `host
 | `trimIncrementTokens` | `25000` | Schwellen-Begleiter: der zusammenhängende komprimierbare Zuwachs muss ebenfalls diese Größe erreichen. |
 | `trimPressurePercent` | `65` | Druckstufe: falte, wenn die View-Nutzung diesen Prozentsatz des Kontextfensters erreicht. |
 | `trimEmergencyPercent` | `95` | Notfallstufe: erzwungener mechanischer Fold (kein Nebenmodell-Aufruf) bei diesem Prozentsatz. |
+| `trimAdvisoryPercent` | `65` | Advisory-Hinweislinie: bei diesem Prozent des effektiven Fensters erinnert die Engine das Modell, sofort mit `ctx_trim_fold` zu falten (nur advisory-Modus). |
+| `trimAdvisoryCriticalPercent` | `95` | Critical-Hinweislinie: bei Erreichen sofort erneuter Hinweis, umgeht das 10-Minuten-Throttling derselben Stufe. |
 | `trimWindowTokens` | `0` | Effektives Fensterlimit für die Stufenberechnung: gerechnet gegen min(Modellfenster, Limit). `0` = folgt `wmForceTokens`. |
 | `trimProtectedTail` | `10` | Die letzten N Nachrichten werden nie gefaltet. |
 | `trimMaxFoldsPerHour` | `30` | Fold-Takt-Obergrenze pro rollierender Stunde für Nebenmodell-Folds (Notfall-Folds ausgenommen). |

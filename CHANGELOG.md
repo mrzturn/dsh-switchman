@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.5] — 2026-11-13
+
 ### English
 
 #### Added
@@ -15,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - context-trim: advisory mode now speaks at the pressure line. When session pressure reaches ≥80% of the model window, the engine appends a one-off nudge to the dispatch's system head telling the model to fold now with ctx_trim_fold — at most one per 10 minutes, re-sent immediately on escalation to critical (≥95%), cleared once pressure drops below the line. The registered protocol head stays byte-stable; off and auto modes never nudge; the window is read from the sync cache (an async warm-up fills it for the next dispatch).
 - context-trim: advisory-nudge silence is now observable in decisions.log — every skip exit carries a `skip why=` row (no-captured-model, bad-model-shape, window-unknown, frozen-dispatch), a successful nudge logs `advisory-nudge pressure=… level=…`, an episode clearing back below the line logs one `below-line` row, and window resolution logs `window-resolved key=… window=…` once per 10-min cache window, symmetric to the existing `window-resolve-failed` row.
 - context-trim: the advisory nudge lines are now config fields — `trimAdvisoryPercent` (default `65`, deliberately below the protocol's own 80% line so the nudge lands while folding headroom is still comfortable) and `trimAdvisoryCriticalPercent` (default `95`) follow the `trimPressurePercent`/`trimEmergencyPercent` pattern; an inverted or out-of-range pair falls back to 65/95 instead of silencing the nudge. Note: the settings save fence requires every registered field — refresh the web client after upgrading so the new fields are sent.
+
+#### Changed
+- **Model-aware reasoning-effort routing**: summary folds and T2/T3 distillations follow the session model route without inheriting the session call's effort; when unpinned they choose the lowest enabled reasoning level, use `off` for toggle-only models, and leave the model default intact when reasoning is unsupported or metadata is unavailable. Fold-fallback routes receive an independent pin with the same recommendation. Intent-recognition fallback routes now also accept an independent effort pin and otherwise use the selected model's default.
+- **Persistent PTC guidance and error recovery**: reinforces the PTC guard's `run_code`-only invocation rule and adds concrete recovery guidance: omit `sandbox_permissions` and `justification` in routine calls; treat `Expected ident` as submitted-code syntax and correct it rather than replaying unchanged; safely quote or serialize long prompt text. When present, `File sandbox` notes describe execution context, not the cause.
+- **Factory presets re-synced to shipped dsh 0.2.2-rc.2**: the standard/ptc/cordis preset patches match the installed app's factory plugin lists again — the new `tool-office` entry (standard/ptc), `dsh-skill-filesystem` + `customSkillDirs` (js expression), `dsh-tool-subagent-control` with `interrupt: false`, and the re-applied cordis persona suffix. Snapshot fixtures refreshed via `scripts/snapshot-presets.mjs` (snapshot.json now dsh 0.2.2-rc.2), so `validate.mjs` passes against the upgraded app again.
+
 #### Fixed
 - context-trim: raw folds no longer re-absorb the previous fold's summary. Once a fold ships, its frontier ref is shadowed off the live surface, so the foldable-range start silently slid onto the relocated `acp_summary_*` node and every later fold swallowed the prior summary (rolling absorb). Range selection now skips summary segments and never bridges a span across one; `ctx_trim_fold` rejects ranges covering a summary. Summaries persist and consolidate only through ladder T2/T3 distillation.
 - context-trim: window resolution now follows the host contract `resolveModelInfo(provider, model)` — passing the model object threw NO_ADAPTER on every route, so every fold decision silently ran on the 150k cap fallback. The lookup is raced against a 10s ceiling, and a fold cycle wedged longer than 5 minutes (above the summarizer's own worst case of 2 x 120s) logs an `outcome=cycle-stuck` decision row and releases its lock, so one never-settling await can no longer silence a session's fold path until restart; a watchdog-superseded cycle returns `superseded` at its commit guard instead of committing. Resolution failures surface as `window-resolve-failed` rows. Behavior note: routes whose REAL context window is below the 150k cap (e.g. 128k) now compute pressure tiers against the real window — folds may trigger earlier than before.
@@ -27,25 +35,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - context-trim:advisory-nudge 的静默路径现在在 decisions.log 可观测——每个跳过出口都有 `skip why=` 行(no-captured-model、bad-model-shape、window-unknown、frozen-dispatch),成功触发记录 `advisory-nudge pressure=… level=…`,episode 回落到线下时记一条 `below-line`,窗口解析每 10 分钟缓存窗口记一条 `window-resolved key=… window=…`,与既有 `window-resolve-failed` 对称。
 - context-trim:advisory 提醒线现在是配置项——`trimAdvisoryPercent`(默认 `65`,刻意低于协议自身的 80% 折线,让提醒落在还有充足折叠余量的位置)与 `trimAdvisoryCriticalPercent`(默认 `95`)沿用 `trimPressurePercent`/`trimEmergencyPercent` 的模式;倒置或越界的配置对回退到 65/95,不会静默掉提醒。升级后请刷新 Web 客户端再保存设置——写入门栅要求所有已注册字段。
 
+#### 变更
+- **思考等级路由**：摘要折叠与 T2/T3 阶梯蒸馏跟随会话模型路由，但不继承会话调用的思考等级；未手动指定时按元数据选择最低启用档，仅开关模型取 `off`，不支持思考或元数据不可用时不发送覆盖、沿用模型默认值。折叠异常兜底模型可独立配置并使用相同推荐规则；意图识别兜底模型也支持独立配置思考等级，未配置则使用该模型默认值。
+- **持久 PTC 指引与错误恢复**：强化 PTC 守卫中的 `run_code` 唯一直接调用规则，并补充具体恢复指引：常规调用不传 `sandbox_permissions`/`justification`；将 `Expected ident` 视为提交代码语法错误并先修正，不原样重试；长提示文本采用正确引号转义或序列化。仅在出现时将 `File sandbox` 说明视为执行环境信息，而非错误原因。
+- **出厂预设重新同步到装机版 dsh 0.2.2-rc.2**：standard/ptc/cordis 三个预设补丁重新对齐装机 app 的出厂插件列表——新增 `tool-office` 条目（standard/ptc）、`dsh-skill-filesystem` + `customSkillDirs`（js 表达式）、`dsh-tool-subagent-control` 的 `interrupt: false`，并重新附加 cordis persona 后缀。快照 fixtures 经 `scripts/snapshot-presets.mjs` 刷新（snapshot.json 现为 dsh 0.2.2-rc.2），升级后的 app 上 `validate.mjs` 恢复通过。
+
 #### 修复
 - context-trim:raw 折叠不再吞掉上一次折叠的摘要。折叠落地后 frontier 引用即被 shadow,可折叠范围起点会滑到重定位后的 `acp_summary_*` 节点上,导致每次折叠都吸收上一份摘要(滚动吸收)。范围选择现在跳过摘要 segment 且绝不跨摘要拼接跨度;`ctx_trim_fold` 拒绝覆盖摘要的范围。摘要持久保留,仅通过 T2/T3 阶梯蒸馏合并。
 - context-trim:窗口解析改按宿主契约 `resolveModelInfo(provider, model)` 传两个字符串——此前传整个 model 对象导致每条路由都抛 NO_ADAPTER,所有折叠决策一直静默回退到 150k cap。解析加 10s 硬超时;折叠循环卡住超过 5 分钟(高于摘要器自身 2 x 120s 的最坏合法耗时)会写入 `outcome=cycle-stuck` 决策行并释放锁,单个永不 settle 的 await 不再让会话的折叠路径静默到重启;被看门狗接管的过期循环在提交守卫处返回 `superseded`,不再落地。解析失败以 `window-resolve-failed` 行呈现。行为说明:真实上下文窗口低于 150k cap 的路由(如 128k)现在按真实窗口计算压力阶梯——折叠可能比以前更早触发。
 
-## [1.11.5] — 2026-11-13
-
-### English
-
-#### Changed
-
-- **Model-aware reasoning-effort routing**: summary folds and T2/T3 distillations follow the session model route without inheriting the session call's effort; when unpinned they choose the lowest enabled reasoning level, use `off` for toggle-only models, and leave the model default intact when reasoning is unsupported or metadata is unavailable. Fold-fallback routes receive an independent pin with the same recommendation. Intent-recognition fallback routes now also accept an independent effort pin and otherwise use the selected model's default.
-- **Persistent PTC guidance and error recovery**: reinforces the PTC guard's `run_code`-only invocation rule and adds concrete recovery guidance: omit `sandbox_permissions` and `justification` in routine calls; treat `Expected ident` as submitted-code syntax and correct it rather than replaying unchanged; safely quote or serialize long prompt text. When present, `File sandbox` notes describe execution context, not the cause.
-
-### 中文
-
-#### 变更
-
-- **思考等级路由**：摘要折叠与 T2/T3 阶梯蒸馏跟随会话模型路由，但不继承会话调用的思考等级；未手动指定时按元数据选择最低启用档，仅开关模型取 `off`，不支持思考或元数据不可用时不发送覆盖、沿用模型默认值。折叠异常兜底模型可独立配置并使用相同推荐规则；意图识别兜底模型也支持独立配置思考等级，未配置则使用该模型默认值。
-- **持久 PTC 指引与错误恢复**：强化 PTC 守卫中的 `run_code` 唯一直接调用规则，并补充具体恢复指引：常规调用不传 `sandbox_permissions`/`justification`；将 `Expected ident` 视为提交代码语法错误并先修正，不原样重试；长提示文本采用正确引号转义或序列化。仅在出现时将 `File sandbox` 说明视为执行环境信息，而非错误原因。
 
 ## [1.11.4] — 2026-11-12
 

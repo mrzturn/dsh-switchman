@@ -250,6 +250,7 @@ any fold; they fire only when the raw tiers stay quiet.
 | Hourly cap | 30 side-model folds per rolling hour | `trigger.js:130-132`, `config.js:277` | emergency exempt: evaluated before the cap AND before the 60 s min-interval (it has its own 90 s cooldown) |
 | Protected tail | 10 messages | `trigger.js:56-59`, `config.js:270` | never folded |
 | Window | model-resolved (150000 for deepseek-flash), capped by `trimWindowTokens` (0 ⇒ `wmForceTokens`) | `index.js:525-530`, `index.js:548-568` | `null` disables pressure/emergency tiers |
+| Advisory nudge lines | speak ≥ `trimAdvisoryPercent` (65), re-speak ≥ `trimAdvisoryCriticalPercent` (95); inverted/out-of-range pair ⇒ fall back to 65/95 | `index.js:286-297`, `config.js:273-277` | advisory mode only; same-band 10-min throttle `ADVISORY_NUDGE_REPEAT_MS` |
 | Fold-failure backoff | 60 s × 2^(n−1), 15 min ceiling | `index.js:323-324` | failures advance no cadence gate |
 
 Which gate binds: at a 150k window the 65% pressure line (97.5k wire) sits well
@@ -257,6 +258,32 @@ above the ~64-67k wire point where the growth gate's 25000 increment is reached,
 growth fires first in the normal case and pressure pins the ceiling. The 25000
 increment floor is the binding constraint, not the 22500 growth delta.
 
+## Advisory-mode pressure nudge
+
+In `advisory` mode the session model is the fold driver, so the engine
+deliberately breaks the auto-mode silence rule there: when `max(view, wire)`
+reaches `trimAdvisoryPercent` (default `65`) of the effective window
+(`min(model window, trimWindowTokens || wmForceTokens)`), the engine appends a
+one-off `[SWITCHMAN:TRIM]` nudge AFTER the registered protocol head — the head
+itself stays byte-stable, so the cached prefix is unaffected. The nudge states
+the current pressure and the fold line ("At 83% (fold line 65%)") and asks for
+a same-turn `ctx_trim_fold`. Rules:
+
+- Same-band throttle: one nudge per band (`high`/`critical`) per 10 minutes
+  (`ADVISORY_NUDGE_REPEAT_MS`, `index.js:286`); crossing into critical
+  (`trimAdvisoryCriticalPercent`, default `95`) re-speaks immediately.
+- Falling below the line closes the episode (one throttled `below-line` row);
+  the next crossing speaks again.
+- `off` and `auto` modes never nudge. The lines are config fields
+  (`config.js:273-277`); an inverted or out-of-range pair falls back to 65/95
+  instead of silencing the nudge (`advisoryNudgeLines`, `index.js:291`).
+- During host handover the options object is frozen and the nudge cannot
+  attach (`skip why=frozen-dispatch`) — the handover compaction itself is the
+  fold.
+
+Every exit is visible in `decisions.log` (vocabulary below):
+`advisory-nudge pressure=… level=…`, `advisory-nudge skip why=…`, and
+`advisory-nudge below-line …`.
 ## decisions.log vocabulary
 
 One line per decision in `<trimStateDir>/decisions.log`: ISO timestamp followed
@@ -273,6 +300,10 @@ Operators diagnose from these rows:
 | ship skip | `surface-replace skipped reason=<…> via=<…> [block=<id>]` | deduplicated; reasons listed above |
 | guard | `side-dispatch skipped n=<n> msgs=<n> view=<n> blocks=<n>` | auxiliary llm call ignored |
 | epoch | `ledger-stale blocks=<n> view=<n> growth-baseline-reset` | host compaction aged the whole ledger out |
+| advisory nudge | `advisory-nudge pressure=<p>% mass=<n> window=<n> level=<high\|critical>` | one-off fold nudge appended to the dispatch system head (advisory mode only) |
+| advisory nudge skip | `advisory-nudge skip why=<no-captured-model\|bad-model-shape\|window-unknown\|frozen-dispatch> [pressure=<p>%]` | the nudge could not attach on this dispatch |
+| advisory nudge clear | `advisory-nudge below-line pressure=<p>% mass=<n> resolved=<n> cap=<n>` | pressure fell back below the line; the nudge episode closed |
+| window resolve | `window-resolved key=<provider/model> window=<n>` | model window resolved, once per 10-min cache window, symmetric to `window-resolve-failed` |
 
 `reason=` values emitted by the trigger (`trigger.js`): `nothing-foldable`,
 `empty-increment`, `usage <p>% >= <emergency>%` or `emergency-cooldown`,
@@ -328,7 +359,7 @@ all.
   tokens / % of window / folds / growth) is GONE — the engine never reports
   sizes or progress to the model (docs/ladder-fold.md). The human reads
   `decisions.log` and the client badge. The task-intent line (the first user
-  message) is protected from folding.
+  message) is protected from folding. The advisory-mode pressure nudge (see the section below) is the deliberate exception: in advisory mode the model drives the fold, so the engine does tell it the pressure and the fold line.
 
 ## What the current design supersedes
 
