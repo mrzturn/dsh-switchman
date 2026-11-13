@@ -350,6 +350,7 @@ window.__ModuleLoader__.load({
 			'trimMode',
 			'trimEnabled',
 			'trimLadderEnabled',
+			'trimProtectTaskIntent',
 			'surfaceFold',
 			'trimSideModel',
 			'trimFoldFallbackModel',
@@ -529,6 +530,7 @@ window.__ModuleLoader__.load({
 					: 'auto',
 				trimEnabled: bool('trimEnabled', true),
 				trimLadderEnabled: bool('trimLadderEnabled', true),
+				trimProtectTaskIntent: bool('trimProtectTaskIntent', true),
 				surfaceFold: bool('surfaceFold', true),
 				trimSideModel:
 					sanitizeRoute(value?.trimSideModel, true) ??
@@ -617,6 +619,7 @@ window.__ModuleLoader__.load({
 				trimMode: values.trimMode,
 				trimEnabled: values.trimEnabled,
 				trimLadderEnabled: values.trimLadderEnabled,
+				trimProtectTaskIntent: values.trimProtectTaskIntent,
 				surfaceFold: values.surfaceFold,
 				trimSideModel: `${routeKey(values.trimSideModel)}\0${values.trimSideModel.effort ?? ''}`,
 				trimFoldFallbackModel: `${routeKey(values.trimFoldFallbackModel)}\0${values.trimFoldFallbackModel.effort ?? ''}`,
@@ -914,11 +917,13 @@ window.__ModuleLoader__.load({
 				trimSectionTitle: '上下文裁剪',
 				trimModeLabel: '自动裁剪模式',
 				trimModeHelp:
-					'空闲时何时把历史折叠为摘要：off = 从不折叠，advisory = 仅模型主动调用，auto = 自动折叠。',
+					'空闲时何时把历史折叠为摘要：off = 从不折叠，advisory = 模型自主折叠（压力达线时引擎在系统提示注入一次性提醒），auto = 自动折叠。',
 				trimEnabledLabel: '启用自动裁剪',
 				trimEnabledHelp: '上下文裁剪层的总开关。',
 				trimLadderEnabledLabel: '阶梯折叠（T1/T2/T3）',
 				trimLadderEnabledHelp: '把累积的 T1 摘要再蒸馏为 T2、T2 再凝聚为 T3，让长会话视图保持平稳。',
+				trimProtectTaskIntentLabel: '保护任务意图',
+				trimProtectTaskIntentHelp: '第一条 user 消息（任务意图）永不折叠。关闭后它可进入折叠范围。',
 				surfaceFoldLabel: '把折叠写入会话表面',
 				surfaceFoldHelp: '追加宿主风格的替换事件，让折叠在冻结派发下也能到达线上。建议保持开启。',
 				trimSideModelLabel: '摘要模型',
@@ -1183,12 +1188,14 @@ window.__ModuleLoader__.load({
 				trimSectionTitle: 'Context trim',
 				trimModeLabel: 'Trim mode',
 				trimModeHelp:
-					'When to fold history into summaries at idle: off = never, advisory = model-invoked only, auto = automatic folds.',
+					'When to fold history into summaries at idle: off = never, advisory = the model folds itself (the engine appends a one-off nudge line at the pressure line), auto = automatic folds.',
 				trimEnabledLabel: 'Enable auto-trim',
 				trimEnabledHelp: 'Master switch for the context-trim layer.',
 				trimLadderEnabledLabel: 'Ladder folding (T1/T2/T3)',
 				trimLadderEnabledHelp:
 					'Distill accumulated T1 summaries into T2, and T2 into T3, keeping long sessions flat.',
+				trimProtectTaskIntentLabel: 'Protect task intent',
+				trimProtectTaskIntentHelp: 'When on (default), the first user message (task intent) stays out of the automatic fold range. Turn off to let it fold like any other content.',
 				surfaceFoldLabel: 'Ship folds to the session surface',
 				surfaceFoldHelp:
 					'Append host-style replace events so folds reach the wire even on frozen dispatches. Leave on.',
@@ -1460,11 +1467,13 @@ window.__ModuleLoader__.load({
 				trimSectionTitle: '上下文裁剪',
 				trimModeLabel: '自動裁剪模式',
 				trimModeHelp:
-					'閒置時何時將歷史摺疊為摘要：off = 從不摺疊，advisory = 僅模型主動呼叫，auto = 自動摺疊。',
+					'閒置時何時將歷史摺疊為摘要：off = 從不摺疊，advisory = 模型自主摺疊（達壓力線時引擎於系統提示注入一次性提醒），auto = 自動摺疊。',
 				trimEnabledLabel: '啟用自動裁剪',
 				trimEnabledHelp: '上下文裁剪層的總開關。',
 				trimLadderEnabledLabel: '階梯摺疊（T1/T2/T3）',
 				trimLadderEnabledHelp: '把累積的 T1 摘要再蒸餾為 T2、T2 再凝聚為 T3，讓長會話檢視保持平穩。',
+				trimProtectTaskIntentLabel: '保護任務意圖',
+				trimProtectTaskIntentHelp: '第一條 user 訊息（任務意圖）永不摺疊。關閉後它可進入摺疊範圍。',
 				surfaceFoldLabel: '把摺疊寫入會話表面',
 				surfaceFoldHelp: '追加宿主風格的替換事件，讓摺疊在凍結派發下也能到達線上。建議保持開啟。',
 				trimSideModelLabel: '摘要模型',
@@ -1708,7 +1717,7 @@ window.__ModuleLoader__.load({
 				trimSectionTitle: 'コンテキストトリム',
 				trimModeLabel: 'トリムモード',
 				trimModeHelp:
-					'アイドル時に履歴を要約へ折りたたむタイミング：off = 折りたたまない、advisory = モデル呼び出しのみ、auto = 自動で折りたたむ。',
+					'アイドル時に履歴を要約へ折りたたむタイミング：off = 折りたたまない、advisory = モデルが自発的に折りたたむ（圧力しきい値でエンジンがシステムプロンプトに一度だけ注意喚起を追記）、auto = 自動で折りたたむ。',
 				trimEnabledLabel: '自動トリムを有効化',
 				trimEnabledHelp: 'コンテキストトリム層のマスタースイッチ。',
 				trimGrowthLabel: '増加しきい値（token）',
@@ -1953,7 +1962,7 @@ window.__ModuleLoader__.load({
 				trimSectionTitle: '컨텍스트 트림',
 				trimModeLabel: '트림 모드',
 				trimModeHelp:
-					'유휴 시 언제 기록을 요약으로 접을지: off = 접지 않음, advisory = 모델 호출 시에만, auto = 자동 접기.',
+					'유휴 시 언제 기록을 요약으로 접을지: off = 접지 않음, advisory = 모델이 스스로 접음(압력 임계값에서 엔진이 시스템 프롬프트에 일회성 알림 추가), auto = 자동 접기.',
 				trimEnabledLabel: '자동 트림 사용',
 				trimEnabledHelp: '컨텍스트 트림 계층의 마스터 스위치.',
 				trimGrowthLabel: '증가 임계값(token)',
@@ -2190,7 +2199,7 @@ window.__ModuleLoader__.load({
 				trimSectionTitle: 'Kontext-Trim',
 				trimModeLabel: 'Trim-Modus',
 				trimModeHelp:
-					'Wann der Verlauf im Leerlauf zu Zusammenfassungen gefaltet wird: off = nie, advisory = nur per Modellaufruf, auto = automatisches Falten.',
+					'Wann der Verlauf im Leerlauf zu Zusammenfassungen gefaltet wird: off = nie, advisory = das Modell faltet selbst (der Motor hängt eine einmalige Erinnerung an den Systemprompt an), auto = automatisches Falten.',
 				trimEnabledLabel: 'Auto-Trim aktivieren',
 				trimEnabledHelp: 'Hauptschalter für die Kontext-Trim-Schicht.',
 				trimGrowthLabel: 'Wachstumsschwelle (Token)',
@@ -2430,7 +2439,7 @@ window.__ModuleLoader__.load({
 				trimSectionTitle: 'Recorte de contexto',
 				trimModeLabel: 'Modo de recorte',
 				trimModeHelp:
-					'Cuándo plegar el historial en resúmenes en reposo: off = nunca, advisory = solo por invocación del modelo, auto = plegado automático.',
+					'Cuándo plegar el historial en resúmenes en reposo: off = nunca, advisory = el modelo pliega por sí mismo (el motor añade un aviso puntual al system prompt), auto = plegado automático.',
 				trimEnabledLabel: 'Activar recorte automático',
 				trimEnabledHelp:
 					'Interruptor maestro de la capa de recorte de contexto.',
@@ -2671,7 +2680,7 @@ window.__ModuleLoader__.load({
 				trimSectionTitle: 'Rognage du contexte',
 				trimModeLabel: 'Mode de rognage',
 				trimModeHelp:
-					'Quand replier l’historique en résumés au repos : off = jamais, advisory = sur invocation du modèle uniquement, auto = repli automatique.',
+					'Quand replier l’historique en résumés au repos : off = jamais, advisory = le modèle replie lui-même (le moteur ajoute un rappel ponctuel au system prompt), auto = repli automatique.',
 				trimEnabledLabel: 'Activer le rognage automatique',
 				trimEnabledHelp:
 					'Interrupteur principal de la couche de rognage de contexte.',
@@ -2912,7 +2921,7 @@ window.__ModuleLoader__.load({
 				trimSectionTitle: 'Riduzione del contesto',
 				trimModeLabel: 'Modalità di riduzione',
 				trimModeHelp:
-					'Quando comprimere la cronologia in riepiloghi a riposo: off = mai, advisory = solo su invocazione del modello, auto = riduzione automatica.',
+					'Quando comprimere la cronologia in riepiloghi a riposo: off = mai, advisory = il modello comprime da solo (il motore aggiunge un promemoria una tantum al system prompt), auto = riduzione automatica.',
 				trimEnabledLabel: 'Attiva riduzione automatica',
 				trimEnabledHelp:
 					'Interruttore principale del livello di riduzione del contesto.',
@@ -3153,7 +3162,7 @@ window.__ModuleLoader__.load({
 				trimSectionTitle: 'Corte de contexto',
 				trimModeLabel: 'Modo de corte',
 				trimModeHelp:
-					'Quando dobrar o histórico em resumos na ociosidade: off = nunca, advisory = apenas por invocação do modelo, auto = dobra automática.',
+					'Quando dobrar o histórico em resumos na ociosidade: off = nunca, advisory = o modelo dobra por si (o motor acrescenta um aviso pontual ao system prompt), auto = dobra automática.',
 				trimEnabledLabel: 'Ativar corte automático',
 				trimEnabledHelp:
 					'Interruptor principal da camada de corte de contexto.',
@@ -3394,7 +3403,7 @@ window.__ModuleLoader__.load({
 				trimSectionTitle: 'Обрезка контекста',
 				trimModeLabel: 'Режим обрезки',
 				trimModeHelp:
-					'Когда сворачивать историю в сводки в простое: off = никогда, advisory = только по вызову модели, auto = автоматически.',
+					'Когда сворачивать историю в сводки в простое: off = никогда, advisory = модель сворачивает сама (движок добавляет разовое напоминание в системный промпт), auto = автоматически.',
 				trimEnabledLabel: 'Включить автообрезку',
 				trimEnabledHelp: 'Главный выключатель слоя обрезки контекста.',
 				trimGrowthLabel: 'Порог роста (токенов)',
@@ -5475,6 +5484,7 @@ window.__ModuleLoader__.load({
 				trimMode: values.trimMode,
 				trimEnabled: values.trimEnabled,
 				trimLadderEnabled: values.trimLadderEnabled,
+				trimProtectTaskIntent: values.trimProtectTaskIntent,
 				surfaceFold: values.surfaceFold,
 				trimSideModel: {
 					provider: values.trimSideModel.provider,
@@ -7044,6 +7054,23 @@ window.__ModuleLoader__.load({
 							checked: values.trimLadderEnabled,
 							onChange: () => {
 								edit('trimLadderEnabled', !values.trimLadderEnabled);
+							},
+							disabled: !editable,
+							style: STYLE.checkbox,
+						}),
+						lines: [],
+					}),
+					h(SettingsRow, {
+						key: 'trimProtectTaskIntent',
+						id: `${trimId}-intent`,
+						label: t('trimProtectTaskIntentLabel'),
+						help: t('trimProtectTaskIntentHelp'),
+						control: h('input', {
+							type: 'checkbox',
+							id: `${trimId}-intent`,
+							checked: values.trimProtectTaskIntent,
+							onChange: () => {
+								edit('trimProtectTaskIntent', !values.trimProtectTaskIntent);
 							},
 							disabled: !editable,
 							style: STYLE.checkbox,

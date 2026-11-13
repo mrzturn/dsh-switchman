@@ -13,7 +13,7 @@ import { createStore, emptyLedger, normalizeBlock } from "../../host/context-tri
 import { computeFoldableRange, evaluateTrigger, FOLD_MIN_INTERVAL_MS, EMERGENCY_COOLDOWN_MS } from "../../host/context-trim/trigger.js";
 import { mechanicalSummary, renderMaterial, summarizeWithModel, SUMMARY_SYSTEM_PROMPT, MAX_MATERIAL_CHARS, TRUNCATED_SUMMARY_MARK } from "../../host/context-trim/summarizer.js";
 import { createMetrics, extractUsage, promptTokensOf, wrapStreamForMetrics } from "../../host/context-trim/metrics.js";
-import { applyContextTrim, effectiveWindowTokens, TRIM_PROTOCOL_TEXT } from "../../host/context-trim/index.js";
+import { applyContextTrim, effectiveWindowTokens, TRIM_PROTOCOL_TEXT, ADVISORY_NUDGE_PERCENT, ADVISORY_NUDGE_CRITICAL_PERCENT, ADVISORY_NUDGE_REPEAT_MS, advisoryNudgeText } from "../../host/context-trim/index.js";
 
 /** Build a deterministic message list (no ids — refs must hash stably). */
 function makeMessages(n, seed = 0) {
@@ -404,6 +404,18 @@ describe("trigger: tiers and gates", () => {
 		assert.deepEqual(mid, { startIdx: 5, endIdx: 14 });
 		// no leading system message: only the task-intent line protects index 0
 		assert.deepEqual(computeFoldableRange(makeMessages(20), null, 6), { startIdx: 1, endIdx: 13 });
+	});
+
+	test("task-intent protection is opt-out (trimProtectTaskIntent=false)", () => {
+		const messages = makeMessages(20);
+		// Default (no options arg): the first user segment stays protected.
+		assert.deepEqual(computeFoldableRange(messages, null, 6), { startIdx: 1, endIdx: 13 });
+		// Opt-out: the intent segment becomes ordinary foldable material.
+		assert.deepEqual(computeFoldableRange(messages, null, 6, { protectTaskIntent: false }), { startIdx: 0, endIdx: 13 });
+		// The system-head clamp (when the head is a system message) survives the opt-out.
+		const withHead = [{ role: "system", content: [{ type: "text", text: "system prompt" }] }, ...makeMessages(20)];
+		const off = computeFoldableRange(withHead, null, 6, { protectTaskIntent: false });
+		assert.ok(off !== null && off.startIdx >= 1, `startIdx ${off?.startIdx} covers the system head`);
 	});
 
 	test("computeFoldableRange never folds prior fold summaries (acp_summary_*)", () => {
@@ -857,6 +869,230 @@ describe("assembly: applyContextTrim with a mock ctx", () => {
 		for await (const chunk of result) void chunk;
 	});
 
+	function createDeferredForTrimTest() {
+		let resolve;
+		const promise = new Promise((done) => { resolve = done; });
+		return { promise, resolve };
+	}
+
+	function seedFoldCaptureForTest(handle, sessionId, viewTokens, seed = 0) {
+		handle.captures.set(sessionId, {
+			messages: makeMessages(20, seed),
+			model: { provider: "p", model: "m" },
+			viewTokens,
+			at: Date.now(),
+		});
+	}
+
+	function decisionLogForTest(stateDir) {
+		return readFileSync(join(stateDir, "decisions.log"), "utf8");
+	}
+
+	test("watchdog releases a hung fold cycle and records cycle-stuck", async (t) => {
+		t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1_000_000_000 });
+		let summaryStarted = false;
+		let markStarted;
+		const started = new Promise((resolve) => { markStarted = resolve; });
+		let releaseSummary;
+		const summary = new Promise((resolve) => { releaseSummary = resolve; });
+		const fiber = { on: () => {}, off: () => {}, effect: () => {} };
+		const { ctx } = mockCtx({ llmFiber: fiber });
+		ctx.get = () => ({
+			resolveModelInfo: async () => ({ context: { contextWindow: 100_000 } }),
+			prepareCall: async () => ({
+				config: {},
+				stream: async function* () {
+					summaryStarted = true;
+					markStarted();
+					yield { type: "text-delta", text: await summary };
+					yield { type: "finish", reason: { kind: "stop" } };
+				},
+			}),
+		});
+		const sessionId = "sess-watchdog";
+		const stateDir = mkdtempSync(join(tmpdir(), "trim-watchdog-"));
+		const handle = applyContextTrim(ctx, {
+			...config,
+			trimStateDir: stateDir,
+			trimPressurePercent: 30,
+			trimEmergencyPercent: 99,
+			trimSideModel: { provider: "p", model: "m" },
+		});
+		seedFoldCaptureForTest(handle, sessionId, 80_000);
+		let cycle;
+		try {
+			cycle = handle.maybeFold(sessionId, "watchdog-test");
+			for (let i = 0; i < 30 && !summaryStarted; i++) await Promise.resolve();
+			assert.equal(summaryStarted, true, "the fold must be parked in its summarize stream");
+			await started;
+			assert.ok(handle.inFlight.has(sessionId));
+
+			t.mock.timers.tick(300_001);
+			assert.equal(handle.inFlight.has(sessionId), false, "watchdog releases the session lock");
+			assert.match(decisionLogForTest(stateDir), /session=sess-watchdog via=watchdog-test outcome=cycle-stuck/u);
+		} finally {
+			releaseSummary?.("late summary");
+			if (cycle !== undefined) await cycle;
+			rmSync(stateDir, { recursive: true, force: true });
+		}
+	});
+
+	test("watchdog-superseded cycles cannot commit, delete a retry token, or alter failure backoff", async (t) => {
+		t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1_000_000_000 });
+		const pendingSummaries = Array.from({ length: 4 }, () => createDeferredForTrimTest());
+		const streamStarted = Array.from({ length: 4 }, () => createDeferredForTrimTest());
+		let prepareCalls = 0;
+		const fiber = { on: () => {}, off: () => {}, effect: () => {} };
+		const { ctx } = mockCtx({ llmFiber: fiber });
+		ctx.get = () => ({
+			resolveModelInfo: async () => ({ context: { contextWindow: 100_000 } }),
+			prepareCall: async () => {
+				const callIndex = prepareCalls++;
+				return {
+					config: {},
+					stream: async function* () {
+						streamStarted[callIndex].resolve();
+						if (callIndex === 0) {
+							yield { type: "finish", reason: { kind: "error", failure: { message: "initial failure" } } };
+							return;
+						}
+						const text = await pendingSummaries[callIndex].promise;
+						if (text === null) {
+							yield { type: "finish", reason: { kind: "error", failure: { message: "retry failed" } } };
+							return;
+						}
+						yield { type: "text-delta", text };
+						yield { type: "finish", reason: { kind: "stop" } };
+					},
+				};
+			},
+		});
+		const sessionId = "sess-superseded";
+		const stateDir = mkdtempSync(join(tmpdir(), "trim-superseded-"));
+		const handle = applyContextTrim(ctx, {
+			...config,
+			trimStateDir: stateDir,
+			trimGrowthTokens: 1,
+			trimIncrementTokens: 1,
+			trimPressurePercent: 99,
+			trimEmergencyPercent: 99,
+			trimSideModel: { provider: "p", model: "m" },
+		});
+		seedFoldCaptureForTest(handle, sessionId, 80_000, 3);
+		let cycleA;
+		let cycleB;
+		let cycleC;
+		try {
+			const initialFailure = handle.maybeFold(sessionId, "initial-failure");
+			await initialFailure;
+			assert.equal(prepareCalls, 1, "initial failure establishes the first backoff rung");
+			assert.match(decisionLogForTest(stateDir), /outcome=summary-unavailable/u);
+
+			t.mock.timers.tick(60_001);
+			cycleA = handle.maybeFold(sessionId, "cycle-a");
+			for (let i = 0; i < 30 && prepareCalls < 2; i++) await Promise.resolve();
+			assert.equal(prepareCalls, 2, "cycle A enters its summarize call after backoff expires");
+			await streamStarted[1].promise;
+			const tokenA = handle.inFlight.get(sessionId);
+			assert.ok(tokenA);
+
+			t.mock.timers.tick(300_001);
+			assert.equal(handle.inFlight.has(sessionId), false);
+			assert.match(decisionLogForTest(stateDir), /session=sess-superseded via=cycle-a outcome=cycle-stuck/u);
+
+			cycleB = handle.maybeFold(sessionId, "cycle-b");
+			for (let i = 0; i < 30 && prepareCalls < 3; i++) await Promise.resolve();
+			assert.equal(prepareCalls, 3, "cycle B acquires the released session");
+			await streamStarted[2].promise;
+			const tokenB = handle.inFlight.get(sessionId);
+			assert.ok(tokenB);
+			assert.notEqual(tokenB, tokenA, "retry owns a fresh generation token");
+
+			const blocksBeforeAResolves = handle.store.ledgerOf(sessionId).blocks.length;
+			pendingSummaries[1].resolve("late cycle A summary");
+			await cycleA;
+			assert.match(decisionLogForTest(stateDir), /session=sess-superseded outcome=superseded/u);
+			assert.equal(handle.store.ledgerOf(sessionId).blocks.length, blocksBeforeAResolves, "superseded A must not commit a fold");
+			assert.equal(handle.inFlight.get(sessionId), tokenB, "A's finally must preserve B's token");
+
+			pendingSummaries[2].resolve(null);
+			await cycleB;
+			assert.match(decisionLogForTest(stateDir), /session=sess-superseded outcome=summary-unavailable/u);
+			const callsBeforeProbe = prepareCalls;
+			t.mock.timers.tick(90_001);
+			const backoffProbe = handle.maybeFold(sessionId, "backoff-probe");
+			for (let i = 0; i < 30 && prepareCalls === callsBeforeProbe; i++) await Promise.resolve();
+			if (prepareCalls > callsBeforeProbe) {
+				pendingSummaries[3].resolve("cleanup unexpected retry");
+				await backoffProbe;
+			}
+			assert.equal(prepareCalls, callsBeforeProbe, "superseded A must not clear B's 120s failure backoff");
+
+			t.mock.timers.tick(30_001);
+			const callsBeforeRetry = prepareCalls;
+			cycleC = handle.maybeFold(sessionId, "backoff-expired");
+			for (let i = 0; i < 30 && prepareCalls === callsBeforeRetry; i++) await Promise.resolve();
+			assert.equal(prepareCalls, callsBeforeRetry + 1, "superseded A must not add another failure rung");
+			await streamStarted[3].promise;
+			pendingSummaries[3].resolve("retry after expected backoff");
+			await cycleC;
+		} finally {
+			for (const pending of pendingSummaries) pending.resolve("test cleanup");
+			for (const cycle of [cycleA, cycleB, cycleC]) if (cycle !== undefined) await cycle;
+			rmSync(stateDir, { recursive: true, force: true });
+		}
+	});
+
+	test("window resolution uses provider/model strings and logs the resolved context window", async () => {
+		const calls = [];
+		const fiber = { on: () => {}, off: () => {}, effect: () => {} };
+		const { ctx } = mockCtx({ llmFiber: fiber });
+		ctx.get = () => ({
+			resolveModelInfo: async (...args) => {
+				calls.push(args);
+				return { context: { contextWindow: 64_000 } };
+			},
+		});
+		const sessionId = "sess-window-resolved";
+		const stateDir = mkdtempSync(join(tmpdir(), "trim-window-ok-"));
+		const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+		seedFoldCaptureForTest(handle, sessionId, 61_000);
+		try {
+			await handle.maybeFold(sessionId, "window-test");
+			assert.ok(calls.some((args) => args.length === 2 && args[0] === "p" && args[1] === "m"), "window lookup receives provider and model as separate strings");
+			assert.match(decisionLogForTest(stateDir), /session=sess-window-resolved .*action=emergency .*window=64000/u);
+			assert.equal(handle.store.ledgerOf(sessionId).blocks.length, 1);
+		} finally {
+			rmSync(stateDir, { recursive: true, force: true });
+		}
+	});
+
+	test("failed window resolution falls back to the cap and emits a failure row", async () => {
+		const calls = [];
+		const fiber = { on: () => {}, off: () => {}, effect: () => {} };
+		const { ctx } = mockCtx({ llmFiber: fiber });
+		ctx.get = () => ({
+			resolveModelInfo: async (...args) => {
+				calls.push(args);
+				throw new Error("provider lookup unavailable");
+			},
+		});
+		const sessionId = "sess-window-failed";
+		const stateDir = mkdtempSync(join(tmpdir(), "trim-window-fail-"));
+		const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+		seedFoldCaptureForTest(handle, sessionId, 145_000);
+		try {
+			await handle.maybeFold(sessionId, "window-failure-test");
+			assert.deepEqual(calls, [["p", "m"]]);
+			const decisions = decisionLogForTest(stateDir);
+			assert.match(decisions, /window-resolve-failed key=p\/m why=provider lookup unavailable/u);
+			assert.match(decisions, /session=sess-window-failed .*action=emergency .*window=150000/u);
+			assert.equal(handle.store.ledgerOf(sessionId).blocks.length, 1);
+		} finally {
+			rmSync(stateDir, { recursive: true, force: true });
+		}
+	});
+
 	test("agent/status with OBJECT payload.agent fires the emergency fold (B2)", async () => {
 		let listener = null;
 		const fiber = { on: (event, fn) => { listener = fn; }, off: () => {}, effect: () => {} };
@@ -999,7 +1235,7 @@ describe("assembly: applyContextTrim with a mock ctx", () => {
 		assert.equal(handle.store.commitFold("sess-flight", blockFor(capture.messages, 0, 9, "flight fold"), refPositions(capture.messages)).ok, true);
 		handle.store.recordFoldBaseline("sess-flight", 91_500, 9_136);
 		// The cycle's own span dispatch presents a subset array — refs all fail.
-		handle.inFlight.add("sess-flight");
+		handle.inFlight.set("sess-flight", {}); // generation token, as maybeFold stores it
 		const r2 = listener({ sessionId: "sess-flight", messages: makeMessages(20, 7), provider: "p", model: "m" }, finish);
 		for await (const c of r2) void c;
 		assert.equal(handle.store.ledgerOf("sess-flight").lastFoldViewTokens, 91_500);
@@ -1112,3 +1348,223 @@ test('summarizer: a terminal error finish surfaces the adapter failure detail in
 	await summarizeWithModel(llm3, { provider: 'p', model: 'm' }, 'material', { onFail: (why) => { seen3 = why; } });
 	assert.equal(seen3, 'stream-error', 'missing failure detail keeps the bare why');
 });
+
+describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
+	/** Local mock ctx copy (the assembly factory above is describe-scoped). */
+	function nudgeCtx({ llmService = null } = {}) {
+		const hooks = {};
+		const ctx = {
+			log: { warn: () => {} },
+			agents: { currentInitiator: () => ({ session: { id: "" } }) },
+			systemPrompt: { section: () => {}, context: () => {} },
+			on: (event, handler) => { hooks[event] = handler; },
+			tools: { register: () => {} },
+			get: () => llmService,
+			inject(deps, body) {
+				if (deps.includes("llm")) body({ on: (event, fn) => { hooks[event] = fn; }, off: () => {}, effect: () => {} });
+			},
+		};
+		return { ctx, hooks };
+	}
+
+	const HEAD_TEXT = "You are a helpful assistant.";
+	function nudgeConfig() {
+		return {
+			trimEnabled: true,
+			trimMode: "advisory",
+			trimGrowthTokens: 22_500,
+			trimIncrementTokens: 50_000,
+			trimPressurePercent: 75,
+			trimEmergencyPercent: 95,
+			trimProtectedTail: 6,
+			trimMaxFoldsPerHour: 6,
+			trimSideModel: { provider: "", model: "" },
+			trimStateDir: mkdtempSync(join(tmpdir(), "trim-nudge-")),
+		};
+	}
+	function dispatchMessages() {
+		return [{ role: "system", content: [{ type: "text", text: HEAD_TEXT }] }, ...makeMessages(20)];
+	}
+	async function dispatch(listener, sessionId, usageInput) {
+		const request = { sessionId, messages: dispatchMessages(), provider: "p", model: "m" };
+		async function* innerStream() {
+			yield { type: "finish", usage: { input_tokens: usageInput } };
+		}
+		const result = listener(request, () => innerStream());
+		for await (const chunk of result) void chunk;
+		return request;
+	}
+	const nudgeRows = (cfg) => readFileSync(join(cfg.trimStateDir, "decisions.log"), "utf8").split("\n").filter((line) => line.includes("advisory-nudge pressure="));
+
+	test("advisoryNudgeText: pure, tiered, actionable wording", () => {
+		assert.equal(advisoryNudgeText(83, false), advisoryNudgeText(83, false));
+		const high = advisoryNudgeText(83, false);
+		assert.match(high, /\[SWITCHMAN:TRIM\] Advisory nudge/u);
+		assert.match(high, /At 83% \(fold line 80%\)/u);
+		assert.match(high, /ctx_trim_status/u);
+		assert.match(high, /ctx_trim_fold/u);
+		const critical = advisoryNudgeText(97, true);
+		assert.match(critical, /CRITICAL/u);
+		assert.match(critical, /97% ≥ 95%/u);
+		assert.notEqual(critical, high);
+		assert.notEqual(advisoryNudgeText(84, false), high, "different pressures render differently");
+	});
+
+	test("nudges once at the fold line on the wire system head, then stays quiet in-band", async () => {
+		const { ctx, hooks } = nudgeCtx();
+		const cfg = nudgeConfig();
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		try {
+			// d1 primes capture + wire (90k of the 100k window); nothing below the line.
+			const request1 = await dispatch(listener, "sess-nudge-high", 90_000);
+			assert.equal(request1.messages[0].content[0].text, HEAD_TEXT);
+			// d2 crosses the line: the head is swapped for a COPY carrying the nudge.
+			const request2 = await dispatch(listener, "sess-nudge-high", 90_000);
+			assert.match(request2.messages[0].content[0].text, /\[SWITCHMAN:TRIM\] Advisory nudge/u);
+			assert.match(request2.messages[0].content[0].text, /At 90% \(fold line 80%\)/u);
+			assert.ok(request2.messages[0].content[0].text.startsWith(HEAD_TEXT), "the nudge rides after the original head text");
+			assert.match(nudgeRows(cfg).join("\n"), /session=sess-nudge-high advisory-nudge pressure=90% mass=90000 window=100000 level=high/u);
+			// d3 same band inside the repeat window: quiet.
+			await dispatch(listener, "sess-nudge-high", 91_000);
+			assert.equal(nudgeRows(cfg).length, 1, "same-band repeats inside the window stay quiet");
+			// The original d1 head object was never mutated.
+			assert.equal(request1.messages[0].content[0].text, HEAD_TEXT);
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
+
+	test("escalation re-nudges immediately; dropping below clears the episode", async () => {
+		const { ctx, hooks } = nudgeCtx();
+		const cfg = nudgeConfig();
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const sid = "sess-nudge-escalate";
+		try {
+			await dispatch(listener, sid, 85_000); // prime; wire 85%
+			const r2 = await dispatch(listener, sid, 90_000); // 85% -> HIGH nudge
+			assert.match(r2.messages[0].content[0].text, /Advisory nudge/u);
+			await dispatch(listener, sid, 96_000); // 90% in-band -> quiet (repeat window)
+			const r4 = await dispatch(listener, sid, 30_000); // 96% -> CRITICAL re-nudge, no repeat wait
+			assert.match(r4.messages[0].content[0].text, /CRITICAL/u);
+			assert.match(r4.messages[0].content[0].text, /96% ≥ 95%/u);
+			await dispatch(listener, sid, 10_000); // 30% below the line -> episode cleared
+			const r6 = await dispatch(listener, sid, 85_000); // still 30% wire -> quiet
+			assert.equal(r6.messages[0].content[0].text, HEAD_TEXT);
+			const r7 = await dispatch(listener, sid, 1_000); // 85% again -> fresh episode nudges
+			assert.match(r7.messages[0].content[0].text, /Advisory nudge/u);
+			const levels = nudgeRows(cfg).map((line) => (line.includes("level=critical") ? "C" : "H"));
+			assert.deepEqual(levels, ["H", "C", "H"]);
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
+
+	test("auto and off modes never nudge, even far past the line", async () => {
+		for (const mode of ["auto", "off"]) {
+			const { ctx, hooks } = nudgeCtx();
+			const cfg = { ...nudgeConfig(), trimMode: mode };
+			const handle = applyContextTrim(ctx, cfg);
+			const listener = hooks["llm/stream"];
+			handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+			try {
+				await dispatch(listener, "sess-nudge-muted-" + mode, 97_000);
+				const request2 = await dispatch(listener, "sess-nudge-muted-" + mode, 1_000);
+				assert.equal(request2.messages[0].content[0].text, HEAD_TEXT, mode + " must stay silent at 97%");
+			} finally {
+				rmSync(cfg.trimStateDir, { recursive: true, force: true });
+			}
+		}
+	});
+
+	test("cache miss defers the nudge: async warm-up lands it on a later dispatch", async () => {
+		const resolves = [];
+		const { ctx, hooks } = nudgeCtx({ llmService: { resolveModelInfo: async (...args) => { resolves.push(args); return { context: { contextWindow: 100_000 } }; } } });
+		const cfg = nudgeConfig();
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		const sid = "sess-nudge-warm";
+		try {
+			await dispatch(listener, sid, 90_000); // prime capture + wire; window unknown -> deferred
+			const r2 = await dispatch(listener, sid, 90_000); // d2: cache miss again? no — d1's warm-up already filled it
+			assert.match(r2.messages[0].content[0].text, /Advisory nudge/u, "d1's async warm-up lands the nudge on the very next dispatch");
+			assert.equal(resolves.length, 1, "the miss fired exactly one warm-up resolve");
+			assert.deepEqual(resolves[0], ["p", "m"], "warm-up uses the two-string host contract");
+			assert.ok(handle.windowCache.get("p/m")?.windowTokens === 100_000, "warm-up filled the sync cache");
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
+
+	test("frozen messages fall back to the reference swap; shared head is never mutated", async () => {
+		const { ctx, hooks } = nudgeCtx();
+		const cfg = nudgeConfig();
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const sid = "sess-nudge-frozen";
+		try {
+			await dispatch(listener, sid, 90_000);
+			const messages = Object.freeze(dispatchMessages());
+			const headBefore = messages[0];
+			const request = { sessionId: sid, messages, provider: "p", model: "m" };
+			async function* innerStream() {
+				yield { type: "finish", usage: { input_tokens: 1_000 } };
+			}
+			const result = listener(request, () => innerStream());
+			for await (const chunk of result) void chunk;
+			assert.notEqual(request.messages, messages, "frozen array is swapped by reference");
+			assert.match(request.messages[0].content[0].text, /Advisory nudge/u);
+			assert.equal(headBefore.content[0].text, HEAD_TEXT, "the shared head object is untouched");
+			assert.equal(messages[0], headBefore, "the frozen array still holds the original head");
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
+	test("episode registry stays bounded: the 201st session evicts the least recently nudged", async () => {
+		const { ctx, hooks } = nudgeCtx();
+		const cfg = nudgeConfig();
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		try {
+			for (let i = 0; i < 200; i++) handle.advisoryNudgeBySession.set("seed-" + i, { at: 0, critical: false });
+			await dispatch(listener, "sess-evict", 90_000); // prime capture + wire
+			await dispatch(listener, "sess-evict", 90_000); // 90% wire -> crossing -> set -> evict
+			assert.ok(!handle.advisoryNudgeBySession.has("seed-0"), "the oldest entry was evicted");
+			assert.equal(handle.advisoryNudgeBySession.size, 200);
+			assert.ok(handle.advisoryNudgeBySession.has("sess-evict"), "the new session was retained");
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
+
+	test("stale-window warm-up is single-flight while the resolve is pending", async () => {
+		let releaseResolve;
+		const resolves = [];
+		const gate = new Promise((resolve) => { releaseResolve = resolve; });
+		const { ctx, hooks } = nudgeCtx({ llmService: { resolveModelInfo: async (...args) => { resolves.push(args); await gate; return { context: { contextWindow: 100_000 } }; } } });
+		const cfg = nudgeConfig();
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		const sid = "sess-nudge-flight";
+		try {
+			await dispatch(listener, sid, 90_000); // d1: miss -> warm-up starts, pending on the gate
+			await dispatch(listener, sid, 90_000); // d2: still miss, single-flight window -> suppressed
+			await dispatch(listener, sid, 90_000); // d3: same
+			assert.equal(resolves.length, 1, "a pending warm-up suppresses duplicate resolves");
+			releaseResolve();
+			for (let i = 0; i < 20 && !handle.windowCache.has("p/m"); i++) await new Promise((resolve) => setImmediate(resolve));
+			const request4 = await dispatch(listener, sid, 1_000);
+			assert.match(request4.messages[0].content[0].text, /Advisory nudge/u, "the deferred nudge lands once the gate opens");
+			assert.equal(resolves.length, 1, "no further resolves after the settle");
+		} finally {
+			releaseResolve();
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
+});
+

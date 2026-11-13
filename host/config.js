@@ -306,6 +306,12 @@ export const Config = z.object({
 	 *  T2/T3 distillation tiers. T1 raw-range folds are governed by
 	 *  trimMode; the ladder only adds the summary-maintenance tiers. */
 	trimLadderEnabled: z.boolean().default(true).volatile(),
+	/** Protect the task-intent segment (the first user message's whole
+	 *  segment) from raw folds. true (default) keeps the anti-drift guard;
+	 *  false lets the intent segment enter computeFoldableRange's candidate
+	 *  span like any other raw content. The system-head clamp is unaffected
+	 *  either way. */
+	trimProtectTaskIntent: z.boolean().default(true).volatile(),
 	/** Ladder T2 gate: minimum active-T1 summary token mass before a T2
 	 *  distillation fires (the need signal — bili #379: block count alone
 	 *  is not a need signal). */

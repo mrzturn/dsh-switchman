@@ -137,6 +137,7 @@ const BOOLEAN_FIELDS = [
 	// Context trim switches (mirrors the trim group in host/config.js).
 	"trimEnabled",
 	"trimLadderEnabled",
+	"trimProtectTaskIntent",
 	"surfaceFold",
 ];
 /** Intent numbers carry their own schema bounds (config.js), so the shared

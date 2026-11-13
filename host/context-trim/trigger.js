@@ -59,7 +59,7 @@ export const LADDER_MIN_INTERVAL_MS = 120_000;
  * re-absorbed the previous summary (the rolling-absorb regression).
  * Returns { startIdx, endIdx } or null when nothing is foldable (empty
  * history, everything folded, or protected tail covers it all). */
-export function computeFoldableRange(messages, ledger, protectedTail) {
+export function computeFoldableRange(messages, ledger, protectedTail, options = {}) {
 	if (!Array.isArray(messages) || messages.length === 0) return null;
 	const tail = Number.isInteger(protectedTail) && protectedTail > 0 ? protectedTail : 0;
 	const tailStart = messages.length - tail;
@@ -81,13 +81,17 @@ export function computeFoldableRange(messages, ledger, protectedTail) {
 	// Task-intent protection: the first user message states the task; the
 	// segment containing it is never folded (its summary would become the
 	// only carrier of the task for the rest of the session — the dominant
-	// early-drift failure this guard prevents).
-	const firstUserIdx = messages.findIndex((message) => message?.role === "user");
-	if (firstUserIdx >= 0) {
-		for (const [start, end] of segmentBounds(messages)) {
-			if (start <= firstUserIdx && firstUserIdx <= end) {
-				startFrom = Math.max(startFrom, end + 1);
-				break;
+	// early-drift failure this guard prevents). Opt-out: trimProtectTaskIntent
+	// =false lets the intent segment fold like any other raw content; the
+	// system-head clamp above is unaffected — it applies only when the head is actually a system message.
+	if (options?.protectTaskIntent !== false) {
+		const firstUserIdx = messages.findIndex((message) => message?.role === "user");
+		if (firstUserIdx >= 0) {
+			for (const [start, end] of segmentBounds(messages)) {
+				if (start <= firstUserIdx && firstUserIdx <= end) {
+					startFrom = Math.max(startFrom, end + 1);
+					break;
+				}
 			}
 		}
 	}

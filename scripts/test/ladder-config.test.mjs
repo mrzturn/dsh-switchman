@@ -10,7 +10,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { coerceValues, sameValues, snapshotOf } from "../../host/routes.js";
+import { coerceValues, makeRoutes, sameValues, snapshotOf } from "../../host/routes.js";
 import { mergeIntentCandidates } from "../../host/intent-presets.js";
 
 /** A fully-populated values object (every field coerceValues requires). */
@@ -79,6 +79,7 @@ function fullValues(overrides = {}) {
 		intentEnabled: false,
 		trimEnabled: true,
 		trimLadderEnabled: true,
+		trimProtectTaskIntent: true,
 		surfaceFold: true,
 		...overrides,
 	};
@@ -91,6 +92,10 @@ test("coerceValues round-trips every trim field the client page sends", () => {
 	assert.equal(coerced.trimMode, "auto");
 	assert.equal(coerced.trimEnabled, true);
 	assert.equal(coerced.trimLadderEnabled, true);
+	assert.equal(coerced.trimProtectTaskIntent, true);
+	const coercedOff = coerceValues({ ...fullValues(), trimProtectTaskIntent: false });
+	assert.notEqual(coercedOff, null, "explicit false must coerce");
+	assert.equal(coercedOff.trimProtectTaskIntent, false);
 	assert.equal(coerced.surfaceFold, true);
 	assert.equal(coerced.trimStateDir, "");
 	assert.deepEqual(coerced.trimSideModel, { provider: "", model: "" });
@@ -141,6 +146,7 @@ test("snapshotOf exposes the trim fields with config-backed values", () => {
 		trimMode: { get: () => "advisory" },
 		trimEnabled: { get: () => false },
 		trimLadderEnabled: { get: () => true },
+		trimProtectTaskIntent: { get: () => true },
 		surfaceFold: { get: () => false },
 		trimStateDir: { get: () => "/tmp/trim" },
 		trimSideModel: { get: () => ({ provider: "p", model: "m" }) },
@@ -230,4 +236,42 @@ test("fence equality is key-order insensitive (2026-11-07 phantom-409)", () => {
 		intentCandidates: fenceLeft.intentCandidates.map((c, i) => (i === 0 ? { ...c, id: c.id + "-renamed" } : c)),
 	};
 	assert.equal(sameValues(nested, fenceRight), false, "fence rejects nested field delta");
+assert.equal(sameValues(nested, fenceRight), false, "fence rejects nested field delta");
+});
+
+test("config route serves the snapshot on GET (route-level regression guard)", async () => {
+	const config = {
+		trimMode: { get: () => "advisory" },
+		trimEnabled: { get: () => false },
+		trimLadderEnabled: { get: () => true },
+		trimProtectTaskIntent: { get: () => true },
+		surfaceFold: { get: () => false },
+		trimStateDir: { get: () => "/tmp/trim" },
+		trimSideModel: { get: () => ({ provider: "p", model: "m" }) },
+		trimGrowthTokens: { get: () => 1_000 },
+		trimIncrementTokens: { get: () => 2_000 },
+		trimPressurePercent: { get: () => 50 },
+		trimEmergencyPercent: { get: () => 90 },
+		trimWindowTokens: { get: () => 0 },
+		trimProtectedTail: { get: () => 4 },
+		trimMaxFoldsPerHour: { get: () => 5 },
+		trimLadderT2Tokens: { get: () => 7_000 },
+		trimLadderT2MinBlocks: { get: () => 4 },
+		trimLadderT3Tokens: { get: () => 5_000 },
+		trimLadderT3MinBlocks: { get: () => 3 },
+	};
+	const routes = makeRoutes({}, config);
+	const entry = routes.find((route) => route.path === "/api/dsh-switchman/config");
+	assert.ok(entry, "the config route is registered");
+	const res = {
+		status: null,
+		body: null,
+		writeHead(status) { this.status = status; },
+		end(body) { this.body = body; },
+	};
+	await entry.handler({ method: "GET", headers: { host: "localhost:49730" } }, res);
+	assert.equal(res.status, 200, "GET on the config route answers 200");
+	const payload = JSON.parse(res.body);
+	assert.deepEqual(payload.values, snapshotOf(config), "GET values are exactly snapshotOf(config)");
+	assert.notEqual(coerceValues(payload.values), null, "the served values stay POST-coercible");
 });

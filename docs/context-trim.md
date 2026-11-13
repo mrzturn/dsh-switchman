@@ -24,7 +24,7 @@ its frontier ref is shadowed off the live surface, so the range start falls back
 past the task-intent guard — `computeFoldableRange` therefore skips
 `acp_summary_*` segments explicitly (and never bridges a span across one), and
 `ctx_trim_fold` rejects ranges covering a summary. Summaries persist on the
-surface and consolidate only through ladder T2/T3 distillation.
+surface and consolidate only through ladder T2/T3 distillation. The task-intent guard itself is configurable: `trimProtectTaskIntent` (default `true`) keeps the first user segment out of the automatic fold range (the advisory ctx_trim_fold tool stays operator-explicit); set it to `false` to let the intent segment enter the candidate span — the system-head clamp applies either way.
 
 ## The four-value `injectView` contract
 

@@ -657,6 +657,7 @@
         trimProtectedTail: 10
         trimMaxFoldsPerHour: 30
         trimLadderEnabled: true
+        trimProtectTaskIntent: true
         trimLadderT2Tokens: 8000
         trimLadderT2MinBlocks: 3
         trimLadderT3Tokens: 6000

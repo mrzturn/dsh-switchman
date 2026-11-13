@@ -274,6 +274,31 @@ export const TRIM_PROTOCOL_TEXT = [
 	"- Tool-call pairs (an assistant tool call and its results) must always be folded together or not at all.",
 ].join("\n");
 
+// Advisory nudge thresholds: fire at the protocol's own 80% fold line,
+// escalate to critical wording at 95%; at most one nudge per session per
+// 10 minutes (an instant re-nudge when the level band changes).
+export const ADVISORY_NUDGE_PERCENT = 80;
+export const ADVISORY_NUDGE_CRITICAL_PERCENT = 95;
+export const ADVISORY_NUDGE_REPEAT_MS = 600_000;
+
+/** The per-dispatch advisory nudge text. Deliberate, bounded exception to
+ * the digit-free disclosure policy of TRIM_PROTOCOL_TEXT above: advisory
+ * mode has NO engine-initiated folds (the modeNow gate), the static head
+ * demonstrably does not move models on its own, and the model's own fold
+ * is the only relief channel — so at a threshold crossing the engine
+ * speaks once, with the live number, on the dispatch itself (never in
+ * the registered section). */
+export function advisoryNudgeText(pressurePercent, critical) {
+	const action = critical
+		? `Pressure is CRITICAL (${pressurePercent}% ≥ ${ADVISORY_NUDGE_CRITICAL_PERCENT}%): fold down to under ~50% of the context IN THIS TURN.`
+		: `At ${pressurePercent}% (fold line ${ADVISORY_NUDGE_PERCENT}%): 80–89% → fold roughly half of the older history now; ≥90% → fold down to under ~50%.`;
+	return [
+		'[SWITCHMAN:TRIM] Advisory nudge — active for THIS turn only. The routine "no action expected" default is lifted for this turn.',
+		`Live context pressure on this session has reached the fold line. ${action}`,
+		"Act now: call ctx_trim_status to list compressible ranges, pick one contiguous range, and fold it with ctx_trim_fold (tool-call pairs fold together or not at all; existing summaries stay). Do not wait for a routine moment.",
+	].join("\n");
+}
+
 /** Effective window for the pressure/emergency tier math:
  * min(model-resolved window, configured cap). Null only when BOTH inputs
  * are unusable — the trigger then skips those tiers (fail-open). */
@@ -359,8 +384,110 @@ export function applyContextTrim(ctx, config) {
 			return null;
 		}
 	};
+
+	// Advisory nudge state: sessionId -> { at, critical }. Bounded like the
+	// other per-session registries (200 entries).
+	const advisoryNudgeBySession = new Map();
+
+	// Single-flight for nudge warm-ups: during resolveRawWindow's <=10s window
+	// every main dispatch would otherwise re-fire the same resolve. Entries
+	// self-delete on settle; the expiry is only a belt-and-suspenders bound.
+	const windowWarmupInFlight = new Map(); // "provider/model" -> expiresAt
+	function warmWindowOnce(model, now) {
+		const key = `${model.provider}/${model.model}`;
+		const until = windowWarmupInFlight.get(key);
+		if (until !== undefined && now < until) return;
+		windowWarmupInFlight.set(key, now + 15_000); // > resolveRawWindow's 10s ceiling
+		void windowTokensFor(model).catch(() => {}).finally(() => {
+			if (windowWarmupInFlight.get(key) === until) windowWarmupInFlight.delete(key);
+		});
+	}
+
+	/** Advisory-mode pressure nudge (text: advisoryNudgeText). Appends the
+	 * live instruction to the wire system message once the session crosses
+	 * the fold line. Pressure reuses the meter-duality bridge (wire
+	 * preferred, view estimate as floor) against the session model's window
+	 * read from the SYNC cache — a cache miss fires an async warm-up
+	 * (windowTokensFor) and defers the nudge to a later dispatch instead of
+	 * blocking this one. The host's system message is shared state: the head
+	 * is shallow-copied and the copy spliced in, mirroring injectView's
+	 * ladder (in-place when writable -> reference swap for frozen arrays ->
+	 * fail open). */
+	function appendAdvisoryNudge(options, sessionId, viewTokens) {
+		if (modeNow() !== "advisory") return;
+		const messages = options?.messages;
+		if (!Array.isArray(messages) || messages.length === 0) return;
+		const head = messages[0];
+		if (head?.role !== "system" || !Array.isArray(head.content)) return;
+		const block = head.content.find((entry) => entry !== null && typeof entry === "object" && typeof entry.text === "string");
+		if (block === undefined) return; // non-text system head — skip, never guess
+		const model = capturedModelBySession.get(sessionId) ?? null;
+		if (model === null) return;
+		if (typeof model.provider !== "string" || typeof model.model !== "string") return;
+		const cached = windowCache.get(`${model.provider}/${model.model}`);
+		if (cached === undefined || Date.now() - cached.at >= 600_000) { // stale = miss, same TTL as windowTokensFor
+			warmWindowOnce(model, Date.now()); // single-flight warm-up; the nudge lands on a later dispatch
+			return;
+		}
+		if (cached.windowTokens === null) return; // resolution failed inside the TTL — skip quietly, no retry hammering
+		const windowTokens = effectiveWindowTokens(cached.windowTokens, windowCapNow());
+		if (windowTokens === null) return;
+		const wire = wireTokensOf(sessionId);
+		const mass = Math.max(Number.isFinite(wire) ? wire : 0, Number.isFinite(viewTokens) ? viewTokens : 0);
+		if (mass <= 0) return;
+		const pressurePercent = (mass / windowTokens) * 100;
+		if (pressurePercent < ADVISORY_NUDGE_PERCENT) {
+			advisoryNudgeBySession.delete(sessionId); // fresh episode on the next crossing
+			return;
+		}
+		const critical = pressurePercent >= ADVISORY_NUDGE_CRITICAL_PERCENT;
+		const prior = advisoryNudgeBySession.get(sessionId);
+		const now = Date.now();
+		// Any band CHANGE re-speaks immediately: escalation high->critical, and
+		// intentionally also a downgrade back into high after a partial fold.
+		if (prior !== undefined && prior.critical === critical && now - prior.at < ADVISORY_NUDGE_REPEAT_MS) return;
+		const nudge = advisoryNudgeText(Math.round(pressurePercent), critical);
+		const headCopy = {
+			...head,
+			content: head.content.map((entry) => (entry === block ? { ...entry, text: `${entry.text}\n\n${nudge}` } : entry)),
+		};
+		let landed = false;
+		try {
+			messages[0] = headCopy;
+			landed = true;
+		} catch {
+			/* frozen array — fall through to the reference swap */
+		}
+		if (!landed) {
+			try {
+				options.messages = [headCopy, ...messages.slice(1)];
+				landed = true;
+			} catch {
+				/* frozen options — this dispatch cannot carry the nudge; fail open */
+			}
+		}
+		if (!landed) return;
+		advisoryNudgeBySession.delete(sessionId); // re-insert: refresh recency so eviction drops the least recently nudged
+		advisoryNudgeBySession.set(sessionId, { at: now, critical });
+		if (advisoryNudgeBySession.size > 200) advisoryNudgeBySession.delete(advisoryNudgeBySession.keys().next().value);
+		decisionLog(`session=${sessionId} advisory-nudge pressure=${Math.round(pressurePercent)}% mass=${Math.round(mass)} window=${windowTokens} level=${critical ? "critical" : "high"}`);
+	}
+
 	const captures = new Map(); // sessionId -> { messages, refs, viewTokens, model, at }
-	const inFlight = new Set(); // sessionIds with a fold running
+	// sessionId -> generation token of the running fold cycle. A plain Set
+	// pinned a session forever once a cycle's await never settled; the
+	// maybeFold watchdog swaps the token so wedged cycles release the lock.
+	const inFlight = new Map();
+	// Fold-cycle watchdog: a cycle still "in flight" after this long logs a
+	// cycle-stuck row, releases the lock, and lets the next trigger retry.
+	// The ceiling must exceed the worst LEGITIMATE cycle — a raw fold can
+	// summarize on side AND fallback routes (2 x SUMMARY_TIMEOUT_MS = 240s) —
+	// so a healthy slow cycle is never preempted.
+	const CYCLE_WATCHDOG_MS = 300_000;
+	// Hard ceiling for one host model-info lookup: some llm builds never
+	// settle resolveModelInfo for unresolvable routes, and that wedged
+	// await used to pin the whole fold cycle until restart.
+	const WINDOW_RESOLVE_TIMEOUT_MS = 10_000;
 	const windowCache = new Map(); // "provider/model" -> { windowTokens, at }
 	const lastEmergencyAtBySession = new Map(); // sessionId -> epoch ms of last emergency fold (per-session cooldown)
 	const lastStreamCheckAt = new Map(); // sessionId -> epoch ms of last stream-path fold check (throttle)
@@ -505,6 +632,7 @@ export function applyContextTrim(ctx, config) {
 		ladderT2MinBlocks: readNumber(config, "trimLadderT2MinBlocks", 3),
 		ladderT3Tokens: readNumber(config, "trimLadderT3Tokens", 6_000),
 		ladderT3MinBlocks: readNumber(config, "trimLadderT3MinBlocks", 2),
+		protectTaskIntent: readBool(config, "trimProtectTaskIntent", true),
 	});
 	const ladderEnabledNow = () => readBool(config, "trimLadderEnabled", true);
 	/** CJK-aware summary-mass estimator for the ladder census (same units
@@ -573,20 +701,40 @@ export function applyContextTrim(ctx, config) {
 		return effectiveWindowTokens(resolved, windowCapNow());
 	}
 
-	/** Async raw-window resolution (fills the cache; null when unknown). */
+	/** Async raw-window resolution (fills the cache; null when unknown).
+	 * Two fixes over the historical behavior: the host contract is
+	 * resolveModelInfo(provider, model) — two strings; passing the model
+	 * object threw NO_ADAPTER on every route, so every decision row ran on
+	 * the cap fallback. And the lookup is raced against a hard timeout:
+	 * a never-settling promise must not pin the fold cycle. */
 	async function resolveRawWindow(model, key, now) {
+		let timer = null;
 		try {
 			const llm = ctx.get("llm", false);
-			const info = await llm?.resolveModelInfo?.(model);
+			const lookup = Promise.resolve(llm?.resolveModelInfo?.(model.provider, model.model));
+			const info = await Promise.race([
+				lookup,
+				new Promise((_, reject) => {
+					timer = setTimeout(() => reject(new Error(`no settle within ${WINDOW_RESOLVE_TIMEOUT_MS}ms`)), WINDOW_RESOLVE_TIMEOUT_MS);
+					timer.unref?.();
+				}),
+			]);
 			const windowTokens = info?.context?.contextWindow;
 			const value = Number.isFinite(windowTokens) && windowTokens > 0 ? windowTokens : null;
+			if (value === null) decisionLog(`window-resolve-failed key=${key} why=no context metadata`);
 			windowCache.set(key, { windowTokens: value, at: now });
 			if (windowCache.size > 200) windowCache.delete(windowCache.keys().next().value);
 			return value;
-		} catch {
+		} catch (error) {
 			windowCache.set(key, { windowTokens: null, at: now });
 			if (windowCache.size > 200) windowCache.delete(windowCache.keys().next().value);
+			// One row per model per 10-min cache window (plus rare concurrent
+			// misses inside the 10s race window): a silently failing resolution
+			// is what hid the wrong-arity call for months.
+			decisionLog(`window-resolve-failed key=${key} why=${error?.message ?? error}`);
 			return null;
+		} finally {
+			if (timer !== null) clearTimeout(timer);
 		}
 	}
 
@@ -744,7 +892,7 @@ export function applyContextTrim(ctx, config) {
 
 	/** Run one fold cycle for a session (called at the idle boundary ONLY).
 	 * Returns a short outcome string for logging. */
-	async function runFoldCycle(sessionId, decision, cycleStartedAt) {
+	async function runFoldCycle(sessionId, decision, cycleStartedAt, cycleToken) {
 		const capture = captures.get(sessionId);
 		if (capture === undefined) return "no-capture";
 		const { protectedTail } = thresholdsNow();
@@ -770,6 +918,7 @@ export function applyContextTrim(ctx, config) {
 			// Ladder folds never degrade to mechanical (docs/ladder-fold.md):
 			// after both routes fail the cycle stays fail-open with backoff.
 			if (summary === null) return disposedSince(cycleStartedAt) ? "reload-aborted" : "summary-unavailable"; // skip cycle, fail-open; a dispose cut is not a model failure
+			if (inFlight.get(sessionId) !== cycleToken) return "superseded"; // watchdog released us; a retry owns the session
 			const result = store.commitFold(
 				sessionId,
 				{ consumes: decision.consumes.slice(), summary, kind: "summary", tier: decision.tier === "ladder-3" ? 3 : 2, approxTokens },
@@ -828,6 +977,7 @@ export function applyContextTrim(ctx, config) {
 			if (summary === null) return disposedSince(cycleStartedAt) ? "reload-aborted" : "summary-unavailable"; // skip cycle, fail-open; a dispose cut is not a model failure
 		}
 		const positions = refPositions(capture.messages);
+		if (inFlight.get(sessionId) !== cycleToken) return "superseded"; // watchdog released us; a retry owns the session
 		const result = store.commitFold(
 			sessionId,
 			{ refRange: { firstId: refs[0], lastId: refs[refs.length - 1] }, count, approxTokens, summary, kind, tier: decision.tier },
@@ -874,15 +1024,28 @@ export function applyContextTrim(ctx, config) {
 			decisionLog(`session=${sessionId} via=${via} action=none reason=injection-unavailable view=${Math.round(capture.viewTokens)}`);
 			return;
 		}
-		inFlight.add(sessionId);
 		const cycleStartedAt = Date.now();
+		// Generation token lock (was a plain Set): a cycle wedged on an await
+		// that never settles used to pin this session's fold path until
+		// restart. The watchdog logs the wedge and releases the lock; an
+		// abandoned cycle returns "superseded" at its commit guard, and its
+		// finally can no longer delete a retry's entry.
+		const cycleToken = {};
+		inFlight.set(sessionId, cycleToken);
+		const cycleWatchdog = setTimeout(() => {
+			if (inFlight.get(sessionId) !== cycleToken) return;
+			inFlight.delete(sessionId);
+			decisionLog(`session=${sessionId} via=${via} outcome=cycle-stuck elapsedMs=${Date.now() - cycleStartedAt}`);
+			warn(`[context-trim] ${sessionId}: fold cycle stuck >${CYCLE_WATCHDOG_MS}ms — lock released for the next trigger`);
+		}, CYCLE_WATCHDOG_MS);
+		cycleWatchdog.unref?.();
 		// Hoisted for the catch below: a dispose-cut throw may land before the
 		// trigger ever ran, and the catch must not touch a dead binding.
 		let decision = null;
 		try {
-			const { protectedTail, ...thresholds } = thresholdsNow();
+			const { protectedTail, protectTaskIntent, ...thresholds } = thresholdsNow();
 			const ledger = store.ledgerOf(sessionId);
-			const foldable = computeFoldableRange(capture.messages, ledger, protectedTail);
+			const foldable = computeFoldableRange(capture.messages, ledger, protectedTail, { protectTaskIntent });
 			const windowTokens = await windowTokensFor(capture.model);
 			// Pressure tiers run on the REAL prompt size when the tally is known:
 			// max(view, wire). The view estimate misses the system/context
@@ -905,12 +1068,15 @@ export function applyContextTrim(ctx, config) {
 			});
 			decisionLog(`session=${sessionId} via=${via} action=${decision.action} tier=${decision.tier ?? "-"} reason=${decision.reason || "-"} view=${Math.round(capture.viewTokens)}${wireTokens === null ? "" : ` wire=${wireTokens}`} window=${windowTokens ?? "null"}`);
 			if (decision.action === "none") return;
-			const outcome = await runFoldCycle(sessionId, decision, cycleStartedAt);
+			const outcome = await runFoldCycle(sessionId, decision, cycleStartedAt, cycleToken);
 			// Failure ladder: commit resets it; a summarize/commit failure
 			// climbs it (the no-backoff loop this closes — those outcomes
 			// advance no cadence gate on their own). A ladder run whose
 			// consumed blocks vanished between trigger and commit is the same
 			// family: without backoff it would re-fire at every boundary.
+			// "superseded" (watchdog released the lock mid-cycle) and neutral
+			// skips advance no ladder either — the retry that owns the session
+			// is judged alone.
 			if (outcome.startsWith("folded:")) clearFoldFailure(sessionId);
 			else if (outcome === "summary-unavailable" || outcome.startsWith("commit-rejected:") || outcome === "ladder-consumed-missing") recordFoldFailure(sessionId);
 			// Outcome lands in the decision log too: warn() has no reachable
@@ -927,7 +1093,10 @@ export function applyContextTrim(ctx, config) {
 				warn(`[context-trim] fold cycle failed: ${error?.message ?? error}`);
 			}
 		} finally {
-			inFlight.delete(sessionId);
+			clearTimeout(cycleWatchdog);
+			// Only the cycle owning the CURRENT token may release the lock —
+			// a watchdog-superseded wedged cycle must not delete a retry's entry.
+			if (inFlight.get(sessionId) === cycleToken) inFlight.delete(sessionId);
 		}
 	}
 
@@ -1044,12 +1213,12 @@ export function applyContextTrim(ctx, config) {
 				if (!enabledNow()) return "Context trimming is disabled for this deployment.";
 				const ledger = store.ledgerOf(sessionId);
 				const capture = captures.get(sessionId);
-				const { protectedTail } = thresholdsNow();
+				const { protectedTail, protectTaskIntent } = thresholdsNow();
 				const lines = [`ctx_trim_status — mode: ${modeNow()} (enabled: ${enabledNow()})`];
 				lines.push(...renderStatusLedger(ledger));
 				// The raw range a fold would cover next, with its true size.
 				if (capture !== undefined) {
-					const foldable = computeFoldableRange(capture.messages, ledger, protectedTail);
+					const foldable = computeFoldableRange(capture.messages, ledger, protectedTail, { protectTaskIntent });
 					if (foldable !== null) {
 						const firstRef = refOf(capture.messages[foldable.startIdx], foldable.startIdx);
 						const lastRef = refOf(capture.messages[foldable.endIdx], foldable.endIdx);
@@ -1161,6 +1330,16 @@ export function applyContextTrim(ctx, config) {
 				if (applied !== null) {
 					viewTokens = applied.viewTokens;
 					mainDispatch = applied.sideDispatch !== true;
+					if (mainDispatch) {
+						// Advisory pressure nudge (modeNow gates inside): the model's
+						// own fold is advisory mode's ONLY relief channel — speak at
+						// the fold line. Fail-open, never breaks the dispatch.
+						try {
+							appendAdvisoryNudge(options, applied.sessionId, applied.viewTokens);
+						} catch (error) {
+							decisionLog(`advisory-nudge-failed why=${error?.message ?? error}`);
+						}
+					}
 				}
 			}
 		} catch (error) {
@@ -1248,5 +1427,5 @@ export function applyContextTrim(ctx, config) {
 		warn(`[context-trim] ctx.inject(llm) failed: ${error?.message ?? error}`);
 	}
 
-	return { store, metrics, captures, inFlight, maybeFold, maybeInherit, applyViewToOptions, surfacePass };
+	return { store, metrics, captures, inFlight, windowCache, advisoryNudgeBySession, maybeFold, maybeInherit, applyViewToOptions, surfacePass };
 }
