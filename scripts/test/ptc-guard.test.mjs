@@ -114,9 +114,15 @@ test('section text renders the clause for a PTC scope and "" otherwise', () => {
 	assert.match(rendered, /String\.raw/);
 	assert.match(rendered, /unclosed group/);
 	assert.match(rendered, /never repeat it unchanged/);
-	assert.match(rendered, /Top-level declarations persist across `run_code` calls/);
-	assert.ok(rendered.includes("never redeclare an existing `const`/`let`/`class` binding"));
-	assert.match(rendered, /Identifier \.\.\. has already been declared/);
+	assert.ok(rendered.includes("MUST wrap the entire run_code program body in an async IIFE"));
+	assert.ok(rendered.includes("await (async () => { ... })();"));
+	assert.ok(rendered.includes("this makes reusing local names such as `res` safe"));
+	assert.match(rendered, /Top-level bindings persist for this Agent/);
+	assert.ok(rendered.includes("never redeclare existing top-level `const`/`let`/`class`"));
+	assert.ok(rendered.includes("Identifier ... has already been declared"));
+	assert.match(rendered, /rewrite the program in the IIFE rather than merely rerunning it/);
+	assert.ok(rendered.includes("globalThis.__dshSwitchmanPtcBindings"));
+	assert.ok(rendered.includes("This ledger is manually maintained, not automatic introspection"));
 });
 
 test("section text is empty for a native scope and every fail-open shape", () => {
@@ -139,7 +145,7 @@ test("section text is empty for a native scope and every fail-open shape", () =>
 
 test("renderPtcGuard is byte-stable and interpolation-safe", () => {
 	assert.equal(renderPtcGuard(), renderPtcGuard());
-	assert.equal(renderPtcGuard().split("\n").length, 7);
+	assert.equal(renderPtcGuard().split("\n").length, 8);
 	assert.ok(renderPtcGuard().includes("{ name:"));
 });
 
