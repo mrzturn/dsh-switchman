@@ -67,10 +67,9 @@ export const IntentCandidateSchema = z.object({
  *  ModelRouteSchema this accepts the "unset" `{provider:"", model:""}`
  *  pair the settings page round-trips — ModelRouteSchema's `.min(1)`
  *  would reject that exact declared default on every settings write.
- *  Consumers validate non-empty before trusting the route. effort follows
- *  the optional no-`.required()` style (schemastery passes undefined
- *  through): the trim summarizer reads it as a reasoning-effort pin;
- *  intent-layer routes leave it unset. */
+ *  Consumers validate non-empty before trusting the route. `effort` is an
+ *  optional override for summary routes and intent fallback; the classifier
+ *  route remains effort-free in its route cleaner. */
 const IntentRouteSchema = z.object({
 	provider: z.string(),
 	model: z.string(),
@@ -240,8 +239,9 @@ export const Config = z.object({
 	 *  the 0.8×-window auto-compaction (see effectiveContextWindow in
 	 *  host/intent.js). */
 	intentContextWindow: z.number().min(1024).default(200000).volatile(),
-	/** Optional last-resort route when the classifier fails and no previous
-	 *  routed model exists; empty = the first candidate. */
+	/** Optional fallback route after classification fails when no prior route
+	 *  is available; empty = the first candidate. An optional effort pin
+	 *  overrides the fallback model's default. */
 	intentFallbackRoute: IntentRouteSchema.default({ provider: "", model: "" }).volatile(),
 
 	// --- Context trim: fully-automatic conversation compression ------------
@@ -292,12 +292,14 @@ export const Config = z.object({
 	 *  budget and the ladder starved. */
 	trimMaxFoldsPerHour: z.number().min(1).max(60).default(30).volatile(),
 	/** Route for the side-model summarizer (L3). Empty = inherit the
-	 *  session's current model. */
+	 *  session's current provider/model; an optional effort pin overrides
+	 *  the model's automatic recommended effort. */
 	trimSideModel: IntentRouteSchema.default({ provider: "", model: "" }).volatile(),
 	/** Route for the fold-fallback summarizer. When the primary side route
 	 *  (trimSideModel or the inherited session model) fails, raw folds retry
 	 *  on this route before degrading to a mechanical fold; ladder folds
-	 *  retry but never go mechanical. Pick a route with headroom on cooldown,
+	 *  retry but never go mechanical. An optional effort pin overrides the
+	 *  model's automatic recommendation. Pick a route with headroom on cooldown,
 	 *  risk-control, and concurrency limits. Empty = no fallback leg. */
 	trimFoldFallbackModel: IntentRouteSchema.default({ provider: "", model: "" }).volatile(),
 	/** T1/T2/T3 ladder folding (docs/ladder-fold.md): master switch for the

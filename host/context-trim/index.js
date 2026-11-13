@@ -695,10 +695,9 @@ export function applyContextTrim(ctx, config) {
 		} else if (view.applied > 0) {
 			epochResetDoneBySession.delete(sessionId);
 		}
-		// Capture the session's own resolved reasoningEffort alongside
-		// provider/model: at stream-listener time DSH has already resolved the
-		// effective effort for this dispatch, so the side route can inherit it
-		// verbatim instead of re-deriving (and losing) it.
+		// Record the active request's route and resolved effort for diagnostics only.
+		// The side summarizer follows provider/model only and resolves effort from its
+		// model metadata rather than inheriting this dispatch's effort.
 		const model = {
 			provider: options.provider ?? null,
 			model: options.model ?? null,
@@ -718,16 +717,14 @@ export function applyContextTrim(ctx, config) {
 	}
 
 	/** Resolve the side-model route: explicit trimSideModel route, else the
-	 * session's own model (inherit — design §5). */
+	 * session's own provider/model. Effort is resolved from that model's
+	 * supported thinking metadata, not inherited from the active session call. */
 	function sideRouteFor(sessionId) {
 		const explicit = readRoute(config, "trimSideModel");
 		if (explicit !== null) return explicit;
 		const model = metrics.of(sessionId)?.lastModel ?? null;
 		if (model !== null && typeof model.provider === "string" && model.provider !== "" && typeof model.model === "string" && model.model !== "") {
-			// Inherit the session's own resolved effort when one was captured.
-			return typeof model.effort === "string" && model.effort !== ""
-				? { provider: model.provider, model: model.model, effort: model.effort }
-				: { provider: model.provider, model: model.model };
+			return { provider: model.provider, model: model.model };
 		}
 		return null;
 	}

@@ -373,14 +373,13 @@ window.__ModuleLoader__.load({
 		const routeKey = (route) => `${route.provider}\0${route.model}`;
 
 		/** One well-formed {provider, model[, effort]} route, or null. */
-		function sanitizeRoute(route) {
+		function sanitizeRoute(route, allowEffort = false) {
 			if (route === null || typeof route !== 'object') return null;
 			if (typeof route.provider !== 'string' || route.provider === '') return null;
 			if (typeof route.model !== 'string' || route.model === '') return null;
-			// Trim side routes may carry an optional effort pin; keep it on the
-			// round-trip so a settings save never strips it (intent routes omit it).
+			// Preserve effort only for settings routes that expose a dedicated pin.
 			const out = { provider: route.provider, model: route.model };
-			if (typeof route.effort === 'string' && route.effort !== '') out.effort = route.effort;
+			if (allowEffort && typeof route.effort === 'string' && route.effort !== '') out.effort = route.effort;
 			return out;
 		}
 
@@ -532,10 +531,10 @@ window.__ModuleLoader__.load({
 				trimLadderEnabled: bool('trimLadderEnabled', true),
 				surfaceFold: bool('surfaceFold', true),
 				trimSideModel:
-					sanitizeRoute(value?.trimSideModel) ??
+					sanitizeRoute(value?.trimSideModel, true) ??
 					({ provider: '', model: '' }),
 					trimFoldFallbackModel:
-						sanitizeRoute(value?.trimFoldFallbackModel) ??
+					sanitizeRoute(value?.trimFoldFallbackModel, true) ??
 						({ provider: '', model: '' }),
 				trimStateDir: string('trimStateDir'),
 				...Object.fromEntries(
@@ -565,7 +564,7 @@ window.__ModuleLoader__.load({
 					INTENT_NUMBER_FIELDS.map((spec) => [spec.field, number(spec)]),
 				),
 				intentFallbackRoute:
-					sanitizeRoute(value?.intentFallbackRoute) ??
+					sanitizeRoute(value?.intentFallbackRoute, true) ??
 					({ provider: '', model: '' }),
 			};
 		}
@@ -619,8 +618,8 @@ window.__ModuleLoader__.load({
 				trimEnabled: values.trimEnabled,
 				trimLadderEnabled: values.trimLadderEnabled,
 				surfaceFold: values.surfaceFold,
-				trimSideModel: routeKey(values.trimSideModel),
-				trimFoldFallbackModel: routeKey(values.trimFoldFallbackModel),
+				trimSideModel: `${routeKey(values.trimSideModel)}\0${values.trimSideModel.effort ?? ''}`,
+				trimFoldFallbackModel: `${routeKey(values.trimFoldFallbackModel)}\0${values.trimFoldFallbackModel.effort ?? ''}`,
 				trimStateDir: values.trimStateDir,
 				...Object.fromEntries(
 					TRIM_NUMBER_FIELDS.map(({ field }) => [field, values[field]]),
@@ -645,7 +644,7 @@ window.__ModuleLoader__.load({
 				...Object.fromEntries(
 					INTENT_NUMBER_FIELDS.map(({ field }) => [field, values[field]]),
 				),
-				intentFallbackRoute: routeKey(values.intentFallbackRoute),
+				intentFallbackRoute: `${routeKey(values.intentFallbackRoute)}\0${values.intentFallbackRoute.effort ?? ''}`,
 			});
 		}
 
@@ -923,11 +922,11 @@ window.__ModuleLoader__.load({
 				surfaceFoldLabel: '把折叠写入会话表面',
 				surfaceFoldHelp: '追加宿主风格的替换事件，让折叠在冻结派发下也能到达线上。建议保持开启。',
 				trimSideModelLabel: '摘要模型',
-				trimSideModelHelp: '折叠摘要使用的模型路由；默认「跟随会话模型」。阶梯蒸馏同样使用该路由。',
+				trimSideModelHelp: '折叠摘要使用的模型路由；默认「跟随会话模型」。阶梯蒸馏同样使用该路由。未手动指定思考等级时，按模型元数据自动选择最低开启档；只有开／关思考时取关闭。模型不支持思考或元数据不可用时，不发送思考等级并沿用模型默认。',
 				trimFollowSession: '跟随会话模型',
-				trimEffortPinLow: '默认（pin low）',
+				trimEffortRecommended: '自动（按模型推荐规则）',
 				trimFoldFallbackModelLabel: '折叠异常兜底模型',
-				trimFoldFallbackModelHelp: '摘要模型调用失败时改用该模型重试；仍失败则压力折叠退回机械折叠。尽量选择没有冷却、风控或并发限制的模型，避免与主会话共用同一账号。留空 = 无兜底。',
+				trimFoldFallbackModelHelp: '摘要模型调用失败时改用该模型重试；仍失败则压力折叠退回机械折叠。思考等级可单独指定；留空时按该模型的推荐规则自动选择。尽量选择没有冷却、风控或并发限制的模型，避免与主会话共用同一账号。留空 = 无兜底。',
 				trimFallbackUnset: '未设置（失败时直接机械折叠）',
 				trimStateDirLabel: '账本目录',
 				trimStateDirHelp: '留空 = 默认的裁剪状态目录。',
@@ -1022,7 +1021,7 @@ window.__ModuleLoader__.load({
 				intentHistoryMaxCharsHelp: '对话摘录的总字符上限（200–20000）。',
 				intentFallbackRouteLabel: '兜底模型',
 				intentFallbackRouteHelp:
-					'分类失败时依次：上一轮实际路由 → 兜底模型 → 候选第一位；留空用候选第一位。',
+					'分类失败时依次：上一轮实际路由 → 兜底模型 → 候选第一位；留空用候选第一位。可选固定思考等级；不指定时使用兜底模型默认等级。',
 				intentRouteUnset: '未设置',
 				intentEffortFollow: '跟随模型默认',
 				intentDockAuto: '自动',
@@ -1194,13 +1193,12 @@ window.__ModuleLoader__.load({
 				surfaceFoldHelp:
 					'Append host-style replace events so folds reach the wire even on frozen dispatches. Leave on.',
 				trimSideModelLabel: 'Summarizer model',
-				trimSideModelHelp:
-					'Route for fold summaries; defaults to following the session model. Also used by ladder distillations.',
+				trimSideModelHelp: 'Route for fold summaries; defaults to following the session model. Also used by ladder distillations. Without a pinned effort, choose the lowest enabled level from model metadata; for a thinking on/off-only model, choose off. If reasoning is unsupported or metadata is unavailable, omit the effort and keep the model default.',
 				trimFollowSession: 'Follow session model',
-				trimEffortPinLow: 'Default (pin low)',
+				trimEffortRecommended: 'Automatic (model recommendation)',
 				trimFoldFallbackModelLabel: 'Fold fallback model',
 				trimFoldFallbackModelHelp:
-					'When the summary route fails, the fold retries on this model before degrading a pressure fold to a mechanical one. Prefer a model with headroom on cooldowns, risk control, and concurrency limits — avoid sharing the pinned account with the main session. Empty = no fallback leg.',
+					'When the summary route fails, the fold retries on this model before degrading a pressure fold to a mechanical one. Its effort can be pinned separately; if unset, the model recommendation is used. Prefer a model with headroom on cooldowns, risk control, and concurrency limits — avoid sharing the pinned account with the main session. Empty = no fallback leg.',
 				trimFallbackUnset: 'Unset (failed folds go straight to mechanical)',
 				trimStateDirLabel: 'Ledger directory',
 				trimStateDirHelp: 'Empty = the default per-host trim state directory.',
@@ -1305,7 +1303,7 @@ window.__ModuleLoader__.load({
 					'Total character cap of the conversation excerpt (200–20000).',
 				intentFallbackRouteLabel: 'Fallback model',
 				intentFallbackRouteHelp:
-					'On classification failure: last routed model → fallback → first candidate; empty = first candidate.',
+					'On classification failure: last routed model → fallback → first candidate; empty = first candidate. Optionally pin a thinking effort; when unset, the fallback model default is used.',
 				intentRouteUnset: 'Not set',
 				intentEffortFollow: 'model default',
 				intentDockAuto: 'Auto',
@@ -1470,11 +1468,11 @@ window.__ModuleLoader__.load({
 				surfaceFoldLabel: '把摺疊寫入會話表面',
 				surfaceFoldHelp: '追加宿主風格的替換事件，讓摺疊在凍結派發下也能到達線上。建議保持開啟。',
 				trimSideModelLabel: '摘要模型',
-				trimSideModelHelp: '摺疊摘要使用的模型路由；預設「跟隨對話模型」。階梯蒸餾同樣使用該路由。',
+				trimSideModelHelp: '摺疊摘要使用的模型路由；預設「跟隨對話模型」。階梯蒸餾同樣使用該路由。未手動指定思考等級時，依模型中繼資料自動選擇最低啟用等級；模型僅提供思考開／關切換時取關閉。不支援思考或中繼資料不可用時，不傳思考等級並沿用模型預設。',
 				trimFollowSession: '跟隨對話模型',
-				trimEffortPinLow: '預設（pin low）',
+				trimEffortRecommended: '自動（依模型推薦規則）',
 				trimFoldFallbackModelLabel: '摺疊異常備援模型',
-				trimFoldFallbackModelHelp: '摘要模型呼叫失敗時改用該模型重試；仍失敗則壓力摺疊退回機械摺疊。盡量選擇沒有冷卻、風控或並行限制的模型，避免與主對話共用同一帳號。留空 = 無備援。',
+				trimFoldFallbackModelHelp: '摘要模型呼叫失敗時改用該模型重試；仍失敗則壓力摺疊退回機械摺疊。思考等級可單獨指定；留空時依該模型推薦規則自動選擇。盡量選擇沒有冷卻、風控或並行限制的模型，避免與主對話共用同一帳號。留空 = 無備援。',
 				trimFallbackUnset: '未設定（失敗時直接機械摺疊）',
 				trimStateDirLabel: '帳本目錄',
 				trimStateDirHelp: '留空 = 預設的裁剪狀態目錄。',
@@ -1566,7 +1564,7 @@ window.__ModuleLoader__.load({
 				intentHistoryMaxCharsHelp: '對話摘錄的總字元上限（200–20000）。',
 				intentFallbackRouteLabel: '備援模型',
 				intentFallbackRouteHelp:
-					'分類失敗時依次：上一輪實際路由 → 備援模型 → 候選第一位；留空用候選第一位。',
+					'分類失敗時依次：上一輪實際路由 → 備援模型 → 候選第一位；留空用候選第一位。可選固定思考等級；未指定時使用備援模型預設等級。',
 				intentRouteUnset: '未設定',
 				intentEffortFollow: '跟隨模型預設',
 				intentDockAuto: '自動',
@@ -1796,10 +1794,10 @@ window.__ModuleLoader__.load({
 					'会話抜粋の合計文字上限（200–20000）。',
 				intentFallbackRouteLabel: 'フォールバックモデル',
 				intentFallbackRouteHelp:
-					'分類失敗時：前回ルート → フォールバック → 候補の先頭。空欄は候補の先頭。',
+					'分類失敗時：前回ルート → フォールバック → 候補の先頭。空欄は候補の先頭。思考レベルを固定できます。未指定ならモデル既定を使用します。',
 				intentRouteUnset: '未設定',
 				intentEffortFollow: 'モデルのデフォルト',
-				trimEffortPinLow: 'デフォルト（pin low）',
+				trimEffortRecommended: '自動（モデル推奨）',
 				intentDockAuto: '自動',
 				intentDockUnrouted: '未ルーティング',
 				intentDockUsing: '使用中',
@@ -1939,7 +1937,7 @@ window.__ModuleLoader__.load({
 					'서브에이전트 자체 모델 창에 맞춰 3단계 축소: force = min(정적 기준, 창×비율). soft/hard도 같은 비율로 축소. 완화 없이 강화만.',
 				wmSubagentFollowForce: 'force 단계 따르기(0)',
 				wmCommands: '명령: /ctx-pause 수위 개입 일시 중지 · /ctx-resume 재개 · /ctx-handover 지금 핸드오버 문서를 작성하고 압축.',
-				trimEffortPinLow: '기본 (low 고정)',
+				trimEffortRecommended: '자동 (모델 권장)',
 				trimSectionTitle: '컨텍스트 트림',
 				trimModeLabel: '트림 모드',
 				trimModeHelp:
@@ -2028,7 +2026,7 @@ window.__ModuleLoader__.load({
 					'대화 발췌의 총 문자 상한(200–20000).',
 				intentFallbackRouteLabel: '폴백 모델',
 				intentFallbackRouteHelp:
-					'분류 실패 시: 이전 라우트 → 폴백 → 첫 후보. 빈 값은 첫 후보.',
+					'분류 실패 시: 이전 라우트 → 폴백 → 첫 후보. 비어 있으면 첫 후보입니다. 추론 수준을 선택적으로 고정할 수 있으며, 지정하지 않으면 폴백 모델 기본값을 따릅니다.',
 				intentRouteUnset: '미설정',
 				intentEffortFollow: '모델 기본값',
 				intentDockAuto: '자동',
@@ -2170,7 +2168,7 @@ window.__ModuleLoader__.load({
 					'Skaliert die Stufen auf das eigene Modellfenster des Subagenten: force = min(statische Stufe, Fenster × Quote); soft/hard schrumpfen im selben Faktor. Verengt nur, lockert nie.',
 				wmSubagentFollowForce: 'Der Force-Stufe folgen (0)',
 				wmCommands: 'Befehle: /ctx-pause pausiert Wasserstand-Aktionen · /ctx-resume setzt sie fort · /ctx-handover schreibt das Übergabedokument jetzt und komprimiert sofort.',
-				trimEffortPinLow: 'Standard (pin low)',
+				trimEffortRecommended: 'Automatisch (Modell-Empfehlung)',
 				trimSectionTitle: 'Kontext-Trim',
 				trimModeLabel: 'Trim-Modus',
 				trimModeHelp:
@@ -2262,7 +2260,7 @@ window.__ModuleLoader__.load({
 					'Gesamtzeichengrenze des Gesprächsauszugs (200–20000).',
 				intentFallbackRouteLabel: 'Fallback-Modell',
 				intentFallbackRouteHelp:
-					'Bei Klassifikationsfehler: zuletzt geroutet → Fallback → erster Kandidat; leer = erster Kandidat.',
+					'Bei Klassifikationsfehler: zuletzt geroutet → Fallback → erster Kandidat; leer = erster Kandidat. Der Thinking-Aufwand kann optional festgelegt werden; andernfalls gilt der Modellstandard des Fallbacks.',
 				intentRouteUnset: 'Nicht festgelegt',
 				intentEffortFollow: 'Modellstandard',
 				intentDockAuto: 'Auto',
@@ -2404,7 +2402,7 @@ window.__ModuleLoader__.load({
 					'Escala los niveles a la ventana del propio modelo del subagente: force = min(nivel estático, ventana × ratio); soft/hard se reducen por el mismo factor. Solo restringe, nunca amplía.',
 				wmSubagentFollowForce: 'Seguir el nivel forzado (0)',
 				wmCommands: 'Comandos: /ctx-pause suspende las acciones del nivel · /ctx-resume las reanuda · /ctx-handover escribe el documento y compacta ahora.',
-				trimEffortPinLow: 'Predeterminado (pin low)',
+				trimEffortRecommended: 'Automático (recomendación del modelo)',
 				trimSectionTitle: 'Recorte de contexto',
 				trimModeLabel: 'Modo de recorte',
 				trimModeHelp:
@@ -2497,7 +2495,7 @@ window.__ModuleLoader__.load({
 					'Límite total de caracteres del extracto de conversación (200–20000).',
 				intentFallbackRouteLabel: 'Modelo de reserva',
 				intentFallbackRouteHelp:
-					'Si falla la clasificación: último modelo enrutado → reserva → primer candidato; vacío = primer candidato.',
+					'Si falla la clasificación: último modelo enrutado → reserva → primer candidato; vacío = primer candidato. Puedes fijar opcionalmente el nivel de razonamiento; si no, se usa el valor predeterminado del modelo de reserva.',
 				intentRouteUnset: 'Sin establecer',
 				intentEffortFollow: 'predeterminado del modelo',
 				intentDockAuto: 'Auto',
@@ -2639,7 +2637,7 @@ window.__ModuleLoader__.load({
 					'Ajuste les paliers à la fenêtre propre du modèle du sous-agent : force = min(palier statique, fenêtre × ratio) ; soft/hard réduits du même facteur. Ne fait que resserrer, jamais relâcher.',
 				wmSubagentFollowForce: 'Suivre le palier force (0)',
 				wmCommands: 'Commandes : /ctx-pause suspend les actions de niveau d’eau · /ctx-resume les reprend · /ctx-handover écrit le document et compacte maintenant.',
-				trimEffortPinLow: 'Par défaut (pin low)',
+				trimEffortRecommended: 'Automatique (recommandation du modèle)',
 				trimSectionTitle: 'Rognage du contexte',
 				trimModeLabel: 'Mode de rognage',
 				trimModeHelp:
@@ -2732,7 +2730,7 @@ window.__ModuleLoader__.load({
 					'Plafond total de caractères de l’extrait de conversation (200–20000).',
 				intentFallbackRouteLabel: 'Modèle de secours',
 				intentFallbackRouteHelp:
-					'En cas d’échec : dernier modèle routé → secours → premier candidat ; vide = premier candidat.',
+					'En cas d’échec : dernier modèle routé → secours → premier candidat ; vide = premier candidat. Vous pouvez épingler le niveau de raisonnement ; sinon, le niveau par défaut du modèle de secours est utilisé.',
 				intentRouteUnset: 'Non défini',
 				intentEffortFollow: 'par défaut du modèle',
 				intentDockAuto: 'Auto',
@@ -2874,7 +2872,7 @@ window.__ModuleLoader__.load({
 					'Ridimensiona i livelli alla finestra del modello del subagente: force = min(livello statico, finestra × rapporto); soft/hard si riducono dello stesso fattore. Solo restrizione, mai allentamento.',
 				wmSubagentFollowForce: 'Segui la soglia force (0)',
 				wmCommands: 'Comandi: /ctx-pause sospende le azioni da livello dell’acqua · /ctx-resume le riprende · /ctx-handover scrive il documento e compatta subito.',
-				trimEffortPinLow: 'Predefinito (pin low)',
+				trimEffortRecommended: 'Automatico (consigliato dal modello)',
 				trimSectionTitle: 'Riduzione del contesto',
 				trimModeLabel: 'Modalità di riduzione',
 				trimModeHelp:
@@ -2967,7 +2965,7 @@ window.__ModuleLoader__.load({
 					'Limite totale di caratteri dell’estratto della conversazione (200–20000).',
 				intentFallbackRouteLabel: 'Modello di riserva',
 				intentFallbackRouteHelp:
-					'In caso di errore: ultimo modello instradato → riserva → primo candidato; vuoto = primo candidato.',
+					'In caso di errore: ultimo modello instradato → riserva → primo candidato; vuoto = primo candidato. Puoi fissare il livello di ragionamento; se omesso, si usa il valore predefinito del modello di riserva.',
 				intentRouteUnset: 'Non impostato',
 				intentEffortFollow: 'predefinito del modello',
 				intentDockAuto: 'Auto',
@@ -3109,7 +3107,7 @@ window.__ModuleLoader__.load({
 					'Escala os níveis para a janela do próprio modelo do subagente: force = min(nível estático, janela × razão); soft/hard encolhem pelo mesmo fator. Apenas aperta, nunca afrouxa.',
 				wmSubagentFollowForce: 'Seguir o limiar force (0)',
 				wmCommands: 'Comandos: /ctx-pause suspende as ações de nível de água · /ctx-resume as retoma · /ctx-handover escreve o documento e compacta agora.',
-				trimEffortPinLow: 'Padrão (pin low)',
+				trimEffortRecommended: 'Automático (recomendação do modelo)',
 				trimSectionTitle: 'Corte de contexto',
 				trimModeLabel: 'Modo de corte',
 				trimModeHelp:
@@ -3202,7 +3200,7 @@ window.__ModuleLoader__.load({
 					'Limite total de caracteres do trecho da conversa (200–20000).',
 				intentFallbackRouteLabel: 'Modelo de reserva',
 				intentFallbackRouteHelp:
-					'Se a classificação falhar: último modelo roteado → reserva → primeiro candidato; vazio = primeiro candidato.',
+					'Se a classificação falhar: último modelo roteado → reserva → primeiro candidato; vazio = primeiro candidato. É possível fixar o nível de raciocínio; se não definido, usa-se o padrão do modelo de reserva.',
 				intentRouteUnset: 'Não definido',
 				intentEffortFollow: 'padrão do modelo',
 				intentDockAuto: 'Auto',
@@ -3344,7 +3342,7 @@ window.__ModuleLoader__.load({
 					'Масштабирует уровни под собственное окно модели субагента: force = min(статический уровень, окно × доля); soft/hard сжимаются на тот же коэффициент. Только ужесточает, не смягчает.',
 				wmSubagentFollowForce: 'Следовать линии force (0)',
 				wmCommands: 'Команды: /ctx-pause приостанавливает действия по уровню воды · /ctx-resume возобновляет их · /ctx-handover записывает документ передачи и сжимает прямо сейчас.',
-				trimEffortPinLow: 'По умолчанию (pin low)',
+				trimEffortRecommended: 'Авто (рекомендация модели)',
 				trimSectionTitle: 'Обрезка контекста',
 				trimModeLabel: 'Режим обрезки',
 				trimModeHelp:
@@ -3436,7 +3434,7 @@ window.__ModuleLoader__.load({
 					'Общий лимит символов выборки диалога (200–20000).',
 				intentFallbackRouteLabel: 'Резервная модель',
 				intentFallbackRouteHelp:
-					'При сбое классификации: прошлая модель → резерв → первый кандидат; пусто = первый кандидат.',
+					'При сбое классификации: прошлая модель → резерв → первый кандидат; пусто = первый кандидат. Можно задать уровень reasoning; если он не указан, используется значение резервной модели по умолчанию.',
 				intentRouteUnset: 'Не задано',
 				intentEffortFollow: 'по умолчанию модели',
 				intentDockAuto: 'Авто',
@@ -5433,10 +5431,12 @@ window.__ModuleLoader__.load({
 				trimSideModel: {
 					provider: values.trimSideModel.provider,
 					model: values.trimSideModel.model,
+					...(values.trimSideModel.effort ? { effort: values.trimSideModel.effort } : {}),
 				},
 				trimFoldFallbackModel: {
 					provider: values.trimFoldFallbackModel.provider,
 					model: values.trimFoldFallbackModel.model,
+					...(values.trimFoldFallbackModel.effort ? { effort: values.trimFoldFallbackModel.effort } : {}),
 				},
 				trimStateDir: values.trimStateDir,
 				...Object.fromEntries(
@@ -5445,9 +5445,9 @@ window.__ModuleLoader__.load({
 				teamsMode: values.teamsMode,
 				syncWhitelist: values.syncWhitelist,
 				// Intent recognition (design: intent-routing.md §2): route
-				// objects materialize {provider, model} like the pool fields;
-				// candidate effort/note are always sent (blank string = unset,
-				// the Host coerces per its schema).
+				// Route objects materialize {provider, model[, effort]} as configured;
+				// the classifier route remains effort-free. Candidate effort/note are
+				// always sent (blank string = unset; Host coerces per schema).
 				intentEnabled: values.intentEnabled,
 				intentClassifierRoute: {
 					provider: values.intentClassifierRoute.provider,
@@ -5472,6 +5472,7 @@ window.__ModuleLoader__.load({
 				intentFallbackRoute: {
 					provider: values.intentFallbackRoute.provider,
 					model: values.intentFallbackRoute.model,
+					...(values.intentFallbackRoute.effort ? { effort: values.intentFallbackRoute.effort } : {}),
 				},
 			};
 			if (sameValues(current, desired)) {
@@ -5875,9 +5876,10 @@ window.__ModuleLoader__.load({
 										(meta) => meta.model === route.model,
 									);
 									edit(field, {
-										provider: next,
-										model: kept ? route.model : '',
-									});
+									provider: next,
+									model: kept ? route.model : '',
+									effort: '',
+								});
 								},
 							),
 							'aria-label': `${label} · provider`,
@@ -5891,7 +5893,7 @@ window.__ModuleLoader__.load({
 								`${intentId}-${field}-model`,
 								route.model,
 								(next) => {
-									edit(field, { ...route, model: next });
+									edit(field, { ...route, model: next, effort: '' });
 								},
 							),
 							disabled: !editable || route.provider === '',
@@ -5899,6 +5901,16 @@ window.__ModuleLoader__.load({
 						},
 						...intentModelOptions(route.provider, route.model),
 					),
+					field === 'intentFallbackRoute' && route.provider !== '' && route.model !== ''
+						? intentEffortSelect(
+							`${intentId}-${field}-effort`,
+							route,
+							route.effort ?? '',
+							(next) => edit(field, { ...route, effort: next }),
+							`${label} · effort`,
+							t('intentEffortFollow'),
+						)
+						: null,
 				);
 			};
 			/** Trim route rows reuse the intent route picker machinery — the
@@ -5950,6 +5962,7 @@ window.__ModuleLoader__.load({
 									...route,
 									provider: next,
 									model: kept ? route.model : '',
+									effort: '',
 								});
 							},
 						),
@@ -5963,10 +5976,10 @@ window.__ModuleLoader__.load({
 								: route.model,
 							(next) => {
 								if (followMode && next === TRIM_ROUTE_FOLLOW) {
-									edit(field, { ...route, model: '' });
+									edit(field, { ...route, model: '', effort: '' });
 									return;
 								}
-								edit(field, { ...route, model: next });
+								edit(field, { ...route, model: next, effort: '' });
 							},
 						),
 						disabled: !editable || route.provider === '',
@@ -5976,10 +5989,10 @@ window.__ModuleLoader__.load({
 						? intentEffortSelect(
 							`${trimId}-${field}-effort`,
 							route,
-							route.effort,
+							route.effort ?? '',
 							(next) => edit(field, { ...route, effort: next }),
 							`${label} · effort`,
-							t('trimEffortPinLow'),
+							t('trimEffortRecommended'),
 						)
 						: null,
 				);
@@ -5988,8 +6001,8 @@ window.__ModuleLoader__.load({
 			 *  wire efforts when the catalog reports them, the EFFORTS
 			 *  fallback otherwise; '' = adapter default. A stored value
 			 *  missing from the list stays selectable. emptyLabel replaces
-			 *  the '' option label (trim rows pin low instead of following
-			 *  the model default). */
+			 *  the '' option label. Trim rows use their automatic recommendation;
+			 *  an empty intent-fallback pin follows the model default. */
 			const intentEffortSelect = (
 				id,
 				route,

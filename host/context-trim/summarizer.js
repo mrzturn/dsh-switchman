@@ -224,15 +224,25 @@ function describeFailure(chunk) {
 	return ` (${raw.replace(/\s+/gu, " ").trim().slice(0, 300)})`;
 }
 
-/** Side-model summary. llm: the dsh llm service (receiver-bound methods);
- * route: { provider, model, effort? } | null (null → caller skips); materialText:
- * compression prompt (the ladder distillation passes its own); deadlineMs:
- * hard budget. Returns the summary text, or null on ANY failure (caller
- * skips the fold cycle). */
+/** Choose the lowest enabled tier when several reasoning levels are available.
+ * A model with only an on/off switch is pinned to "off"; when reasoning
+ * metadata is absent, leave the model's adapter default unchanged. */
+export function recommendedReasoningEffort(modelInfo) {
+	const efforts = modelInfo?.reasoning?.efforts;
+	if (!Array.isArray(efforts) || efforts.length === 0) return null;
+	const ids = efforts.map((entry) => typeof entry === "string" ? entry : entry?.id).filter((id) => typeof id === "string" && id !== "");
+	const enabled = ids.filter((id) => id !== "off");
+	if (enabled.length > 1) return enabled[0];
+	return ids.includes("off") ? "off" : null;
+}
+
+/** Side-model summary. llm: the dsh llm service; route: {provider, model, effort?}.
+ * An empty effort pin is resolved from model reasoning metadata; unavailable
+ * metadata leaves the adapter default unchanged. Returns summary text or null. */
 export async function summarizeWithModel(llm, route, materialText, options = {}) {
 	const fail = typeof options.onFail === "function" ? options.onFail : null;
-	// Effort-retry notice: fires BEFORE the low-pinned retry, whether or not
-	// the retry lands. Falls back to fail when the caller doesn't supply one.
+	// Effort-retry notice: fires before a one-time effort fallback, whether
+	// or not that retry lands. Falls back to fail when no notice is supplied.
 	const notice = typeof options.onNotice === "function" ? options.onNotice : null;
 	if (route === null || route === undefined) { fail?.("no-route"); return null; }
 	if (typeof llm?.prepareCall !== "function") { fail?.("no-prepare-call"); return null; }
@@ -242,39 +252,40 @@ export async function summarizeWithModel(llm, route, materialText, options = {})
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(new Error("trim summary deadline")), deadlineMs);
 	try {
-		// Effort policy: inherit the route's effort verbatim when it carries
-		// one (session-inherited routes carry the session's own DSH-resolved
-		// effort; explicit trimSideModel configs may pin theirs), else pin
-		// "low" — summaries are auxiliary work. NEVER send without an effort,
-		// and never send "off": pi-ai maps both to thinking:{type:"disabled"}
-		// (profileOptions turns "off" back into an absent reasoning option),
-		// which newer Anthropic endpoints reject with 400. A DSH session run
-		// with thinking disabled resolves its effort to "off", so an inherited
-		// route can carry exactly that value — treat it like empty here.
-		// The effort rides the prepareCall proposal so it resolves into
-		// call.config, keeping stream options consistent with the prepared
-		// call (INVALID_PREPARED_CALL guard).
-		const requestedEffort = typeof route.effort === "string" && route.effort !== "" && route.effort !== "off" ? route.effort : "low";
+		// Resolve from the selected model itself: an empty pin means the lowest
+		// advertised thinking effort, while absent reasoning metadata leaves
+		// the adapter default (no thinking) untouched. Explicit effort pins win.
+		let modelInfo = null;
+		if (typeof llm.resolveModelInfo === "function") {
+			try { modelInfo = await llm.resolveModelInfo(route.provider, route.model, controller.signal); }
+			catch { /* Metadata is advisory; prepareCall remains authoritative. */ }
+		}
+		const automaticEffort = recommendedReasoningEffort(modelInfo);
+		const hasOffEffort = Array.isArray(modelInfo?.reasoning?.efforts) && modelInfo.reasoning.efforts.some((entry) => (typeof entry === "string" ? entry : entry?.id) === "off");
+		const explicitEffort = typeof route.effort === "string" && route.effort !== "";
+		const requestedEffort = explicitEffort ? route.effort : automaticEffort;
+		const proposalFor = (effort) => ({
+			provider: route.provider,
+			model: route.model,
+			maxTokens,
+			...(typeof effort === "string" && effort !== "" ? { reasoningEffort: effort } : {}),
+		});
 		let call;
 		try {
-			call = await llm.prepareCall(
-				{ provider: route.provider, model: route.model, maxTokens, reasoningEffort: requestedEffort },
-				controller.signal,
-				(controls) => controls,
-			);
+			call = await llm.prepareCall(proposalFor(requestedEffort), controller.signal, (controls) => controls);
 		} catch (prepareError) {
-			// An inherited session effort can exceed what the route's adapter
-			// supports: retry once pinned low before giving up (the outer
-			// catch then turns the failure into a skipped fold cycle).
 			const code = prepareError?.code ?? null;
 			const named = typeof prepareError?.message === "string" && prepareError.message.includes("UNSUPPORTED_REASONING_EFFORT");
-			if (requestedEffort === "low" || (code !== "UNSUPPORTED_REASONING_EFFORT" && !named)) throw prepareError;
-			(notice ?? fail)?.(`effort "${requestedEffort}" unsupported, retrying low`);
-			call = await llm.prepareCall(
-				{ provider: route.provider, model: route.model, maxTokens, reasoningEffort: "low" },
-				controller.signal,
-				(controls) => controls,
-			);
+			if (code !== "UNSUPPORTED_REASONING_EFFORT" && !named) throw prepareError;
+			// Stale metadata or a stale pin should not prevent a summary: retry
+			// once at the model's automatic minimum, or without an effort. Never
+			// turn an explicitly requested "off" into enabled reasoning.
+			const retryEffort = requestedEffort === "off"
+				? null
+				: (explicitEffort && automaticEffort !== requestedEffort ? automaticEffort : (hasOffEffort ? "off" : null));
+			if (retryEffort === requestedEffort) throw prepareError;
+			(notice ?? fail)?.(`effort "${requestedEffort ?? "default"}" unsupported, retrying ${retryEffort ?? "without reasoning"}`);
+			call = await llm.prepareCall(proposalFor(retryEffort), controller.signal, (controls) => controls);
 		}
 		let text = "";
 		let finishKind = null;

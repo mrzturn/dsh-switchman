@@ -150,13 +150,12 @@ const INTENT_NUMBER_FIELDS = [
 	{ field: "intentHistoryMaxChars", min: 200, max: 20000, def: 2400 },
 	{ field: "intentContextWindow", min: 1024, max: Number.POSITIVE_INFINITY, def: 200000 },
 ];
-/** Intent route references round-trip the "unset" {provider:"", model:""}
+/** Intent classifier routes round-trip the "unset" {provider:"", model:""}
  *  pair, so they validate against the loosened cleanIntentRoute (both keys
- *  must be strings; either may be empty); intent routes never carry effort. */
-const INTENT_ROUTE_FIELDS = ["intentClassifierRoute", "intentFallbackRoute"];
-/** Trim side routes additionally round-trip an optional effort pin — the
- *  settings page's reasoning-effort select — via cleanTrimRoute below. */
-const TRIM_ROUTE_FIELDS = ["trimSideModel", "trimFoldFallbackModel"];
+ *  must be strings; either may be empty). */
+const INTENT_ROUTE_FIELDS = ["intentClassifierRoute"];
+/** Summary routes and the intent fallback route can carry an effort pin. */
+const EFFORT_ROUTE_FIELDS = ["trimSideModel", "trimFoldFallbackModel", "intentFallbackRoute"];
 /** Intent candidate list (route + optional effort/note per entry). */
 const INTENT_CANDIDATE_FIELDS = ["intentCandidates"];
 
@@ -315,11 +314,8 @@ function cleanIntentRoute(entry) {
 	return provider === null || model === null ? null : { provider, model };
 	}
 
-/** Coerce one TRIM side route: like cleanIntentRoute, but a non-empty string
- *  effort rides along — the trim summarizer pins reasoning effort on its side
- *  model, and stripping it here made every settings save silently revert the
- *  settings page's effort select to the default. Intent routes omit effort. */
-function cleanTrimRoute(entry) {
+/** Coerce one route that may carry an optional reasoning-effort pin. */
+function cleanEffortRoute(entry) {
 	const route = cleanIntentRoute(entry);
 	if (route === null) return null;
 	const effort = typeof entry.effort === "string" ? entry.effort.trim() : "";
@@ -370,7 +366,7 @@ export function snapshotOf(config) {
 			? rawOf(config[field]).map(cleanEffortEntry).filter(Boolean)
 			: [];
 	for (const field of INTENT_ROUTE_FIELDS) values[field] = cleanIntentRoute(rawOf(config?.[field])) ?? { provider: "", model: "" };
-	for (const field of TRIM_ROUTE_FIELDS) values[field] = cleanTrimRoute(rawOf(config?.[field])) ?? { provider: "", model: "" };
+	for (const field of EFFORT_ROUTE_FIELDS) values[field] = cleanEffortRoute(rawOf(config?.[field])) ?? { provider: "", model: "" };
 	for (const field of INTENT_CANDIDATE_FIELDS)
 		values[field] = mergeIntentCandidates(rawOf(config?.[field]));
 	values.intentClassifierKind = ENUM_FIELDS.intentClassifierKind.includes(rawOf(config?.intentClassifierKind))
@@ -445,8 +441,8 @@ export function coerceValues(input) {
 		if (route === null) return null;
 		values[field] = route;
 	}
-	for (const field of TRIM_ROUTE_FIELDS) {
-		const route = cleanTrimRoute(input[field]);
+	for (const field of EFFORT_ROUTE_FIELDS) {
+		const route = cleanEffortRoute(input[field]);
 		if (route === null) return null;
 		values[field] = route;
 	}

@@ -603,9 +603,12 @@ test("fold fallback model: a failing side route retries the fallback before any 
 	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
 	const attempts = [];
 	const llm = {
-		resolveModelInfo: async () => ({ context: { contextWindow: 100_000 } }),
-		prepareCall: async ({ model }) => {
-			attempts.push(model);
+		resolveModelInfo: async () => ({
+			context: { contextWindow: 100_000 },
+			reasoning: { efforts: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }] },
+		}),
+		prepareCall: async ({ model, reasoningEffort }) => {
+			attempts.push({ model, reasoningEffort: reasoningEffort ?? null });
 			if (model === "m") throw new Error("pinned upstream rejects the side call");
 			return { stream: async function* () { yield { type: "text-delta", text: "Fallback summary." }; yield { type: "finish" }; } };
 		},
@@ -616,7 +619,7 @@ test("fold fallback model: a failing side route retries the fallback before any 
 	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
 	const handle = applyContextTrim(ctx, {
 		...config, trimStateDir: stateDir,
-		trimFoldFallbackModel: { provider: "fb", model: "fallback-m" },
+		trimFoldFallbackModel: { provider: "fb", model: "fallback-m", effort: "high" },
 	});
 
 	const store = [];
@@ -634,7 +637,10 @@ test("fold fallback model: a failing side route retries the fallback before any 
 	assert.equal(block.summary, "Fallback summary.");
 	// The session model is inherited as the side route first; the configured
 	// fallback route is the second (and only other) stop.
-	assert.deepEqual(attempts, ["m", "fallback-m"]);
+	assert.deepEqual(attempts, [
+		{ model: "m", reasoningEffort: "low" },
+		{ model: "fallback-m", reasoningEffort: "high" },
+	]);
 	const fails = readFileSync(join(stateDir, "decisions.log"), "utf8").split("\n").filter((line) => line.includes("summary-fail"));
 	assert.equal(fails.length, 1, "exactly one failure row");
 	assert.ok(fails[0].includes("route=side"), "the side failure is tagged with its route");
@@ -644,24 +650,25 @@ test("fold fallback model: a failing side route retries the fallback before any 
 	assert.ok(!outcomes[0].includes("fallback=mechanical"), "no degrade marker when the model fallback lands");
 });
 
-/** Side-route effort inheritance (session effort → capture → side route →
- * summary proposal). Four scenarios in one run: A session-inherited effort
- * rides through verbatim; B an explicit trimSideModel effort wins; C no
- * effort anywhere pins low (never send without one); D an inherited effort
- * the route does not support falls back to one retry pinned low. */
-test("side-route effort: inherited rides through, fixed wins, none pins low, unsupported retries low", async (t) => {
+/** Side-route effort selection (session model → metadata recommendation →
+ * summary proposal). The active session's execution pin is not inherited:
+ * the resolved model metadata selects the lowest enabled tier, while a stored
+ * route pin wins and an unsupported pin retries once at the automatic tier. */
+test("side-route effort: session pins are not inherited; model recommendation and explicit pins apply", async (t) => {
 	mock.timers.enable({ now: Date.now() });
 	t.after(() => mock.timers.reset());
 	let listener = null;
 	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
 	const effortsSeen = []; // reasoningEffort of every prepareCall proposal, in order
 	const llm = {
-		resolveModelInfo: async () => ({ context: { contextWindow: 100_000 } }),
+		resolveModelInfo: async () => ({
+			context: { contextWindow: 100_000 },
+			reasoning: { efforts: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }] },
+		}),
 		prepareCall: async (proposal) => {
 			effortsSeen.push(proposal.reasoningEffort ?? null);
-			// Scenario D, first attempt: the inherited "high" is unsupported.
-			if (effortsSeen.length === 4 && proposal.reasoningEffort === "high") {
-				const err = new Error("provider \"p\" model \"m\" does not support reasoning effort \"high\"");
+			if (proposal.reasoningEffort === "max") {
+				const err = new Error("provider \"p\" model \"m\" does not support reasoning effort \"max\"");
 				err.code = "UNSUPPORTED_REASONING_EFFORT";
 				throw err;
 			}
@@ -694,16 +701,16 @@ test("side-route effort: inherited rides through, fixed wins, none pins low, uns
 		mock.timers.tick(61_000); // clear the per-session min-interval for the next scenario
 	}
 
-	// A: session-inherited effort rides through verbatim (no fixed side model).
+	// A: the session call's explicit high pin does not leak to the summary route.
 	await drive("eff-a", { sessionEffort: "high" });
-	assert.equal(effortsSeen[0], "high");
-	// B: an explicit trimSideModel effort wins over the session's own.
+	assert.equal(effortsSeen[0], "low", "use the route model's lowest thinking tier");
+	// B: an explicit trimSideModel effort wins over automatic recommendation.
 	await drive("eff-b", { sessionEffort: "high", sideCfg: { trimSideModel: { provider: "s", model: "sm", effort: "medium" } } });
 	assert.equal(effortsSeen[1], "medium");
-	// C: nothing carries an effort → pin low (never send without one).
+	// C: a manually selected model without a pin also gets its lowest tier.
 	await drive("eff-c", { sideCfg: { trimSideModel: { provider: "s", model: "sm" } } });
 	assert.equal(effortsSeen[2], "low");
-	// D: unsupported inherited effort → exactly one retry pinned low.
-	await drive("eff-d", { sessionEffort: "high" });
-	assert.deepEqual(effortsSeen.slice(3), ["high", "low"]);
+	// D: an unsupported explicit pin retries once at the metadata recommendation.
+	await drive("eff-d", { sideCfg: { trimSideModel: { provider: "s", model: "sm", effort: "max" } } });
+	assert.deepEqual(effortsSeen.slice(3), ["max", "low"]);
 });
