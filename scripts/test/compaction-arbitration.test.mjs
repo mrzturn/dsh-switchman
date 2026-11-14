@@ -24,6 +24,11 @@ import { describe, test } from "node:test";
 // scripts/test/<file>.test.mjs → repo root is three levels up.
 const REPO = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const PATCH = join(REPO, "cordis.patch.yml");
+/** The Electron asar shim hijacks fs.openSync on *.asar paths (it resolves the
+ *  requested inner path at open time and throws ENOENT for the bare archive
+ *  path). This suite hand-parses the archive, so disable the shim under
+ *  Electron run-as-node — same guard as scripts/dsh-app-source.mjs. */
+if (process.versions.electron) process.noAsar = true;
 const APP_ROOT = process.env.DSH_APP_ROOT ?? "/Applications/DeepSeek Harness.app/Contents/Resources/app";
 
 // Zero runtime deps: borrow the yaml parser from the installed app (same
