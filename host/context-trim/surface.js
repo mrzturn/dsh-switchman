@@ -574,15 +574,18 @@ export function createSurfaceFoldPass(deps = {}) {
 			return false;
 		}
 	}
-	/** Append one advisory nudge as a suffix-only user message. */
+	/** Append one advisory nudge as a suffix-only user message. Returns
+	 * { seq, error }: seq is null when the host rejected the append, and error
+	 * carries the rejection message so the skip row can name the real cause
+	 * (a bare append-failed row once hid a v4 turn-discipline rejection). */
 	function nudgeAppend(sessionId, text) {
+		const session = sessionOf(sessionId);
+		if (!surfaceCapable(session)) return { seq: null, error: null };
 		try {
-			const session = sessionOf(sessionId);
-			if (!surfaceCapable(session)) return null;
 			const event = session.append("user/message", nudgeMessage(sessionId, text));
-			return Number.isFinite(event?.seq) ? event.seq : null;
-		} catch {
-			return null;
+			return { seq: Number.isFinite(event?.seq) ? event.seq : null, error: null };
+		} catch (error) {
+			return { seq: null, error: String(error?.message ?? error) };
 		}
 	}
 	/** Prune advisory nudge nodes with point-sized compaction events. Only

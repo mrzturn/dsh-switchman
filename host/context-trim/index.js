@@ -440,11 +440,16 @@ export function applyContextTrim(ctx, config) {
 			return;
 		}
 		const cached = windowCache.get(model.provider + "/" + model.model);
-		if (cached === undefined || Date.now() - cached.at >= 600_000) { // stale = miss, same TTL as windowTokensFor
-			warmWindowOnce(model, Date.now()); // single-flight warm-up; the nudge lands on a later dispatch
+		if (cached === undefined) {
+			// Truly unknown: warm up single-flight; the nudge lands on a later dispatch.
+			warmWindowOnce(model, Date.now());
 			decisionLog("advisory-nudge skip why=window-unknown");
 			return;
 		}
+		// Stale-but-known still gates correctly: effectiveWindowTokens binds to the
+		// configured cap for every model larger than it, so the pressure math is
+		// unchanged. Re-warm in the background instead of burning this boundary.
+		if (Date.now() - cached.at >= 600_000) warmWindowOnce(model, Date.now());
 		if (cached.windowTokens === null) return; // resolution failed inside the TTL — skip quietly, no retry hammering
 		const windowTokens = effectiveWindowTokens(cached.windowTokens, windowCapNow());
 		if (windowTokens === null) return;
@@ -504,12 +509,13 @@ export function applyContextTrim(ctx, config) {
 			}
 		}
 		const nudge = advisoryNudgeText(Math.round(pressurePercent), critical, nudgeLines.line, nudgeLines.critical);
-		const seq = surfacePass.nudgeAppend(sessionId, nudge);
-		if (!Number.isFinite(seq)) {
+		const appended = surfacePass.nudgeAppend(sessionId, nudge);
+		if (appended.error !== null || !Number.isFinite(appended.seq)) {
 			advisoryNudgeBySession.delete(sessionId); // a pruned prior must not throttle the retry
-			decisionLog("advisory-nudge skip why=append-failed pressure=" + Math.round(pressurePercent) + "%");
+			decisionLog("advisory-nudge skip why=append-failed err=" + (appended.error ?? "unknown") + " pressure=" + Math.round(pressurePercent) + "%");
 			return;
 		}
+		const seq = appended.seq;
 		advisoryNudgeBySession.delete(sessionId); // re-insert: refresh recency so eviction drops the least recently nudged
 		advisoryNudgeBySession.set(sessionId, { at: now, critical, seq });
 		if (advisoryNudgeBySession.size > 200) advisoryNudgeBySession.delete(advisoryNudgeBySession.keys().next().value);
@@ -787,7 +793,8 @@ export function applyContextTrim(ctx, config) {
 	function captureOf(sessionId, messages, model, viewTokens) {
 		captures.set(sessionId, { messages: messages.slice(), model, viewTokens, at: Date.now() });
 		if (model !== null && typeof model === "object" && typeof model.provider === "string" && typeof model.model === "string") {
-			capturedModelBySession.set(sessionId, { provider: model.provider, model: model.model, at: Date.now() });
+		capturedModelBySession.set(sessionId, { provider: model.provider, model: model.model, at: Date.now() });
+		if (!windowCache.has(model.provider + "/" + model.model)) warmWindowOnce(model, Date.now());
 			if (capturedModelBySession.size > 200) capturedModelBySession.delete(capturedModelBySession.keys().next().value);
 		}
 		// keep the capture map bounded (200 sessions)
