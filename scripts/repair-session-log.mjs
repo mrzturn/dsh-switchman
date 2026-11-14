@@ -32,7 +32,7 @@
  *   --scan         verify only: report which logs the loader would reject (no repair attempted)
  *   --write        repair in place: sibling .bak-<ts>, fsync + mode-preserving atomic rename
  *   --verify-with  path to the installed verifier worker (default: discover under
- *                  ~/.dsh/.dsh-switchman/*\/worker.cjs, else fail closed)
+ *                  newest worker.cjs under ~/.dsh/.dsh-switchman/, else fail closed)
  *   --app-version  version to stamp into the staged verifier's package.json
  *                  (default: CFBundleShortVersionString of the installed app)
  *
@@ -75,6 +75,11 @@ function installedAppVersion() {
 function discoverVerifier() {
   const root = path.join(os.homedir(), ".dsh", ".dsh-switchman");
   if (!fs.existsSync(root)) return null;
+  // Several copies can coexist (backup-<date>/ snapshots next to a refreshed
+  // verifier-<version>/). Verify with the NEWEST copy: a stale worker extracted
+  // from an older app rejects current-format logs (catalog fact versions move
+  // with DSH releases), failing repairs that the real loader would accept.
+  let best = null;
   const stack = [root];
   while (stack.length) {
     const dir = stack.pop();
@@ -83,10 +88,15 @@ function discoverVerifier() {
     for (const e of entries) {
       const p = path.join(dir, e.name);
       if (e.isDirectory()) stack.push(p);
-      else if (e.name === "worker.cjs") return p;
+      else if (e.name === "worker.cjs") {
+        try {
+          const m = fs.statSync(p).mtimeMs;
+          if (!best || m > best.m) best = { p, m };
+        } catch { /* unreadable copy: skip */ }
+      }
     }
   }
-  return null;
+  return best ? best.p : null;
 }
 
 // The bundled verifier does createRequire(__filename)("../package.json").

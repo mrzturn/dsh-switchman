@@ -25,8 +25,8 @@
 
 - 症状：DSH 重启后某些会话加载失败，报 `compaction checkpoint has no matching compaction/start` 或 `compaction cannot shadow the protected system head`。这是 1.10.2 之前的 surface fold 写出的历史记录：A）`user/message` 的 `source.kind="compact-checkpoint"` 没有配套的 `compaction/start`；B）`compaction/prune` 的 `shadowedSeqs` 包含受保护的 system head seq。1.10.2 的插件修复只保证**不再新写**，已写坏的日志需要离线修复。
 - 诊断：`node scripts/repair-session-log.mjs <session-dir|workspace-sessions-dir|log> --scan`。修复：把 `--scan` 换成 `--write`（默认 dry-run）。写盘前先落 `.bak-<ts>` 再原子替换；事件数与事件身份不变，只改一条 `source` 或 prune 的 `shadowedSeqs`/`shadowedRange`，改完用装机验证器复验通过才写。
-- **验证器必须用装机真实副本**：脚本会自动从 `~/.dsh/.dsh-switchman/*/worker.cjs` 找验证器，并把它 staging 到带同级 `package.json` 的临时目录。原因是该 worker 内部执行 `createRequire(__filename)("../package.json")`——把 worker 单独放在备份目录里跑会抛 `Cannot find module '../package.json'`，验证必然失败，脚本随之拒绝写入（这正是 2026-11-05 那次修复命令「看起来执行了但没生效」的原因）。
-- A 类修复 = 丢弃无支撑的关系声明（`source.kind` → `"user"`）；B 类修复 = 从 `shadowedSeqs` 摘掉 head seq 并前移 range 端点。两类都靠 0.2.1-rc.5 的 loader 谓词验证，勿凭空改动关系图（合成 `compaction/start` 之类会破坏事件序）。
+- **验证器必须用装机真实副本，且必须跟踪装机版本**：脚本会自动从 `~/.dsh/.dsh-switchman/` 下选 **mtime 最新**的 `worker.cjs`（多副本并存时旧快照永不遮蔽新副本），并把它 staging 到带同级 `package.json` 的临时目录。原因是该 worker 内部执行 `createRequire(__filename)("../package.json")`——把 worker 单独放在备份目录里跑会抛 `Cannot find module '../package.json'`，验证必然失败，脚本随之拒绝写入（这正是 2026-11-05 那次修复命令「看起来执行了但没生效」的原因）。**DSH 升级后要刷新副本**：旧验证器会拒绝当前格式日志（报 `subagent/catalog requires a supported versioned catalog fact`，2026-11-14 实测），从新版 `@deepseek-ai/dsh-session-persistence-jsonl/lib/worker.cjs`（npm 全局树或 app.asar 内同路径）复制到 `~/.dsh/.dsh-switchman/verifier-<版本>/worker.cjs` 即可。
+- A 类修复 = 丢弃无支撑的关系声明（`source.kind` → `"user"`）；B 类修复 = 从 `shadowedSeqs` 摘掉 head seq 并前移 range 端点。两类都靠装机 loader 谓词验证（副本见上条），勿凭空改动关系图（合成 `compaction/start` 之类会破坏事件序）。
 - **容器不变量**：loader 要求**第一个 zstd frame 恰好是 header 行**，其后各帧拼接解码。把整个日志重新压成单帧会报 `corrupt Zstandard session log: first frame is not exactly one header line`——即使事件内容合法也加载不了。修复脚本用 `scripts/session-log-frames.mjs` 让 header 单独成帧，并且验证**最终产物**（含帧布局），不是明文预览。
 - 路径：会话日志在 `~/.dsh/sessions/<workspace-encoded>/<session-id>/session.v4.jsonl.zstd`；`session.lock` 是写租约残留，0 字节不代表锁死。
 
