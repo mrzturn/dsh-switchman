@@ -99,7 +99,7 @@ bash <安装目录>/skills/db-query/scripts/setup.sh
 
 **意图识别**（默认不可用，需配置分类器 + 至少一个候选 + 打开主开关）：`intentEnabled` = 关（关闭时 Auto 入口隐藏，已选 Auto 的会话走兜底链）；分类器路由未设置；分类器类型 `chat`；候选列表空（预置分类需填模型才参与路由）；缓存窗口 `300` 秒 / 切换置信度 `80` / 分类超时 `60000` ms；历史 `6` 条 / `2400` 字符；`intentContextWindow` = `250000`。
 
-**上下文裁剪**：`trimEnabled` = 开；`trimMode` = `advisory`（提醒＋折叠工具，模型自行折叠；全自动需切回 `auto`）；增长闸门 `22500` token + 增量 `45000` token；压力 `45%` / 紧急 `90%`；advisory 提醒 `50%` / `90%`；保护尾部 `6` 条；折叠节奏上限每小时 `30` 次；side model 未设置（继承会话模型）——详见下文「自动上下文裁剪」一节。
+**上下文裁剪**：`trimEnabled` = 开；`trimMode` = `advisory`（提醒＋折叠工具，模型自行折叠；全自动需切回 `auto`）；增长闸门 `22500` token + 增量 `45000` token；压力 `45%` / 紧急 `90%`；advisory 提醒 `50%` / `80%`；保护尾部 `6` 条；折叠节奏上限每小时 `30` 次；side model 未设置（继承会话模型）——详见下文「自动上下文裁剪」一节。
 
 **开箱要点**：① 意图识别开箱不可用是有意设计，三步开启（分类器、候选、开关）；② Auto 有效窗口开箱即为 250000——护栏保证 0.8×窗口 ≥ force 档（200000），核心压缩线（200000）恰好落在平滑交接线（200000）上；③ 开箱最有感的是水位三件套：80k 提醒委派 / 100k 收敛读取 / 200k 自动交接（写文档+压缩），无需任何设置。
 
@@ -110,23 +110,23 @@ bash <安装目录>/skills/db-query/scripts/setup.sh
 自动化层级（`trimMode`）：
 
 - **`off`**——只测量：用量与缓存命中采样照常运行；无横幅、无折叠。
-- **`advisory`**——会话模型自己折叠：向其暴露 `ctx_trim_fold` 与 `ctx_trim_status` 工具和协议头。会话压力达到有效窗口的 `trimAdvisoryPercent` 时，引擎将一次性固定折叠提醒作为 `user/message` 后缀追加到实时会话 surface 尾部（不修改本次派发的 system 头）——升级到 critical 立即重发，压力回落到线下后清除。
-- **`auto`**（默认）——以上全部，外加空闲边界上的自动折叠，分三档：增长闸门（自上次折叠后的低谷起算的增长 > `trimGrowthTokens`——该锚点保证高位折叠后闸门依然有效——且连续可压缩增量 ≥ `trimIncrementTokens`）、压力档（上下文窗口的 `trimPressurePercent`）、紧急档（`trimEmergencyPercent`——带独立冷却的机械折叠）。
+- **`advisory`**（默认）——会话模型自己折叠：向其暴露 `ctx_trim_fold` 与 `ctx_trim_status` 工具和协议头。会话压力达到有效窗口的 `trimAdvisoryPercent` 时，引擎将一次性固定折叠提醒作为 `user/message` 后缀追加到实时会话 surface 尾部（不修改本次派发的 system 头）——升级到 critical 立即重发，压力回落到线下后清除。压力到达临界线时引擎自身会执行一次机械救援折叠（90 秒冷却，`trimCriticalRelief` = 开）。
+- **`auto`**——以上全部，外加空闲边界上的自动折叠，分三档：增长闸门（自上次折叠后的低谷起算的增长 > `trimGrowthTokens`——该锚点保证高位折叠后闸门依然有效——且连续可压缩增量 ≥ `trimIncrementTokens`）、压力档（上下文窗口的 `trimPressurePercent`）、紧急档（`trimEmergencyPercent`——带独立冷却的机械折叠）。
 
 所有键位于 设置 → dsh-switchman；默认值出自 `host/config.js`：
 
 | 键 | 默认值 | 含义 |
 | --- | --- | --- |
 | `trimEnabled` | `true` | 总开关。关闭后折叠与度量全部停用（监听器退化为纯透传）。 |
-| `trimMode` | `auto` | `off` 只测量 / `advisory` 模型自折 / `auto` 系统自动折。 |
+| `trimMode` | `advisory` | `off` 只测量 / `advisory` 模型自折 / `auto` 系统自动折。 |
 | `trimGrowthTokens` | `22500` | 增长闸门：出站 view 自上次 fold 以来增长到该值即触发折叠。 |
 | `trimIncrementTokens` | `45000` | 闸门搭档：连续可压缩增量也须达到该规模。 |
-| `trimPressurePercent` | `65` | 压力档：view 用量达到上下文窗口该百分比即折叠。 |
-| `trimEmergencyPercent` | `95` | 紧急档：到该百分比强制机械折叠（无 side model 调用）。 |
-| `trimAdvisoryPercent` | `65` | advisory 提醒线：压力达到有效窗口的该百分比时，引擎提醒模型立即用 `ctx_trim_fold` 折叠（仅 advisory 模式）。 |
-| `trimAdvisoryCriticalPercent` | `95` | critical 提醒线：到线立即重发提醒，不受 10 分钟同档节流限制。 |
+| `trimPressurePercent` | `45` | 压力档：view 用量达到上下文窗口该百分比即折叠。 |
+| `trimEmergencyPercent` | `90` | 紧急档：到该百分比强制机械折叠（无 side model 调用）。 |
+| `trimAdvisoryPercent` | `50` | advisory 提醒线：压力达到有效窗口的该百分比时，引擎提醒模型立即用 `ctx_trim_fold` 折叠（仅 advisory 模式）。 |
+| `trimAdvisoryCriticalPercent` | `80` | critical 提醒线：到线立即重发提醒，不受 10 分钟同档节流限制。 |
 | `trimWindowTokens` | `0` | 窗口上限：压力与紧急档按 min(模型窗口, 上限) 计算。`0` = 跟随 `wmForceTokens`。 |
-| `trimProtectedTail` | `10` | 最后 N 条消息永不折叠。 |
+| `trimProtectedTail` | `6` | 最后 N 条消息永不折叠。 |
 | `trimMaxFoldsPerHour` | `30` | 每滚动小时 side model 折叠的节奏上限（紧急档豁免）。 |
 | `trimSideModel` | 未设置 | 写摘要的 side model 路由。留空 = 跟随会话当前 provider/model，不继承调用的 effort；ladder distillation 也使用此路由。摘要 effort 可单独手动固定；未固定时按模型元数据推荐最低启用的 reasoning 档，只有开/关选项时选 off。不支持 reasoning 或元数据不可用时不发送 effort，保留模型/适配器默认行为。 |
 | `trimFoldFallbackModel` | 未设置 | 摘要 side model 失败时折叠改用的重试路由；压力档仍失败则退回机械折叠。留空 = 无兜底。手动选择的折叠兜底模型有独立 effort 固定值；未设置时按摘要模型相同的模型元数据规则推荐，元数据缺失则使用该模型默认值。尽量选择冷却、风控与并发余量充足的路由。 |

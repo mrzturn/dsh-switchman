@@ -99,7 +99,7 @@ bash <インストールディレクトリ>/skills/db-query/scripts/setup.sh
 
 **意図認識**（既定では利用不可。分類器＋候補最低1つ＋マスタートグルのオンが必要）：`intentEnabled` = オフ（オフの間は Auto エントリが隠れ、Auto を選んでいたセッションはフォールバックチェーンへ流れる）。分類器ルートは未設定。分類器タイプは `chat`。候補リストは空（プリセット分類はモデルを埋めないとルーティングに参加しない）。キャッシュウィンドウ `300` 秒 / 切替信頼度 `80` / 分類タイムアウト `60000` ms。履歴 `6` 件 / `2400` 文字。`intentContextWindow` = `250000`。
 
-**コンテキストトリム**：`trimEnabled` = オン；`trimMode` = `advisory`（通知＋fold ツールでモデルが自ら折り畳む。完全自動は `auto`）；成長ゲート `22500` + インクリメント `45000` トークン；圧力 `45%` / 緊急 `90%`；advisory 通知 `50%` / `90%`；保護テール `6` 件；fold ペース上限は毎時 `30` 回；サイドモデルは未設定（セッションモデルを継承）——詳細は下の「自動コンテキストトリム」節で。
+**コンテキストトリム**：`trimEnabled` = オン；`trimMode` = `advisory`（通知＋fold ツールでモデルが自ら折り畳む。完全自動は `auto`）；成長ゲート `22500` + インクリメント `45000` トークン；圧力 `45%` / 緊急 `90%`；advisory 通知 `50%` / `80%`；保護テール `6` 件；fold ペース上限は毎時 `30` 回；サイドモデルは未設定（セッションモデルを継承）——詳細は下の「自動コンテキストトリム」節で。
 
 **初期状態のポイント**：① 意図認識が既定で使えないのは意図的な設計で、有効化は3ステップ（分類器、候補、トグル）。② Auto の実効ウィンドウは既定で 250000——ガードレールにより 0.8×ウィンドウ ≥ force 段（200000）が保証され、コア圧縮線（200000）はスムーズ引き継ぎ線（200000）上に位置する。③ 既定でいちばん体感できるのは水位の3点セット：80k で委譲を促し、100k で読み取りを収束させ、200k で自動引き継ぎ（文書作成＋圧縮）。設定は一切不要。
 
@@ -110,23 +110,23 @@ bash <インストールディレクトリ>/skills/db-query/scripts/setup.sh
 自動化レベル（`trimMode`）：
 
 - **`off`**——計測のみ：使用量とキャッシュヒットのサンプリングは動作；バナーなし、fold なし。
-- **`advisory`**——セッションモデルが自ら fold する：`ctx_trim_fold` と `ctx_trim_status` のツールとプロトコルヘッドを公開。セッション圧力が実効ウィンドウの `trimAdvisoryPercent` に達すると、エンジンは一度限りの固定 fold 催促を `user/message` サフィックスとしてライブの session surface の末尾に追加し（dispatch の system ヘッドは変更しません）、critical へのエスカレーションで即再通知し、圧力が線を下回ると prune します。
-- **`auto`**（既定）——advisory のすべてに加え、アイドル境界での自動 fold が3段階で動く：成長ゲート（前回の折り返し後の低点から測定した成長 > `trimGrowthTokens`——高位で折り返してもゲートが有効であり続けるためのアンカー——かつ連続圧縮可能インクリメントが `trimIncrementTokens` 以上）、圧力段（コンテキストウィンドウの `trimPressurePercent`）、緊急段（`trimEmergencyPercent`——独自クールダウン付きの機械 fold）。
+- **`advisory`**（既定）——セッションモデルが自ら fold する：`ctx_trim_fold` と `ctx_trim_status` のツールとプロトコルヘッドを公開。セッション圧力が実効ウィンドウの `trimAdvisoryPercent` に達すると、エンジンは一度限りの固定 fold 催促を `user/message` サフィックスとしてライブの session surface の末尾に追加し（dispatch の system ヘッドは変更しません）、critical へのエスカレーションで即再通知し、圧力が線を下回ると prune します。圧力が臨界線に達すると、エンジン自身が機械的な救済 fold を 1 回実行します（90 秒クールダウン、`trimCriticalRelief` = オン）。
+- **`auto`**——advisory のすべてに加え、アイドル境界での自動 fold が3段階で動く：成長ゲート（前回の折り返し後の低点から測定した成長 > `trimGrowthTokens`——高位で折り返してもゲートが有効であり続けるためのアンカー——かつ連続圧縮可能インクリメントが `trimIncrementTokens` 以上）、圧力段（コンテキストウィンドウの `trimPressurePercent`）、緊急段（`trimEmergencyPercent`——独自クールダウン付きの機械 fold）。
 
 すべてのキーは「設定 → dsh-switchman」にあり、既定値は `host/config.js` 由来：
 
 | キー | 既定値 | 意味 |
 | --- | --- | --- |
 | `trimEnabled` | `true` | マスタースイッチ。OFF で fold とメトリクスを完全停止（リスナーは純パススルーに退化）。 |
-| `trimMode` | `auto` | `off` 計測のみ / `advisory` モデル駆動 fold / `auto` システム駆動 fold。 |
+| `trimMode` | `advisory` | `off` 計測のみ / `advisory` モデル駆動 fold / `auto` システム駆動 fold。 |
 | `trimGrowthTokens` | `22500` | 成長ゲート：前回の fold 以降にアウトバウンド view がこれだけ増えたら fold。 |
 | `trimIncrementTokens` | `45000` | ゲートの同伴条件：連続圧縮可能インクリメントもこの規模に達する必要あり。 |
-| `trimPressurePercent` | `65` | 圧力段：view 使用量がコンテキストウィンドウのこの割合に達したら fold。 |
-| `trimEmergencyPercent` | `95` | 緊急段：この割合で機械 fold を強制（サイドモデル呼び出しなし）。 |
-| `trimAdvisoryPercent` | `65` | advisory 通知線：圧力が実効ウィンドウのこの割合に達すると、モデルに `ctx_trim_fold` での即時 fold を促します（advisory モードのみ）。 |
-| `trimAdvisoryCriticalPercent` | `95` | critical 通知線：到達すると 10 分の同帯域スロットルを無視して即再通知。 |
+| `trimPressurePercent` | `45` | 圧力段：view 使用量がコンテキストウィンドウのこの割合に達したら fold。 |
+| `trimEmergencyPercent` | `90` | 緊急段：この割合で機械 fold を強制（サイドモデル呼び出しなし）。 |
+| `trimAdvisoryPercent` | `50` | advisory 通知線：圧力が実効ウィンドウのこの割合に達すると、モデルに `ctx_trim_fold` での即時 fold を促します（advisory モードのみ）。 |
+| `trimAdvisoryCriticalPercent` | `80` | critical 通知線：到達すると 10 分の同帯域スロットルを無視して即再通知。 |
 | `trimWindowTokens` | `0` | ティア計算の実効ウィンドウ上限：min(モデルウィンドウ, 上限) で計算。`0` = `wmForceTokens` に追従。 |
-| `trimProtectedTail` | `10` | 最後の N メッセージは決して fold されない。 |
+| `trimProtectedTail` | `6` | 最後の N メッセージは決して fold されない。 |
 | `trimMaxFoldsPerHour` | `30` | ローリング1時間あたりのサイドモデル fold ペース上限（緊急段は対象外）。 |
 | `trimSideModel` | 未設定 | サマリ用サイドモデルのルート。空欄 = セッションの provider/model に追従（呼び出しの effort は継承しない）；ladder distillation もこのルートを使用。サマリの effort は別途手動固定でき、未設定ならモデルメタデータから有効な reasoning レベルの最小値を選ぶ。オン/オフのみのモデルは off。reasoning 非対応またはメタデータが利用できない場合は effort を送らず、モデル/アダプターのデフォルトに委ねる。 |
 | `trimFoldFallbackModel` | 未設定 | サマリのサイドモデルが失敗したときに折り畳みが再試行するルート。プレッシャー段でも失敗すると機械折り畳みに縮退。空欄 = フォールバックなし。手動選択した fold フォールバックモデルの effort 固定は独立。未設定ならサマリモデルと同じメタデータ基準で推奨し、メタデータがなければそのモデルのデフォルトを使用。クールダウン・リスク制御・同時実行に余裕のあるルートを推奨。 |

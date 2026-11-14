@@ -299,18 +299,20 @@ export const TRIM_PROTOCOL_TEXT = [
 	"- Tool-call pairs (an assistant tool call and its results) must always be folded together or not at all.",
 ].join("\n");
 
-// Advisory nudge thresholds: the default speak line (65%) deliberately sits
-// below the protocol's own 80% fold line so the model is nudged while it
-// still has comfortable headroom; critical wording escalates at 95%. At most
-// one nudge per session per 10 minutes (an instant re-nudge when the level
-// band changes). Both lines are config-tunable via trimAdvisoryPercent /
-// trimAdvisoryCriticalPercent.
-export const ADVISORY_NUDGE_PERCENT = 65;
-export const ADVISORY_NUDGE_CRITICAL_PERCENT = 95;
+// Advisory nudge thresholds: the default speak line (50%) deliberately sits
+// well below the protocol's own 80% fold line so the model is nudged while
+// it still has comfortable headroom; critical wording escalates at 80%.
+// [2026-11-15]-[advisory lines recalibrated 65/95 → 50/80]-[the 2026-11-14
+// turn-25 incident (nudges ignored, 74%→99% in 28 minutes) showed a speak
+// line at 65% arrives too late to matter]. At most one nudge per session
+// per 10 minutes (an instant re-nudge when the level band changes). Both
+// lines are config-tunable via trimAdvisoryPercent / trimAdvisoryCriticalPercent.
+export const ADVISORY_NUDGE_PERCENT = 50;
+export const ADVISORY_NUDGE_CRITICAL_PERCENT = 80;
 export const ADVISORY_NUDGE_REPEAT_MS = 600_000;
 
 /** Effective advisory lines for one dispatch: config-tunable, falling back to
- * the configured defaults (65/95) when absent, inverted, or out of range —
+ * the configured defaults (50/80) when absent, inverted, or out of range —
  * a broken pair never silences the nudge. */
 function advisoryNudgeLines(config) {
 	const line = readNumber(config, "trimAdvisoryPercent", ADVISORY_NUDGE_PERCENT);
@@ -321,11 +323,12 @@ function advisoryNudgeLines(config) {
 }
 
 /** Advisory-mode nudge text. Deliberate, bounded exception to the
- * digit-free disclosure policy of TRIM_PROTOCOL_TEXT above: advisory mode has
- * NO engine-initiated folds (the modeNow gate), so the model's own fold is
- * the only relief channel. At threshold, the live-number instruction is
- * appended to the session surface tail, not injected into the registered
- * system section. */
+ * digit-free disclosure policy of TRIM_PROTOCOL_TEXT above: advisory mode
+ * never folds on a schedule (the modeNow gate); besides the model's own
+ * fold, the only engine-initiated relief is the one-shot critical relief
+ * fold (trimCriticalRelief, cooldown-gated). At threshold, the live-number
+ * instruction is appended to the session surface tail, not injected into
+ * the registered system section. */
 export function advisoryNudgeText(pressurePercent, critical, foldLine = ADVISORY_NUDGE_PERCENT, criticalLine = ADVISORY_NUDGE_CRITICAL_PERCENT) {
 	const action = critical
 		? `Pressure is CRITICAL (${pressurePercent}% ≥ ${criticalLine}%): fold down to under ~50% of the context IN THIS TURN.`
@@ -518,6 +521,63 @@ export function applyContextTrim(ctx, config) {
 		}
 		const critical = pressurePercent >= nudgeLines.critical;
 		const now = Date.now();
+		// Critical relief ([2026-11-15]-[advisory critical relief fold]-[nudges
+		// alone let a session burn from the speak line to host compaction —
+		// turn-25: nudges ignored, 74%→99% in 28 minutes]). At the critical line
+		// the engine performs ONE mechanical (emergency-style) fold itself,
+		// cooldown-gated like the emergency tier, instead of only nudging.
+		// Runs ahead of the same-band nudge throttle: the relief cadence is owned
+		// by reliefBySession + inFlight alone. `trimCriticalRelief: false`
+		// restores nudge-only advisory mode.
+		if (critical && reliefEnabledNow() && !inFlight.has(sessionId) && captures.has(sessionId)
+			&& now - (reliefBySession.get(sessionId) ?? 0) >= EMERGENCY_COOLDOWN_MS) {
+			// Cooldown armed BEFORE the cycle (same pre-set semantics as the
+			// emergency tier): every attempt, folded or rejected, cools down.
+			reliefBySession.set(sessionId, now);
+			if (reliefBySession.size > 200) reliefBySession.delete(reliefBySession.keys().next().value);
+			const reliefCapture = captures.get(sessionId);
+			const cycleToken = {};
+			inFlight.set(sessionId, cycleToken);
+			void (async () => {
+				try {
+					if (disposedSince(now)) {
+						decisionLog(`session=${sessionId} advisory-relief outcome=reload-aborted tier=emergency pressure=${Math.round(pressurePercent)}%`);
+						return;
+					}
+					const { protectedTail, protectTaskIntent, ...reliefThresholds } = thresholdsNow();
+					const ledger = store.ledgerOf(sessionId);
+					const foldable = computeFoldableRange(reliefCapture.messages, ledger, protectedTail, { protectTaskIntent });
+					const decision = evaluateTrigger({
+						foldable,
+						messages: reliefCapture.messages,
+						viewTokens: mass, // same basis as the nudge line: max(view, wire)
+						windowTokens,
+						thresholds: { ...reliefThresholds, emergencyPercent: 1 }, // force the mechanical tier through
+						now,
+						lastFoldAt: ledger.lastFoldAt,
+						foldsThisHour: ledger.foldsThisHour,
+						lastEmergencyAt: 0, // reliefBySession owns the relief cadence
+						ledger,
+						ladderRuns: { t2: [], t3: [] }, // relief is mechanical-only; no ladder cut-in
+					});
+					if (decision.action !== "emergency") {
+						decisionLog(`session=${sessionId} advisory-relief outcome=none reason=${decision.reason || "-"} pressure=${Math.round(pressurePercent)}%`);
+						return;
+					}
+					const outcome = await runFoldCycle(sessionId, decision, now, cycleToken);
+					decisionLog(`session=${sessionId} advisory-relief outcome=${outcome} tier=emergency pressure=${Math.round(pressurePercent)}%`);
+					if (outcome.startsWith("folded:") || outcome === "summary-unavailable" || outcome.startsWith("commit-rejected:")) {
+						warn(`[context-trim] ${sessionId}: advisory relief ${outcome} at ${Math.round(pressurePercent)}%`);
+					}
+				} catch (error) {
+					decisionLog(`session=${sessionId} advisory-relief outcome=error why=${error?.message ?? error}`);
+					warn(`[context-trim] ${sessionId}: advisory relief failed: ${error?.message ?? error}`);
+				} finally {
+					// Only the cycle owning the CURRENT token may release the lock.
+					if (inFlight.get(sessionId) === cycleToken) inFlight.delete(sessionId);
+				}
+			})();
+		}
 		// Any band CHANGE re-speaks immediately: escalation high->critical, and
 		// intentionally also a downgrade back into high after a partial fold.
 		if (prior !== undefined && prior.critical === critical && now - prior.at < ADVISORY_NUDGE_REPEAT_MS) return;
@@ -576,6 +636,11 @@ export function applyContextTrim(ctx, config) {
 	const WINDOW_RESOLVE_TIMEOUT_MS = 10_000;
 	const windowCache = new Map(); // "provider/model" -> { windowTokens, at }
 	const lastEmergencyAtBySession = new Map(); // sessionId -> epoch ms of last emergency fold (per-session cooldown)
+	// Advisory critical relief cooldown: sessionId -> epoch ms of the last
+	// relief fold. Set BEFORE the cycle (emergency semantics: a rejected
+	// commit cools the relief like a success, or a failing range retries at
+	// every dispatch forever). Bounded 200 like the sibling registries.
+	const reliefBySession = new Map();
 	const lastStreamCheckAt = new Map(); // sessionId -> epoch ms of last stream-path fold check (throttle)
 	const epochResetDoneBySession = new Map(); // sessionId -> ledger-stale baseline reset already done for this host epoch (cleared when a fold applies again)
 
@@ -707,11 +772,12 @@ export function applyContextTrim(ctx, config) {
 		const mode = readString(config, "trimMode", "auto");
 		return mode === "off" || mode === "advisory" || mode === "auto" ? mode : "auto";
 	};
+	const reliefEnabledNow = () => readBool(config, "trimCriticalRelief", true);
 	const thresholdsNow = () => ({
 		growthTokens: readNumber(config, "trimGrowthTokens", 22_500),
-		incrementTokens: readNumber(config, "trimIncrementTokens", 25_000),
-		pressurePercent: readNumber(config, "trimPressurePercent", 65),
-		emergencyPercent: readNumber(config, "trimEmergencyPercent", 95),
+		incrementTokens: readNumber(config, "trimIncrementTokens", 45_000),
+		pressurePercent: readNumber(config, "trimPressurePercent", 45),
+		emergencyPercent: readNumber(config, "trimEmergencyPercent", 90),
 		protectedTail: Math.max(0, Math.round(readNumber(config, "trimProtectedTail", 10))),
 		maxFoldsPerHour: readNumber(config, "trimMaxFoldsPerHour", 30),
 		ladderT2Tokens: readNumber(config, "trimLadderT2Tokens", 8_000),
@@ -760,7 +826,7 @@ export function applyContextTrim(ctx, config) {
 	const windowCapNow = () => {
 		const explicit = readNumber(config, "trimWindowTokens", 0);
 		if (explicit > 0) return explicit;
-		const force = readNumber(config, "wmForceTokens", 150_000);
+		const force = readNumber(config, "wmForceTokens", 200_000);
 		return force > 0 ? force : null;
 	};
 
@@ -1444,8 +1510,9 @@ export function applyContextTrim(ctx, config) {
 					mainDispatch = applied.sideDispatch !== true;
 					if (mainDispatch) {
 						// Advisory pressure nudge (modeNow gates inside): the model's
-						// own fold is advisory mode's ONLY relief channel — speak at
-						// the fold line. Fail-open, never breaks the dispatch.
+						// own fold is advisory mode's primary relief channel, plus the
+						// cooldown-gated critical relief fold below — speak at the fold
+						// line. Fail-open, never breaks the dispatch.
 						try {
 							deliverAdvisoryNudge(applied.sessionId, applied.viewTokens);
 						} catch (error) {

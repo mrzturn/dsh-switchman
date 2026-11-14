@@ -82,6 +82,7 @@ function fullValues(overrides = {}) {
 		trimEnabled: true,
 		trimLadderEnabled: true,
 		trimProtectTaskIntent: true,
+		trimCriticalRelief: true,
 		surfaceFold: true,
 		...overrides,
 	};
@@ -95,6 +96,10 @@ test("coerceValues round-trips every trim field the client page sends", () => {
 	assert.equal(coerced.trimEnabled, true);
 	assert.equal(coerced.trimLadderEnabled, true);
 	assert.equal(coerced.trimProtectTaskIntent, true);
+	assert.equal(coerced.trimCriticalRelief, true);
+	const coercedReliefOff = coerceValues({ ...fullValues(), trimCriticalRelief: false });
+	assert.notEqual(coercedReliefOff, null, "explicit false must coerce");
+	assert.equal(coercedReliefOff.trimCriticalRelief, false);
 	const coercedOff = coerceValues({ ...fullValues(), trimProtectTaskIntent: false });
 	assert.notEqual(coercedOff, null, "explicit false must coerce");
 	assert.equal(coercedOff.trimProtectTaskIntent, false);

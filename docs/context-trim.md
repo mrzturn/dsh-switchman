@@ -242,38 +242,38 @@ any fold; they fire only when the raw tiers stay quiet.
 | Gate / constant | Value | Code | Notes |
 | --- | --- | --- | --- |
 | Growth anchor | `max(view, wire) − lastFoldLowTokens > 22500` | eval `trigger.js:196-207` (anchor fields `trigger.js:203-205`, written `state.js:502`); defaults `index.js:479`, `config.js:249` | strict `>` |
-| Foldable-increment floor | contiguous increment ≥ 25000 | `trigger.js:198`, `index.js:480`, `config.js:252` | binds first in practice |
-| Pressure tier | usage ≥ 65% of window (97.5k of 150k) | `trigger.js:189-195`, `index.js:481`, `config.js:254` | side-model fold |
-| Emergency tier | usage ≥ 95% (142.5k of 150k) | `trigger.js:141-147`, `index.js:482`, `config.js:256` | mechanical fold, no side-model call |
+| Foldable-increment floor | contiguous increment ≥ 45000 | `trigger.js:198`, `index.js:480`, `config.js:252` | binds first in practice |
+| Pressure tier | usage ≥ 45% of window (90k of 200k) | `trigger.js:189-195`, `index.js:481`, `config.js:254` | side-model fold |
+| Emergency tier | usage ≥ 90% (180k of 200k) | `trigger.js:141-147`, `index.js:482`, `config.js:256` | mechanical fold, no side-model call |
 | Emergency cooldown | 90 s | `trigger.js:41` `EMERGENCY_COOLDOWN_MS` | also applies to a rejected emergency commit |
 | Min interval, side-model folds | 60 s | `trigger.js:38` `FOLD_MIN_INTERVAL_MS` | |
 | Hourly cap | 30 side-model folds per rolling hour | `trigger.js:130-132`, `config.js:277` | emergency exempt: evaluated before the cap AND before the 60 s min-interval (it has its own 90 s cooldown) |
 | Protected tail | 10 messages | `trigger.js:56-59`, `config.js:270` | never folded |
-| Window | model-resolved (150000 for deepseek-flash), capped by `trimWindowTokens` (0 ⇒ `wmForceTokens`) | `index.js:525-530`, `index.js:548-568` | `null` disables pressure/emergency tiers |
-| Advisory nudge lines | speak ≥ `trimAdvisoryPercent` (65), re-speak ≥ `trimAdvisoryCriticalPercent` (95); inverted/out-of-range pair ⇒ fall back to 65/95 | `index.js:286-297`, `config.js:273-277` | advisory mode only; same-band 10-min throttle `ADVISORY_NUDGE_REPEAT_MS` |
+| Window | model-resolved (200000 for deepseek-flash), capped by `trimWindowTokens` (0 ⇒ `wmForceTokens`) | `index.js:525-530`, `index.js:548-568` | `null` disables pressure/emergency tiers |
+| Advisory nudge lines | speak ≥ `trimAdvisoryPercent` (50), re-speak ≥ `trimAdvisoryCriticalPercent` (80); inverted/out-of-range pair ⇒ fall back to 50/80 | `index.js:286-297`, `config.js:273-277` | advisory mode only; same-band 10-min throttle `ADVISORY_NUDGE_REPEAT_MS` |
 | Fold-failure backoff | 60 s × 2^(n−1), 15 min ceiling | `index.js:323-324` | failures advance no cadence gate |
 
-Which gate binds: at a 150k window the 65% pressure line (97.5k wire) sits well
-above the ~64-67k wire point where the growth gate's 25000 increment is reached, so
-growth fires first in the normal case and pressure pins the ceiling. The 25000
+Which gate binds: at the 200k force window the 45% pressure line (90k wire) sits well
+above the ~49-51k wire point where the growth gate's 45000 increment is reached, so
+growth fires first in the normal case and pressure pins the ceiling. The 45000
 increment floor is the binding constraint, not the 22500 growth delta.
 
 ## Advisory-mode pressure nudge
 
 In `advisory` mode the session model is the fold driver, so the engine
 deliberately breaks the auto-mode silence rule there: when `max(view, wire)`
-reaches `trimAdvisoryPercent` (default `65`) of the effective window
+reaches `trimAdvisoryPercent` (default `50`) of the effective window
 (`min(model window, trimWindowTokens || wmForceTokens)`), the engine appends a
 one-off pinned `[SWITCHMAN:TRIM]` nudge as a `user/message` suffix at the live
 session-surface tail. It does not mutate the dispatch system head, so the
 registered protocol head stays byte-stable. The speak is a pure suffix; a later clear or upgrade prunes only the nudge nodes, so prompt-cache reuse survives up to the nudge. The nudge states the
-current pressure and fold line ("At 83% (fold line 65%)") and asks for a
+current pressure and fold line ("At 83% (fold line 50%)") and asks for a
 same-turn `ctx_trim_fold`. Rules:
 
 - Same-band throttle: one nudge per band (`high`/`critical`) per 10 minutes
   (`ADVISORY_NUDGE_REPEAT_MS`, `index.js:286`); any band change re-speaks
   immediately, including escalation to critical (`trimAdvisoryCriticalPercent`,
-  default `95`) and a downgrade to high after a partial fold.
+  default `80`) and a downgrade to high after a partial fold.
 - When pressure falls below the line, a tail sweep retires every live nudge it
 can see — the recorded seq joined with a bounded last-50-node scan, so
 restarts and registry evictions cannot leave a stale nudge behind — logs one
@@ -296,7 +296,16 @@ the current pressure and band. Failed prune or append operations log
 `skip why=prune-failed` or `skip why=append-failed` and can retry on a later
 dispatch.
 - `off` and `auto` modes never nudge. The lines are config fields
-  (`config.js:273-277`); an inverted or out-of-range pair falls back to 65/95
+  (`config.js:273-277`); an inverted or out-of-range pair falls back to 50/80
+- Critical relief fold: when pressure reaches the critical line, the engine
+  performs ONE mechanical (emergency-style) fold itself instead of only
+  nudging — cooldown-gated (90 s, `EMERGENCY_COOLDOWN_MS`), one per session
+  per cooldown, `trimCriticalRelief` = on by default (`false` restores
+  nudge-only advisory mode). The attempt logs an
+  `advisory-relief outcome=…` row to `decisions.log` regardless of outcome.
+  [2026-11-15]-[advisory critical relief fold]-[nudges alone let a session
+  burn from the speak line to host compaction — turn-25 (2026-11-14):
+  nudges ignored, 74%→99% in 28 minutes].
   instead of silencing the nudge (`advisoryNudgeLines`, `index.js:291`).
 
 Every exit is visible in `decisions.log` (vocabulary below):

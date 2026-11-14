@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 白名单同步的并集现在包含 `modelRank`（派发回退路由只在那里登记，enforce 模式会拒绝「池与 modelRank」之外的路由）；DSH 安装完全不提供 agent-team bundle 时，启用动作记录终态 `not-offered`，不再无限重试。
 
 ### Changed
+- Advisory critical relief fold: at the critical advisory line the engine performs one mechanical (emergency-style) fold itself (90 s cooldown, new `trimCriticalRelief` switch, default on) instead of only nudging — the turn-25 incident (nudges ignored, 74%→99% in 28 minutes) burned the window down to host compaction.
+- Advisory nudge lines recalibrated 65/95 → 50/80: the speak line arrives earlier, the critical line now matches the live profile.
+- Advisory 提醒线重校准 65/95 → 50/80：提醒到达更早，critical 线与实机配置对齐。
+- 新增 Advisory 临界救援折叠：压力到达 critical 线时引擎自身执行一次机械折叠（90 秒冷却，新增 `trimCriticalRelief` 开关，默认开），不再只依赖提醒——第 25 轮事故（提醒被无视，28 分钟内 74%→99%）把窗口烧到宿主 compaction 才获救。
 
 - Defaults recalibrated to the tuned live profile: hard watermark 100k, force watermark 200k, per-turn read budget 3500, intent context window 250000 (exactly the wmAutoHandover floor for the new force tier), trim increment 45000, trim pressure/emergency 45%/90%, advisory pair 50%/90%, protected tail 6.
 - Behavior defaults follow the live tuning: trimMode advisory, teamsMode and syncWhitelist on, uiLocale zh, langScope project, langConversation zh-CN.

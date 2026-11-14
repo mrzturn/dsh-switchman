@@ -1088,13 +1088,13 @@ describe("assembly: applyContextTrim with a mock ctx", () => {
 		const sessionId = "sess-window-failed";
 		const stateDir = mkdtempSync(join(tmpdir(), "trim-window-fail-"));
 		const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
-		seedFoldCaptureForTest(handle, sessionId, 145_000);
+		seedFoldCaptureForTest(handle, sessionId, 195_000);
 		try {
 			await handle.maybeFold(sessionId, "window-failure-test");
 			assert.deepEqual(calls, [["p", "m"]]);
 			const decisions = decisionLogForTest(stateDir);
 			assert.match(decisions, /window-resolve-failed key=p\/m why=provider lookup unavailable/u);
-			assert.match(decisions, /session=sess-window-failed .*action=emergency .*window=150000/u);
+			assert.match(decisions, /session=sess-window-failed .*action=emergency .*window=200000/u);
 			assert.equal(handle.store.ledgerOf(sessionId).blocks.length, 1);
 		} finally {
 			rmSync(stateDir, { recursive: true, force: true });
@@ -1431,6 +1431,9 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 			trimIncrementTokens: 50_000,
 			trimPressurePercent: 75,
 			trimEmergencyPercent: 95,
+		trimAdvisoryPercent: 65,
+		trimAdvisoryCriticalPercent: 95,
+		trimCriticalRelief: false, // pure-nudge tests: relief off
 			trimProtectedTail: 6,
 			trimMaxFoldsPerHour: 6,
 			trimSideModel: { provider: "", model: "" },
@@ -1475,12 +1478,12 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		const high = advisoryNudgeText(83, false);
 		assert.match(high, /\[SWITCHMAN:TRIM\] Advisory nudge/u);
 		assert.match(high, /pinned to the session tail until pressure falls below the fold line/u);
-		assert.match(high, /At 83% \(fold line 65%\)/u);
+		assert.match(high, /At 83% \(fold line 50%\)/u);
 		assert.match(high, /ctx_trim_status/u);
 		assert.match(high, /ctx_trim_fold/u);
 		const critical = advisoryNudgeText(97, true);
 		assert.match(critical, /CRITICAL/u);
-		assert.match(critical, /97% ≥ 95%/u);
+		assert.match(critical, /97% ≥ 80%/u);
 		assert.notEqual(critical, high);
 		assert.notEqual(advisoryNudgeText(84, false), high, "different pressures render differently");
 	});
@@ -1586,12 +1589,12 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
 		const sid = "sess-nudge-inverted";
 		try {
-			await dispatch(listener, sid, 50_000);
+			await dispatch(listener, sid, 30_000);
 			const session = sessions.get(sid);
 			await dispatch(listener, sid, 85_000);
 			assert.equal(liveNudges(session).length, 0);
 			await dispatch(listener, sid, 85_000);
-			assert.match(liveNudgeTexts(session)[0], /At 85% \(fold line 65%\)/u);
+			assert.match(liveNudgeTexts(session)[0], /CRITICAL \(85% ≥ 80%\)/u);
 		} finally {
 			rmSync(cfg.trimStateDir, { recursive: true, force: true });
 		}
@@ -1613,6 +1616,91 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 			} finally {
 				rmSync(cfg.trimStateDir, { recursive: true, force: true });
 			}
+		}
+	});
+
+	/** decisions.log rows carrying the advisory-relief vocabulary. */
+	const reliefRows = (cfg) => readFileSync(join(cfg.trimStateDir, "decisions.log"), "utf8").split("\n").filter((line) => line.includes("advisory-relief"));
+	/** Drain microtasks until `probe` turns true (bounded) — the relief fold
+	 *  commits synchronously inside its async cycle, but the fold-commit
+	 *  surface sweep lands on later microtasks. */
+	async function pollUntil(probe, ms = 1000) {
+		const start = Date.now();
+		while (!probe()) {
+			if (Date.now() - start > ms) return false;
+			await new Promise((resolve) => setImmediate(resolve));
+		}
+		return true;
+	}
+
+	test("critical relief: the engine folds mechanically at the critical line", async () => {
+		const { ctx, hooks, sessions } = nudgeCtx();
+		const cfg = { ...nudgeConfig(), trimAdvisoryPercent: 50, trimAdvisoryCriticalPercent: 80, trimCriticalRelief: true };
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const sid = "sess-relief-fold";
+		try {
+			await dispatch(listener, sid, 85_000); // primes wire usage; d2 sees 85% >= 80% critical
+			const session = sessions.get(sid);
+			assert.equal(handle.store.ledgerOf(sid).blocks.length, 0, "high band never folds");
+			assert.equal(reliefRows(cfg).length, 0, "high band logs no relief row");
+			await dispatch(listener, sid, 85_000); // 85% >= 80% critical: relief fires
+			await pollUntil(() => handle.store.ledgerOf(sid).blocks.length === 1);
+			const ledger = handle.store.ledgerOf(sid);
+			assert.equal(ledger.blocks.length, 1, "one mechanical relief fold committed");
+			assert.equal(ledger.blocks[0].kind, "mechanical");
+			assert.equal(ledger.blocks[0].tier, 1, "emergency tier normalizes to 1");
+			const folded = reliefRows(cfg).filter((line) => line.includes("outcome=folded:emergency:"));
+			assert.equal(folded.length, 1, "exactly one advisory-relief folded row");
+			assert.match(folded[0], /session=sess-relief-fold advisory-relief outcome=folded:emergency:/u);
+			assert.match(folded[0], /tier=emergency pressure=85%/u);
+			// the critical nudge still speaks alongside the relief
+			assert.match(liveNudgeTexts(session).join("\n"), /CRITICAL \(85% ≥ 80%\)/u);
+			// the fold ships to the session surface (fold-commit sweep)
+					assert.ok(String(ledger.blocks[0].id).startsWith("b"), "relief fold committed a real block id");
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
+
+	test("critical relief: the 90 s cooldown blocks an immediate re-fold", async () => {
+		const { ctx, hooks, sessions } = nudgeCtx();
+		const cfg = { ...nudgeConfig(), trimAdvisoryPercent: 50, trimAdvisoryCriticalPercent: 80, trimCriticalRelief: true };
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const sid = "sess-relief-cool";
+		try {
+			await dispatch(listener, sid, 85_000);
+			await dispatch(listener, sid, 85_000); // relief folds here
+			await pollUntil(() => handle.store.ledgerOf(sid).blocks.length === 1);
+			await dispatch(listener, sid, 86_000); // still critical, but cooling
+			await new Promise((resolve) => setImmediate(() => setImmediate(resolve))); // cooldown gate logs no row
+			assert.equal(handle.store.ledgerOf(sid).blocks.length, 1, "no second fold inside the cooldown");
+			assert.equal(reliefRows(cfg).filter((line) => line.includes("outcome=folded:")).length, 1);
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
+
+	test("trimCriticalRelief: false restores nudge-only advisory mode", async () => {
+		const { ctx, hooks, sessions } = nudgeCtx();
+		const cfg = { ...nudgeConfig(), trimAdvisoryPercent: 50, trimAdvisoryCriticalPercent: 80, trimCriticalRelief: false };
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const sid = "sess-relief-off";
+		try {
+			await dispatch(listener, sid, 85_000);
+			const session = sessions.get(sid);
+			await dispatch(listener, sid, 85_000);
+			await new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
+			assert.match(liveNudgeTexts(session).join("\n"), /CRITICAL/u, "the nudge still speaks");
+			assert.equal(handle.store.ledgerOf(sid).blocks.length, 0, "no engine fold");
+			assert.equal(reliefRows(cfg).length, 0, "no relief rows at all");
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
 		}
 	});
 

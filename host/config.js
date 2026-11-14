@@ -277,8 +277,15 @@ export const Config = z.object({
 	trimAdvisoryPercent: z.number().min(1).max(100).default(50).volatile(),
 	/** Advisory mode escalation line: at this percent the nudge escalates to a
 	 *  fold-down-this-turn order; must stay above trimAdvisoryPercent (an
-	 *  inverted or out-of-range pair falls back to 65/95). */
-	trimAdvisoryCriticalPercent: z.number().min(1).max(100).default(90).volatile(),
+	 *  inverted or out-of-range pair falls back to 50/80). */
+	trimAdvisoryCriticalPercent: z.number().min(1).max(100).default(80).volatile(),
+	/** [2026-11-15]-[advisory critical relief fold]-[at the critical advisory
+	 *  line the engine itself performs ONE mechanical (emergency-style) fold,
+	 *  90 s cooldown (EMERGENCY_COOLDOWN_MS), instead of only nudging — the
+	 *  2026-11-14 turn-25 incident (nudges ignored, 74%→99% in 28 minutes)
+	 *  burned the window down to host compaction. Off restores nudge-only
+	 *  advisory mode.] */
+	trimCriticalRelief: z.boolean().default(true).volatile(),
 	/** [2026-11-07]-[growth/increment constants are absolute tokens
 	 *  calibrated for the default 150k effective window]-[scaling
 	 *  trimWindowTokens down without scaling trimGrowthTokens /

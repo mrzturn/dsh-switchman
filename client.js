@@ -281,7 +281,7 @@ window.__ModuleLoader__.load({
 			{ field: 'trimPressurePercent', min: 5, max: 100, def: 45 },
 			{ field: 'trimEmergencyPercent', min: 5, max: 100, def: 90 },
 			{ field: 'trimAdvisoryPercent', min: 5, max: 100, def: 50 },
-			{ field: 'trimAdvisoryCriticalPercent', min: 5, max: 100, def: 90 },
+			{ field: 'trimAdvisoryCriticalPercent', min: 5, max: 100, def: 80 },
 			{ field: 'trimWindowTokens', min: 0, def: 0 },
 			{ field: 'trimProtectedTail', min: 0, max: 100, def: 6 },
 			{ field: 'trimMaxFoldsPerHour', min: 1, max: 60, def: 30 },
@@ -362,6 +362,7 @@ window.__ModuleLoader__.load({
 			'trimEnabled',
 			'trimLadderEnabled',
 			'trimProtectTaskIntent',
+			'trimCriticalRelief',
 			'surfaceFold',
 			'trimSideModel',
 			'trimFoldFallbackModel',
@@ -542,6 +543,7 @@ window.__ModuleLoader__.load({
 				trimEnabled: bool('trimEnabled', true),
 				trimLadderEnabled: bool('trimLadderEnabled', true),
 				trimProtectTaskIntent: bool('trimProtectTaskIntent', true),
+				trimCriticalRelief: bool('trimCriticalRelief', true),
 				surfaceFold: bool('surfaceFold', true),
 				trimSideModel:
 					sanitizeRoute(value?.trimSideModel, true) ??
@@ -631,6 +633,7 @@ window.__ModuleLoader__.load({
 				trimEnabled: values.trimEnabled,
 				trimLadderEnabled: values.trimLadderEnabled,
 				trimProtectTaskIntent: values.trimProtectTaskIntent,
+				trimCriticalRelief: values.trimCriticalRelief,
 				surfaceFold: values.surfaceFold,
 				trimSideModel: `${routeKey(values.trimSideModel)}\0${values.trimSideModel.effort ?? ''}`,
 				trimFoldFallbackModel: `${routeKey(values.trimFoldFallbackModel)}\0${values.trimFoldFallbackModel.effort ?? ''}`,
@@ -930,6 +933,8 @@ window.__ModuleLoader__.load({
 				trimModeLabel: '自动裁剪模式',
 				trimModeHelp:
 					'空闲时何时把历史折叠为摘要：off = 从不折叠，advisory = 模型自主折叠（压力达线时引擎在系统提示注入一次性提醒），auto = 自动折叠。',
+				trimCriticalReliefLabel: '临界救援折叠',
+				trimCriticalReliefHelp: '开启后（默认），advisory 模式压力到达临界线（trimAdvisoryCriticalPercent）时引擎自动执行一次机械折叠（90 秒冷却），不再只依赖提示。',
 				trimEnabledLabel: '启用自动裁剪',
 				trimEnabledHelp: '上下文裁剪层的总开关。',
 				trimLadderEnabledLabel: '阶梯折叠（T1/T2/T3）',
@@ -1206,6 +1211,8 @@ window.__ModuleLoader__.load({
 				trimModeLabel: 'Trim mode',
 				trimModeHelp:
 					'When to fold history into summaries at idle: off = never, advisory = the model folds itself (the engine appends a one-off nudge line at the pressure line), auto = automatic folds.',
+				trimCriticalReliefLabel: 'Critical relief fold',
+				trimCriticalReliefHelp: 'When on (default), advisory mode performs one mechanical fold itself at the critical line (trimAdvisoryCriticalPercent, 90 s cooldown) instead of only nudging.',
 				trimEnabledLabel: 'Enable auto-trim',
 				trimEnabledHelp: 'Master switch for the context-trim layer.',
 				trimLadderEnabledLabel: 'Ladder folding (T1/T2/T3)',
@@ -1490,6 +1497,8 @@ window.__ModuleLoader__.load({
 				trimModeLabel: '自動裁剪模式',
 				trimModeHelp:
 					'閒置時何時將歷史摺疊為摘要：off = 從不摺疊，advisory = 模型自主摺疊（達壓力線時引擎於系統提示注入一次性提醒），auto = 自動摺疊。',
+				trimCriticalReliefLabel: '臨界救援摺疊',
+				trimCriticalReliefHelp: '開啟後（預設），advisory 模式壓力到達臨界線（trimAdvisoryCriticalPercent）時引擎自動執行一次機械摺疊（90 秒冷卻），不再只依賴提示。',
 				trimEnabledLabel: '啟用自動裁剪',
 				trimEnabledHelp: '上下文裁剪層的總開關。',
 				trimLadderEnabledLabel: '階梯摺疊（T1/T2/T3）',
@@ -1745,6 +1754,8 @@ window.__ModuleLoader__.load({
 				trimModeLabel: 'トリムモード',
 				trimModeHelp:
 					'アイドル時に履歴を要約へ折りたたむタイミング：off = 折りたたまない、advisory = モデルが自発的に折りたたむ（圧力しきい値でエンジンがシステムプロンプトに一度だけ注意喚起を追記）、auto = 自動で折りたたむ。',
+				trimCriticalReliefLabel: 'クリティカル救済フォールド',
+				trimCriticalReliefHelp: 'オン（既定）では、advisory モードで圧力が臨界線（trimAdvisoryCriticalPercent）に達した時点でエンジン自身が機械的フォールドを 1 回実行します（90 秒クールダウン）。',
 				trimEnabledLabel: '自動トリムを有効化',
 				trimEnabledHelp: 'コンテキストトリム層のマスタースイッチ。',
 				trimGrowthLabel: '増加しきい値（token）',
@@ -1995,6 +2006,8 @@ window.__ModuleLoader__.load({
 				trimModeLabel: '트림 모드',
 				trimModeHelp:
 					'유휴 시 언제 기록을 요약으로 접을지: off = 접지 않음, advisory = 모델이 스스로 접음(압력 임계값에서 엔진이 시스템 프롬프트에 일회성 알림 추가), auto = 자동 접기.',
+				trimCriticalReliefLabel: '임계 구제 폴드',
+				trimCriticalReliefHelp: '켜면(기본) advisory 모드에서 압력이 임계선(trimAdvisoryCriticalPercent)에 닿을 때 엔진이 직접 기계 폴드를 한 번 실행합니다(90초 쿨다운).',
 				trimEnabledLabel: '자동 트림 사용',
 				trimEnabledHelp: '컨텍스트 트림 계층의 마스터 스위치.',
 				trimGrowthLabel: '증가 임계값(token)',
@@ -2237,6 +2250,8 @@ window.__ModuleLoader__.load({
 				trimModeLabel: 'Trim-Modus',
 				trimModeHelp:
 					'Wann der Verlauf im Leerlauf zu Zusammenfassungen gefaltet wird: off = nie, advisory = das Modell faltet selbst (der Motor hängt eine einmalige Erinnerung an den Systemprompt an), auto = automatisches Falten.',
+				trimCriticalReliefLabel: 'Kritische Notfaltung',
+				trimCriticalReliefHelp: 'Ein (Standard): Erreicht der Druck im Advisory-Modus die kritische Linie (trimAdvisoryCriticalPercent), faltet die Engine selbst einmal mechanisch (90 s Abklingzeit).',
 				trimEnabledLabel: 'Auto-Trim aktivieren',
 				trimEnabledHelp: 'Hauptschalter für die Kontext-Trim-Schicht.',
 				trimGrowthLabel: 'Wachstumsschwelle (Token)',
@@ -2482,6 +2497,8 @@ window.__ModuleLoader__.load({
 				trimModeLabel: 'Modo de recorte',
 				trimModeHelp:
 					'Cuándo plegar el historial en resúmenes en reposo: off = nunca, advisory = el modelo pliega por sí mismo (el motor añade un aviso puntual al system prompt), auto = plegado automático.',
+				trimCriticalReliefLabel: 'Alivio crítico mecánico',
+				trimCriticalReliefHelp: 'Activado (predeterminado): en modo advisory, al llegar a la línea crítica (trimAdvisoryCriticalPercent), el motor pliega mecánicamente una vez por sí mismo (enfriamiento de 90 s).',
 				trimEnabledLabel: 'Activar recorte automático',
 				trimEnabledHelp:
 					'Interruptor maestro de la capa de recorte de contexto.',
@@ -2728,6 +2745,8 @@ window.__ModuleLoader__.load({
 				trimModeLabel: 'Mode de rognage',
 				trimModeHelp:
 					'Quand replier l’historique en résumés au repos : off = jamais, advisory = le modèle replie lui-même (le moteur ajoute un rappel ponctuel au system prompt), auto = repli automatique.',
+				trimCriticalReliefLabel: 'Secours mécanique critique',
+				trimCriticalReliefHelp: 'Activé (par défaut) : en mode advisory, quand la pression atteint la ligne critique (trimAdvisoryCriticalPercent), le moteur plie lui-même une fois mécaniquement (délai de 90 s).',
 				trimEnabledLabel: 'Activer le rognage automatique',
 				trimEnabledHelp:
 					'Interrupteur principal de la couche de rognage de contexte.',
@@ -2974,6 +2993,8 @@ window.__ModuleLoader__.load({
 				trimModeLabel: 'Modalità di riduzione',
 				trimModeHelp:
 					'Quando comprimere la cronologia in riepiloghi a riposo: off = mai, advisory = il modello comprime da solo (il motore aggiunge un promemoria una tantum al system prompt), auto = riduzione automatica.',
+				trimCriticalReliefLabel: 'Soccorso critico meccanico',
+				trimCriticalReliefHelp: 'Attivo (predefinito): in modalità advisory, al raggiungimento della linea critica (trimAdvisoryCriticalPercent), il motore esegue una piegatura meccanica da sé (cooldown di 90 s).',
 				trimEnabledLabel: 'Attiva riduzione automatica',
 				trimEnabledHelp:
 					'Interruttore principale del livello di riduzione del contesto.',
@@ -3220,6 +3241,8 @@ window.__ModuleLoader__.load({
 				trimModeLabel: 'Modo de corte',
 				trimModeHelp:
 					'Quando dobrar o histórico em resumos na ociosidade: off = nunca, advisory = o modelo dobra por si (o motor acrescenta um aviso pontual ao system prompt), auto = dobra automática.',
+				trimCriticalReliefLabel: 'Alívio crítico mecânico',
+				trimCriticalReliefHelp: 'Ligado (padrão): no modo advisory, ao atingir a linha crítica (trimAdvisoryCriticalPercent), o motor dobra mecanicamente uma vez por si (arrefecimento de 90 s).',
 				trimEnabledLabel: 'Ativar corte automático',
 				trimEnabledHelp:
 					'Interruptor principal da camada de corte de contexto.',
@@ -3466,6 +3489,8 @@ window.__ModuleLoader__.load({
 				trimModeLabel: 'Режим обрезки',
 				trimModeHelp:
 					'Когда сворачивать историю в сводки в простое: off = никогда, advisory = модель сворачивает сама (движок добавляет разовое напоминание в системный промпт), auto = автоматически.',
+				trimCriticalReliefLabel: 'Критическое авто-сворачивание',
+				trimCriticalReliefHelp: 'Включено (по умолчанию): в режиме advisory при достижении критической линии (trimAdvisoryCriticalPercent) движок сам один раз сворачивает механически (куладдаун 90 с).',
 				trimEnabledLabel: 'Включить автообрезку',
 				trimEnabledHelp: 'Главный выключатель слоя обрезки контекста.',
 				trimGrowthLabel: 'Порог роста (токенов)',
@@ -5552,6 +5577,7 @@ window.__ModuleLoader__.load({
 				trimEnabled: values.trimEnabled,
 				trimLadderEnabled: values.trimLadderEnabled,
 				trimProtectTaskIntent: values.trimProtectTaskIntent,
+				trimCriticalRelief: values.trimCriticalRelief,
 				surfaceFold: values.surfaceFold,
 				trimSideModel: {
 					provider: values.trimSideModel.provider,
@@ -7143,6 +7169,23 @@ window.__ModuleLoader__.load({
 							checked: values.trimProtectTaskIntent,
 							onChange: () => {
 								edit('trimProtectTaskIntent', !values.trimProtectTaskIntent);
+							},
+							disabled: !editable,
+							style: STYLE.checkbox,
+						}),
+						lines: [],
+						}),
+					h(SettingsRow, {
+						key: 'trimCriticalRelief',
+						id: `${trimId}-relief`,
+						label: t('trimCriticalReliefLabel'),
+						help: t('trimCriticalReliefHelp'),
+						control: h('input', {
+							type: 'checkbox',
+							id: `${trimId}-relief`,
+							checked: values.trimCriticalRelief,
+							onChange: () => {
+								edit('trimCriticalRelief', !values.trimCriticalRelief);
 							},
 							disabled: !editable,
 							style: STYLE.checkbox,

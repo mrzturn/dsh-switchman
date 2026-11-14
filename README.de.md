@@ -99,7 +99,7 @@ Alles Folgende sind die vollständigen Werte direkt nach der Neuinstallation (ma
 
 **Intent-Routing** (ab Werk unbrauchbar; nötig sind Klassifikator + mindestens ein Kandidat + der Hauptschalter): `intentEnabled` = aus (ist er aus, bleibt der Auto-Eintrag verborgen, und Sessions, die bereits Auto gewählt hatten, laufen über die Fallback-Kette); Klassifikator-Route nicht gesetzt; Klassifikatortyp `chat`; Kandidatenliste leer (die mitgelieferten Kategorien nehmen erst mit eingetragenem Modell am Routing teil); Cache-Fenster `300` s / Umschalt-Vertrauensschwelle `80` / Klassifikations-Timeout `60000` ms; Verlauf `6` Nachrichten / `2400` Zeichen; `intentContextWindow` = `250000`.
 
-**Kontext-Trimming**: `trimEnabled` = an; `trimMode` = `advisory` (Hinweise + Fold-Werkzeuge; das Session-Modell faltet selbst — für vollautomatische Folds `auto` setzen); Wachstumsschwelle `22500` + Zuwachs `45000` Tokens; Druck `45%` / Notfall `90%`; Advisory-Hinweis `50%` / `90%`; geschütztes Ende `6` Nachrichten; Fold-Takt-Obergrenze `30` pro Stunde; Nebenmodell nicht gesetzt (erbt das Session-Modell) — Details im Abschnitt „Automatisches Kontext-Trimming“ unten.
+**Kontext-Trimming**: `trimEnabled` = an; `trimMode` = `advisory` (Hinweise + Fold-Werkzeuge; das Session-Modell faltet selbst — für vollautomatische Folds `auto` setzen); Wachstumsschwelle `22500` + Zuwachs `45000` Tokens; Druck `45%` / Notfall `90%`; Advisory-Hinweis `50%` / `80%`; geschütztes Ende `6` Nachrichten; Fold-Takt-Obergrenze `30` pro Stunde; Nebenmodell nicht gesetzt (erbt das Session-Modell) — Details im Abschnitt „Automatisches Kontext-Trimming“ unten.
 
 **Out-of-the-Box-Anmerkungen**: ① dass Intent-Routing ab Werk unbrauchbar ist, ist Absicht — drei Schritte zum Einschalten (Klassifikator, Kandidaten, Schalter); ② das wirksame Auto-Fenster steht ab Werk auf 250000 — die Leitplanke garantiert 0.8×Fenster ≥ force (200000), die Kern-Komprimierlinie (200000) liegt also genau auf der Linie der weichen Übergabe (200000); ③ am spürbarsten ab Werk ist das Wasserstands-Trio: 80k mahnt zur Delegation / 100k strafft das Lesen / 200k übergibt automatisch (Dokument schreiben + Komprimierung) — ganz ohne Einstellungen.
 
@@ -110,23 +110,23 @@ Lange Sessions bleiben günstig: verarbeitete Gesprächsbereiche werden zu kompa
 Automatisierungsstufen (`trimMode`):
 
 - **`off`** — nur messen: Usage- und Cache-Hit-Sampling läuft weiter; kein Banner, keine Folds.
-- **`advisory`** — das Session-Modell faltet selbst: die Tools `ctx_trim_fold` und `ctx_trim_status` plus der Protokollkopf werden dafür freigegeben. Erreicht der Sitzungsdruck `trimAdvisoryPercent` des effektiven Fensters, hängt die Engine einen einmaligen, angehefteten Fold-Hinweis als `user/message`-Suffix an das Ende der Live-Session-Surface an (nicht an den Systemkopf des Dispatchs) — bei Eskalation auf critical sofort erneut, unterhalb der Linie wird er entfernt.
-- **`auto`** (Standard) — alles darüber hinaus plus automatische Folds an der Leerlauf-Grenze, in drei Stufen: eine Wachstumsschwelle (Zuwachs > `trimGrowthTokens`, gemessen ab dem Tiefpunkt nach dem letzten Fold — der Anker, der die Schwelle nach Folds auf hohem View-Stand scharf hält — UND ein zusammenhängender komprimierbarer Zuwachs ≥ `trimIncrementTokens`), eine Druckstufe (`trimPressurePercent` des Kontextfensters) und eine Notfallstufe (`trimEmergencyPercent` — ein mechanischer Fold mit eigener Abklingzeit).
+- **`advisory`** (Standard) — das Session-Modell faltet selbst: die Tools `ctx_trim_fold` und `ctx_trim_status` plus der Protokollkopf werden dafür freigegeben. Erreicht der Sitzungsdruck `trimAdvisoryPercent` des effektiven Fensters, hängt die Engine einen einmaligen, angehefteten Fold-Hinweis als `user/message`-Suffix an das Ende der Live-Session-Surface an (nicht an den Systemkopf des Dispatchs) — bei Eskalation auf critical sofort erneut, unterhalb der Linie wird er entfernt. An der kritischen Linie führt die Engine selbst einen mechanischen Rettungs-Fold aus (90 s Abklingzeit, `trimCriticalRelief` = an).
+- **`auto`** — alles darüber hinaus plus automatische Folds an der Leerlauf-Grenze, in drei Stufen: eine Wachstumsschwelle (Zuwachs > `trimGrowthTokens`, gemessen ab dem Tiefpunkt nach dem letzten Fold — der Anker, der die Schwelle nach Folds auf hohem View-Stand scharf hält — UND ein zusammenhängender komprimierbarer Zuwachs ≥ `trimIncrementTokens`), eine Druckstufe (`trimPressurePercent` des Kontextfensters) und eine Notfallstufe (`trimEmergencyPercent` — ein mechanischer Fold mit eigener Abklingzeit).
 
 Alle Schlüssel liegen unter Einstellungen → dsh-switchman; Defaults aus `host/config.js`:
 
 | Schlüssel | Standard | Bedeutung |
 | --- | --- | --- |
 | `trimEnabled` | `true` | Hauptschalter. AUS deaktiviert Folds und Metriken komplett (der Listener wird zum reinen Durchreichen). |
-| `trimMode` | `auto` | `off` nur messen / `advisory` modellgetriebene Folds / `auto` systemgetriebene Folds. |
+| `trimMode` | `advisory` | `off` nur messen / `advisory` modellgetriebene Folds / `auto` systemgetriebene Folds. |
 | `trimGrowthTokens` | `22500` | Wachstumsschwelle: falte, wenn die ausgehende View seit dem letzten Fold so viel gewachsen ist. |
 | `trimIncrementTokens` | `45000` | Schwellen-Begleiter: der zusammenhängende komprimierbare Zuwachs muss ebenfalls diese Größe erreichen. |
-| `trimPressurePercent` | `65` | Druckstufe: falte, wenn die View-Nutzung diesen Prozentsatz des Kontextfensters erreicht. |
-| `trimEmergencyPercent` | `95` | Notfallstufe: erzwungener mechanischer Fold (kein Nebenmodell-Aufruf) bei diesem Prozentsatz. |
-| `trimAdvisoryPercent` | `65` | Advisory-Hinweislinie: bei diesem Prozent des effektiven Fensters erinnert die Engine das Modell, sofort mit `ctx_trim_fold` zu falten (nur advisory-Modus). |
-| `trimAdvisoryCriticalPercent` | `95` | Critical-Hinweislinie: bei Erreichen sofort erneuter Hinweis, umgeht das 10-Minuten-Throttling derselben Stufe. |
+| `trimPressurePercent` | `45` | Druckstufe: falte, wenn die View-Nutzung diesen Prozentsatz des Kontextfensters erreicht. |
+| `trimEmergencyPercent` | `90` | Notfallstufe: erzwungener mechanischer Fold (kein Nebenmodell-Aufruf) bei diesem Prozentsatz. |
+| `trimAdvisoryPercent` | `50` | Advisory-Hinweislinie: bei diesem Prozent des effektiven Fensters erinnert die Engine das Modell, sofort mit `ctx_trim_fold` zu falten (nur advisory-Modus). |
+| `trimAdvisoryCriticalPercent` | `80` | Critical-Hinweislinie: bei Erreichen sofort erneuter Hinweis, umgeht das 10-Minuten-Throttling derselben Stufe. |
 | `trimWindowTokens` | `0` | Effektives Fensterlimit für die Stufenberechnung: gerechnet gegen min(Modellfenster, Limit). `0` = folgt `wmForceTokens`. |
-| `trimProtectedTail` | `10` | Die letzten N Nachrichten werden nie gefaltet. |
+| `trimProtectedTail` | `6` | Die letzten N Nachrichten werden nie gefaltet. |
 | `trimMaxFoldsPerHour` | `30` | Fold-Takt-Obergrenze pro rollierender Stunde für Nebenmodell-Folds (Notfall-Folds ausgenommen). |
 | `trimSideModel` | nicht gesetzt | Route des Zusammenfassungs-Nebenmodells. Leer = Provider/Modell der Session folgen, aber den Effort des Aufrufs nicht übernehmen; auch Ladder-Distillationen nutzen diese Route. Der Effort für Zusammenfassungen lässt sich separat festlegen; ohne Pin wird anhand der Modellmetadaten die niedrigste aktivierte Reasoning-Stufe gewählt, bei Modellen mit nur Ein/Aus off. Wird Reasoning nicht unterstützt oder sind keine Metadaten verfügbar, wird kein Effort gesendet und das Modell-/Adapter-Standardverhalten bleibt maßgeblich. |
 | `trimFoldFallbackModel` | nicht gesetzt | Route, mit der der Fold den Zusammenfassungs-Versuch wiederholt; scheitert auch sie, degradiert ein Pressure-Fold zu mechanischem Folding. Leer = kein Fallback. Das Effort des manuell gewählten Fold-Fallback-Modells ist unabhängig; ohne Pin gilt dieselbe Metadaten-Empfehlung wie beim Zusammenfassungsmodell, ohne Metadaten der Modellstandard. Route mit Spielraum bei Cooldowns, Risikokontrolle und Concurrency wählen. |

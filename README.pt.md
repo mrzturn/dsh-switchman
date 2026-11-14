@@ -99,7 +99,7 @@ Estes são todos os valores logo depois de uma instalação nova (fonte autorita
 
 **Roteamento por intenção** (indisponível por padrão; são precisos classificador + pelo menos um candidato + ligar a chave mestra): `intentEnabled` = desligado (desligado, a entrada Auto fica oculta e as sessões que já a tinham escolhido caem na cadeia de fallback); rota do classificador sem definir; tipo de classificador `chat`; lista de candidatos vazia (as categorias pré-instaladas só entram no roteamento com um modelo preenchido); janela de cache `300` s / limiar de confiança da troca `80` / timeout de classificação `60000` ms; histórico de `6` mensagens / `2400` caracteres; `intentContextWindow` = `250000`.
 
-**Trim de contexto**: `trimEnabled` = ligado; `trimMode` = `advisory` (avisos + ferramentas de dobra; o modelo da sessão dobra-se sozinho — para o modo totalmente automático, `auto`); portão de crescimento `22500` + incremento `45000` tokens; pressão `45%` / emergência `90%`; avisos advisory `50%` / `90%`; cauda protegida `6` mensagens; teto de cadência de folds `30` por hora; modelo secundário não definido (herda o modelo da sessão) — detalhes na seção «Trim automático do contexto» abaixo.
+**Trim de contexto**: `trimEnabled` = ligado; `trimMode` = `advisory` (avisos + ferramentas de dobra; o modelo da sessão dobra-se sozinho — para o modo totalmente automático, `auto`); portão de crescimento `22500` + incremento `45000` tokens; pressão `45%` / emergência `90%`; avisos advisory `50%` / `80%`; cauda protegida `6` mensagens; teto de cadência de folds `30` por hora; modelo secundário não definido (herda o modelo da sessão) — detalhes na seção «Trim automático do contexto» abaixo.
 
 **Observações de fábrica**: ① o roteamento por intenção vir indisponível de fábrica é proposital — três passos para ligar (classificador, candidatos, chave); ② a janela efetiva do Auto já nasce em 250000 — o guard-rail garante 0.8×janela ≥ force (200000), então a linha de compactação do núcleo (200000) cai exatamente sobre a linha de entrega suave (200000); ③ o que mais se sente de fábrica é o trio de níveis: 80k lembra de delegar / 100k aperta a leitura / 200k entrega sozinho (documento + compactação) — sem nenhuma configuração.
 
@@ -110,23 +110,23 @@ Sessões longas ficam baratas: os trechos já consumidos da conversa viram resum
 Níveis de automação (`trimMode`):
 
 - **`off`** — só medição: a amostragem de uso e de acertos de cache continua rodando; sem banner, sem folds.
-- **`advisory`** — o modelo da sessão dobra sozinho: as ferramentas `ctx_trim_fold` e `ctx_trim_status` mais o cabeçalho de protocolo ficam expostas. Quando a pressão da sessão atinge `trimAdvisoryPercent` da janela efetiva, o motor acrescenta um lembrete de dobra fixado como sufixo `user/message` ao final da surface ativa da sessão (não ao cabeçalho system do despacho) — repetido imediatamente ao escalar para crítico e removido quando a pressão volta abaixo da linha.
-- **`auto`** (padrão) — tudo isso mais folds automáticos na fronteira de ociosidade, em três degraus: um portão de crescimento (crescimento > `trimGrowthTokens` medido a partir da mínima pós-dobra do último fold — a âncora que mantém o portão armado após dobras confirmadas em pontos altos da view — E um incremento comprimível contíguo ≥ `trimIncrementTokens`), um degrau de pressão (`trimPressurePercent` da janela de contexto) e um degrau de emergência (`trimEmergencyPercent` — um fold mecânico com cooldown próprio).
+- **`advisory`** (padrão) — o modelo da sessão dobra sozinho: as ferramentas `ctx_trim_fold` e `ctx_trim_status` mais o cabeçalho de protocolo ficam expostas. Quando a pressão da sessão atinge `trimAdvisoryPercent` da janela efetiva, o motor acrescenta um lembrete de dobra fixado como sufixo `user/message` ao final da surface ativa da sessão (não ao cabeçalho system do despacho) — repetido imediatamente ao escalar para crítico e removido quando a pressão volta abaixo da linha. Na linha crítica o próprio motor executa uma dobra mecânica de alívio (arrefecimento de 90 s, `trimCriticalRelief` = ligado).
+- **`auto`** — tudo isso mais folds automáticos na fronteira de ociosidade, em três degraus: um portão de crescimento (crescimento > `trimGrowthTokens` medido a partir da mínima pós-dobra do último fold — a âncora que mantém o portão armado após dobras confirmadas em pontos altos da view — E um incremento comprimível contíguo ≥ `trimIncrementTokens`), um degrau de pressão (`trimPressurePercent` da janela de contexto) e um degrau de emergência (`trimEmergencyPercent` — um fold mecânico com cooldown próprio).
 
 Todas as chaves ficam em Configurações → dsh-switchman; os padrões vêm de `host/config.js`:
 
 | Chave | Padrão | Significado |
 | --- | --- | --- |
 | `trimEnabled` | `true` | Chave mestra. Desligado desativa folds e métricas por completo (o listener degrada a puro pass-through). |
-| `trimMode` | `auto` | `off` só medição / `advisory` folds conduzidos pelo modelo / `auto` folds conduzidos pelo sistema. |
+| `trimMode` | `advisory` | `off` só medição / `advisory` folds conduzidos pelo modelo / `auto` folds conduzidos pelo sistema. |
 | `trimGrowthTokens` | `22500` | Portão de crescimento: dobra quando a view de saída crescer isso desde o último fold. |
 | `trimIncrementTokens` | `45000` | Companheiro do portão: o incremento comprimível contíguo também precisa alcançar esse tamanho. |
-| `trimPressurePercent` | `65` | Degrau de pressão: dobra quando o uso da view alcança essa porcentagem da janela de contexto. |
-| `trimEmergencyPercent` | `95` | Degrau de emergência: fold mecânico forçado (sem chamada ao modelo secundário) nessa porcentagem. |
-| `trimAdvisoryPercent` | `65` | Linha de lembrete advisory: ao atingir essa porcentagem da janela efetiva, o motor insta o modelo a dobrar já com `ctx_trim_fold` (somente modo advisory). |
-| `trimAdvisoryCriticalPercent` | `95` | Linha crítica: ao atingi-la, repete o lembrete de imediato, contornando o limite de 10 minutos na mesma faixa. |
+| `trimPressurePercent` | `45` | Degrau de pressão: dobra quando o uso da view alcança essa porcentagem da janela de contexto. |
+| `trimEmergencyPercent` | `90` | Degrau de emergência: fold mecânico forçado (sem chamada ao modelo secundário) nessa porcentagem. |
+| `trimAdvisoryPercent` | `50` | Linha de lembrete advisory: ao atingir essa porcentagem da janela efetiva, o motor insta o modelo a dobrar já com `ctx_trim_fold` (somente modo advisory). |
+| `trimAdvisoryCriticalPercent` | `80` | Linha crítica: ao atingi-la, repete o lembrete de imediato, contornando o limite de 10 minutos na mesma faixa. |
 | `trimWindowTokens` | `0` | Limite de janela efetivo para o cálculo dos níveis: calculado sobre min(janela do modelo, limite). `0` = segue `wmForceTokens`. |
-| `trimProtectedTail` | `10` | As últimas N mensagens nunca são dobradas. |
+| `trimProtectedTail` | `6` | As últimas N mensagens nunca são dobradas. |
 | `trimMaxFoldsPerHour` | `30` | Teto de cadência de folds por hora rolante para o modelo secundário (os de emergência ficam fora). |
 | `trimSideModel` | não definida | Rota do modelo secundário que escreve os resumos. Vazia = seguir o provider/model da sessão, sem herdar o effort da chamada; a ladder distillation também usa esta rota. O effort do resumo aceita um pin manual independente; se não fixado, os metadados do modelo recomendam o nível de reasoning habilitado mais baixo; se o modelo só tiver interruptor sim/não, escolhe-se off. Se não houver suporte a reasoning ou os metadados não estiverem disponíveis, nenhum effort é enviado e prevalece o comportamento padrão do modelo/adaptador. |
 | `trimFoldFallbackModel` | não definida | Rota de nova tentativa quando o modelo secundário de resumos falha; um fold de pressão degrada então para mecânico. Vazia = sem fallback. O modelo de fallback do fold escolhido manualmente tem um pin de effort independente; sem pin, usa a mesma recomendação por metadados do modelo de resumo e, sem metadados, o padrão do modelo. Escolha uma rota com folga em cooldowns, controle de risco e concorrência. |

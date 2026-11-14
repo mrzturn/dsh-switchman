@@ -99,7 +99,7 @@ bash <설치-디렉터리>/skills/db-query/scripts/setup.sh
 
 **의도 인식**(기본은 사용 불가. 분류기 + 후보 최소 1개 + 마스터 토글 켜기가 필요): `intentEnabled` = 끔(꺼져 있으면 Auto 항목은 숨겨지고, Auto를 선택해 둔 세션은 폴백 체인으로 흐른다). 분류기 라우트 미설정. 분류기 유형 `chat`. 후보 목록은 빈 상태(프리셋 분류는 모델을 채워야 라우팅에 참여). 캐시 창 `300`초 / 전환 신뢰도 `80` / 분류 타임아웃 `60000`ms. 히스토리 `6`건 / `2400`자. `intentContextWindow` = `250000`.
 
-**컨텍스트 트림**: `trimEnabled` = 켬; `trimMode` = `advisory`(알림 + fold 도구로 모델이 스스로 접음. 완전 자동은 `auto`); 성장 게이트 `22500` + 증분 `45000` 토큰; 압력 `45%` / 비상 `90%`; advisory 알림 `50%` / `90%`; 보호 테일 `6`건; fold 케이던스 상한 시간당 `30`회; 사이드 모델 미설정(세션 모델 상속) — 자세한 내용은 아래 "자동 컨텍스트 트림" 절에서.
+**컨텍스트 트림**: `trimEnabled` = 켬; `trimMode` = `advisory`(알림 + fold 도구로 모델이 스스로 접음. 완전 자동은 `auto`); 성장 게이트 `22500` + 증분 `45000` 토큰; 압력 `45%` / 비상 `90%`; advisory 알림 `50%` / `80%`; 보호 테일 `6`건; fold 케이던스 상한 시간당 `30`회; 사이드 모델 미설정(세션 모델 상속) — 자세한 내용은 아래 "자동 컨텍스트 트림" 절에서.
 
 **기본 상태에서 알아둘 점**: ① 의도 인식이 기본으로 불가능한 것은 의도된 설계고, 세 단계로 켠다(분류기, 후보, 토글). ② Auto의 실효 창은 기본값이 250000이다 — 가드레일이 0.8×창 ≥ force 단계(200000)를 보장하므로, 코어 압축선(200000)은 부드러운 인계선(200000) 바로 위에 놓인다. ③ 기본 상태에서 가장 체감되는 건 수위 3종 세트다: 80k에 위임 알림 / 100k에 읽기 수렴 / 200k에 자동 인계(문서 작성 + 압축) — 설정은 아무것도 필요 없다.
 
@@ -110,23 +110,23 @@ bash <설치-디렉터리>/skills/db-query/scripts/setup.sh
 자동화 수준(`trimMode`):
 
 - **`off`** — 측정만: 사용량과 캐시 히트 샘플링은 계속 돌아간다; 배너 없음, fold 없음.
-- **`advisory`** — 세션 모델이 스스로 fold 한다: `ctx_trim_fold`와 `ctx_trim_status` 도구와 프로토콜 헤드를 노출. 세션 압력이 실효 윈도의 `trimAdvisoryPercent`에 도달하면 엔진이 한 번만 고정하는 fold 권고를 `user/message` 접미사로 실시간 세션 surface 끝에 추가합니다(디스패치 system 헤드는 수정하지 않음) — critical로 상승하면 즉시 다시 알리고, 압력이 선 아래로 내려가면 prune합니다.
-- **`auto`**(기본값) — 위의 모든 것에 더해 유휴 경계에서 자동 fold가 세 단계로 동작한다: 성장 게이트(지난 접기 후 저점부터 측정한 성장 > `trimGrowthTokens` — 높은 지점에서 접은 후에도 게이트가 계속 작동하도록 유지하는 앵커 — + 연속 압축 가능 증분이 `trimIncrementTokens` 이상), 압력 단계(컨텍스트 창의 `trimPressurePercent`), 비상 단계(`trimEmergencyPercent` — 독립 쿨다운을 가진 기계 fold).
+- **`advisory`**(기본값) — 세션 모델이 스스로 fold 한다: `ctx_trim_fold`와 `ctx_trim_status` 도구와 프로토콜 헤드를 노출. 세션 압력이 실효 윈도의 `trimAdvisoryPercent`에 도달하면 엔진이 한 번만 고정하는 fold 권고를 `user/message` 접미사로 실시간 세션 surface 끝에 추가합니다(디스패치 system 헤드는 수정하지 않음) — critical로 상승하면 즉시 다시 알리고, 압력이 선 아래로 내려가면 prune합니다. 압력이 임계선에 닿으면 엔진이 직접 기계 구제 fold를 한 번 실행합니다(90초 쿨다운, `trimCriticalRelief` = 켬).
+- **`auto`** — 위의 모든 것에 더해 유휴 경계에서 자동 fold가 세 단계로 동작한다: 성장 게이트(지난 접기 후 저점부터 측정한 성장 > `trimGrowthTokens` — 높은 지점에서 접은 후에도 게이트가 계속 작동하도록 유지하는 앵커 — + 연속 압축 가능 증분이 `trimIncrementTokens` 이상), 압력 단계(컨텍스트 창의 `trimPressurePercent`), 비상 단계(`trimEmergencyPercent` — 독립 쿨다운을 가진 기계 fold).
 
 모든 키는 설정 → dsh-switchman에 있고, 기본값은 `host/config.js` 기준이다:
 
 | 키 | 기본값 | 의미 |
 | --- | --- | --- |
 | `trimEnabled` | `true` | 마스터 스위치. 끄면 fold와 메트릭이 완전히 정지한다(리스너는 순수 패스스루로 퇴화). |
-| `trimMode` | `auto` | `off` 측정만 / `advisory` 모델 주도 fold / `auto` 시스템 주도 fold. |
+| `trimMode` | `advisory` | `off` 측정만 / `advisory` 모델 주도 fold / `auto` 시스템 주도 fold. |
 | `trimGrowthTokens` | `22500` | 성장 게이트: 지난 fold 이후 아웃바운드 view가 이만큼 자라면 fold. |
 | `trimIncrementTokens` | `45000` | 게이트 동반 조건: 연속 압축 가능 증분도 이 규모에 달해야 한다. |
-| `trimPressurePercent` | `65` | 압력 단계: view 사용량이 컨텍스트 창의 이 백분율에 달하면 fold. |
-| `trimEmergencyPercent` | `95` | 비상 단계: 이 백분율에서 기계 fold 강제(사이드 모델 호출 없음). |
-| `trimAdvisoryPercent` | `65` | advisory 알림 선: 압력이 실효 윈도의 이 백분율에 도달하면 모델에게 `ctx_trim_fold`로 즉시 fold할 것을 권고(advisory 모드 전용). |
-| `trimAdvisoryCriticalPercent` | `95` | critical 알림 선: 도달 시 10분 동일 밴드 스로틀을 우회해 즉시 재알림. |
+| `trimPressurePercent` | `45` | 압력 단계: view 사용량이 컨텍스트 창의 이 백분율에 달하면 fold. |
+| `trimEmergencyPercent` | `90` | 비상 단계: 이 백분율에서 기계 fold 강제(사이드 모델 호출 없음). |
+| `trimAdvisoryPercent` | `50` | advisory 알림 선: 압력이 실효 윈도의 이 백분율에 도달하면 모델에게 `ctx_trim_fold`로 즉시 fold할 것을 권고(advisory 모드 전용). |
+| `trimAdvisoryCriticalPercent` | `80` | critical 알림 선: 도달 시 10분 동일 밴드 스로틀을 우회해 즉시 재알림. |
 | `trimWindowTokens` | `0` | 티어 계산의 유효 윈도우 상한: min(모델 윈도우, 상한)으로 계산. `0` = `wmForceTokens`를 따름. |
-| `trimProtectedTail` | `10` | 마지막 N개 메시지는 절대 fold되지 않는다. |
+| `trimProtectedTail` | `6` | 마지막 N개 메시지는 절대 fold되지 않는다. |
 | `trimMaxFoldsPerHour` | `30` | 롤링 1시간당 사이드 모델 fold 케이던스 상한(비상 단계는 제외). |
 | `trimSideModel` | 미설정 | 요약 side model 라우트. 비어 있으면 세션 provider/model을 따르며 호출의 effort는 상속하지 않음. ladder distillation도 이 라우트를 사용. 요약 effort는 별도로 수동 고정할 수 있으며, 고정하지 않으면 모델 메타데이터에서 사용 가능한 reasoning 단계 중 가장 낮은 단계를 선택. 켜기/끄기만 지원하는 모델은 off. reasoning 미지원 또는 메타데이터 없음이면 effort를 보내지 않아 모델/어댑터 기본 동작을 따름. |
 | `trimFoldFallbackModel` | 미설정 | 요약 side model 실패 시 폴드가 재시도하는 라우트. 프레셔 단계에서도 실패하면 기계 폴드로 강등. 비어 있으면 폴백 없음. 수동으로 선택한 폴드 폴백 모델의 effort는 독립적으로 고정할 수 있으며, 미설정 시 요약 모델과 동일한 메타데이터 추천을 따르고 메타데이터가 없으면 해당 모델 기본값을 사용. 쿨다운·리스크 컨트롤·동시 실행에 여유가 있는 라우트 권장. |
