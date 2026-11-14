@@ -131,7 +131,7 @@ export const Config = z.object({
 
 	// --- Phase 3: context watermark control --------------------------------
 	/** Soft watermark: advisory banner + delegation nudge (tokens). */
-	wmSoftTokens: z.number().min(1000).default(80000).volatile(),
+	wmSoftTokens: z.number().min(1000).max(10000000).default(80000).volatile(),
 	/** Hard watermark: read budget tightens, wrap-up advised (tokens). 95k
 	 *  sits just under the trim pressure line (65% of the 150k window ≈
 	 *  97.5k): past
@@ -140,14 +140,14 @@ export const Config = z.object({
 	 *  PULSES (one large file read = tens of thousands of tokens injected
 	 *  at once, faster than any fold can commit), and the read budget is
 	 *  the only preventive valve on the pulse source. */
-	wmHardTokens: z.number().min(2000).default(95000).volatile(),
+	wmHardTokens: z.number().min(2000).max(10000000).default(95000).volatile(),
 	/** Force watermark: handover document + compaction (tokens). */
-	wmForceTokens: z.number().min(3000).default(150000).volatile(),
+	wmForceTokens: z.number().min(3000).max(10000000).default(150000).volatile(),
 	/** Per-TURN read budget (inspection C16 — the name predates the turn
 	 *  accounting): read/glob/grep/bash results accumulate against it within
 	 *  one turn; the account resets after 15 idle minutes and the pre/post
 	 *  gates act at 2.4× this value (CEILING_MULTIPLE in context-watch.js). */
-	wmReadBudgetTokens: z.number().min(200).default(3000).volatile(),
+	wmReadBudgetTokens: z.number().min(200).max(10000000).default(3000).volatile(),
 	/** Hard-tier behavior: cap reads and advise, or deny outright. */
 	wmDenyMode: z.union(["cap", "deny"]).default("cap").volatile(),
 	/** Force tier triggers the handover (document + compaction) automatically. */
@@ -155,7 +155,7 @@ export const Config = z.object({
 	/** Cap subagent contexts at wmSubagentForceTokens. */
 	wmSubagentCap: z.boolean().default(true).volatile(),
 	/** Subagent hard cap; 0 = share wmForceTokens. */
-	wmSubagentForceTokens: z.number().min(0).default(0).volatile(),
+	wmSubagentForceTokens: z.number().min(0).max(10000000).default(0).volatile(),
 	/** Scale subagent watermark tiers to the subagent's own model window:
 	 * force = min(static force [or wmSubagentForceTokens], window × ratio);
 	 * soft/hard shrink by the same factor to preserve tier spacing. The ratio
@@ -333,8 +333,11 @@ export const Config = z.object({
 	/** Ladder T3 companion floor: a T3 condensation merges at least this
 	 *  many active T2 blocks. */
 	trimLadderT3MinBlocks: z.number().min(2).max(200).default(2).volatile(),
-	/** Explicit ledger state directory. Empty = <dshHome>/.dsh-switchman/
-	 *  state/trim/. */
+	/** Explicit ledger state directory (absolute, or relative inside the
+	 *  plugin root). Must stay under <dshHome>/.dsh-switchman/state/trim/
+	 *  (or the OS temp root, for throwaway test state); anything else is
+	 *  refused and the default root is used. Empty =
+	 *  <dshHome>/.dsh-switchman/state/trim/. */
 	trimStateDir: z.string().default("").volatile(),
 	/** Ship committed folds onto the session surface: append the host-style
 	 *  shadow-price + surfaceOp replace event pair so folds reach the wire

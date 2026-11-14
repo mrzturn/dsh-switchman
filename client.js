@@ -190,15 +190,16 @@ window.__ModuleLoader__.load({
 			{ field: 'poolReview', manualField: 'poolReviewManual', effortsField: 'poolReviewEfforts', lane: 'review' },
 		];
 
-		/** Numeric watermark fields: settings field, schema minimum, and the
-		 * Host-side default (also the fallback for malformed stored values). */
+		/** Numeric watermark fields: settings field, schema bounds, and the
+		 * Host-side default (also the fallback for malformed stored values).
+		 * Bounds MUST mirror host/routes.js WM_BOUNDED_NUMBER_FIELDS. */
 		const WM_NUMBER_FIELDS = [
-			{ field: 'wmSoftTokens', min: 1000, def: 80000 },
-			{ field: 'wmHardTokens', min: 2000, def: 95000 },
-			{ field: 'wmForceTokens', min: 3000, def: 150000 },
-			{ field: 'wmReadBudgetTokens', min: 200, def: 3000 },
-			{ field: 'wmSubagentForceTokens', min: 0, def: 0 },
-			{ field: 'wmSubagentWindowRatio', min: 0.1, def: 0.75 },
+			{ field: 'wmSoftTokens', min: 1000, max: 10000000, def: 80000 },
+			{ field: 'wmHardTokens', min: 2000, max: 10000000, def: 95000 },
+			{ field: 'wmForceTokens', min: 3000, max: 10000000, def: 150000 },
+			{ field: 'wmReadBudgetTokens', min: 200, max: 10000000, def: 3000 },
+			{ field: 'wmSubagentForceTokens', min: 0, max: 10000000, def: 0 },
+			{ field: 'wmSubagentWindowRatio', min: 0.1, max: 1, def: 0.75 },
 		];
 
 		/** The three thresholds that must keep a strict ascending order. */
@@ -903,6 +904,7 @@ window.__ModuleLoader__.load({
 				wmReadBudgetLabel: '单次读取预算',
 				wmReadBudgetHelp: '每次读取的 token 预算；每轮上限为其两倍。',
 				wmNumberInvalid: '请输入不小于 {min} 的整数。',
+				wmNumberInvalidMax: '请输入 {min} 到 {max} 之间的数。',
 				wmOrderInvalid: '三档水位需严格递增：soft < hard < force。',
 				wmDenyModeLabel: '硬档行为',
 				wmDenyModeCap: '限流放行',
@@ -1178,6 +1180,7 @@ window.__ModuleLoader__.load({
 				wmReadBudgetLabel: 'Read budget',
 				wmReadBudgetHelp: 'Token budget per read; each round caps at twice this.',
 				wmNumberInvalid: 'Enter a whole number of {min} or more.',
+				wmNumberInvalidMax: 'Enter a number between {min} and {max}.',
 				wmOrderInvalid: 'The three tiers must strictly ascend: soft < hard < force.',
 				wmDenyModeLabel: 'Hard-tier behavior',
 				wmDenyModeCap: 'Cap and warn',
@@ -1464,6 +1467,7 @@ window.__ModuleLoader__.load({
 				wmReadBudgetLabel: '單次讀取預算',
 				wmReadBudgetHelp: '每次讀取的 token 預算；每輪上限為其兩倍。',
 				wmNumberInvalid: '請輸入不小於 {min} 的整數。',
+				wmNumberInvalidMax: '請輸入 {min} 到 {max} 之間的數。',
 				wmOrderInvalid: '三檔水位需嚴格遞增：soft < hard < force。',
 				wmDenyModeLabel: '硬檔行為',
 				wmDenyModeCap: '限流放行',
@@ -1718,6 +1722,7 @@ window.__ModuleLoader__.load({
 				wmReadBudgetLabel: '読み取り予算',
 				wmReadBudgetHelp: '1 回の読み取りあたりの token 予算です。各ラウンドの上限はその 2 倍です。',
 				wmNumberInvalid: '{min} 以上の整数を入力してください。',
+				wmNumberInvalidMax: '{min} から {max} の間の数値を入力してください。',
 				wmOrderInvalid: '3 段階の水位は厳密に昇順にしてください：soft < hard < force。',
 				wmDenyModeLabel: 'ハード段階の動作',
 				wmDenyModeCap: '制限して警告',
@@ -1960,6 +1965,7 @@ window.__ModuleLoader__.load({
 				wmReadBudgetLabel: '읽기 예산',
 				wmReadBudgetHelp: '한 번 읽기당 토큰 예산입니다. 매 라운드 상한은 그 두 배입니다.',
 				wmNumberInvalid: '{min} 이상의 정수를 입력하세요.',
+				wmNumberInvalidMax: '{min}부터 {max}까지의 숫자를 입력하세요.',
 				wmOrderInvalid: '세 수위는 엄격히 증가해야 합니다: soft < hard < force.',
 				wmDenyModeLabel: '하드 단계 동작',
 				wmDenyModeCap: '제한하고 경고',
@@ -2201,6 +2207,7 @@ window.__ModuleLoader__.load({
 				wmReadBudgetLabel: 'Lese-Budget',
 				wmReadBudgetHelp: 'Token-Budget pro Lesevorgang; jede Runde ist auf das Doppelte gedeckelt.',
 				wmNumberInvalid: 'Geben Sie eine ganze Zahl von mindestens {min} ein.',
+				wmNumberInvalidMax: 'Geben Sie eine Zahl zwischen {min} und {max} ein.',
 				wmOrderInvalid: 'Die drei Stufen müssen strikt aufsteigen: soft < hard < force.',
 				wmDenyModeLabel: 'Verhalten der Hard-Stufe',
 				wmDenyModeCap: 'Deckeln und warnen',
@@ -2445,6 +2452,7 @@ window.__ModuleLoader__.load({
 				wmReadBudgetLabel: 'Presupuesto de lectura',
 				wmReadBudgetHelp: 'Presupuesto de tokens por lectura; cada ronda se limita al doble.',
 				wmNumberInvalid: 'Introduce un número entero de {min} o más.',
+				wmNumberInvalidMax: 'Introduzca un número entre {min} y {max}.',
 				wmOrderInvalid: 'Los tres niveles deben ascender estrictamente: soft < hard < force.',
 				wmDenyModeLabel: 'Comportamiento del nivel duro',
 				wmDenyModeCap: 'Limitar y avisar',
@@ -2690,6 +2698,7 @@ window.__ModuleLoader__.load({
 				wmReadBudgetLabel: 'Budget de lecture',
 				wmReadBudgetHelp: 'Budget de tokens par lecture ; chaque tour plafonne au double.',
 				wmNumberInvalid: 'Saisissez un nombre entier d’au moins {min}.',
+				wmNumberInvalidMax: 'Saisissez un nombre compris entre {min} et {max}.',
 				wmOrderInvalid: 'Les trois paliers doivent strictement monter : soft < hard < force.',
 				wmDenyModeLabel: 'Comportement au palier hard',
 				wmDenyModeCap: 'Plafonner et avertir',
@@ -2935,6 +2944,7 @@ window.__ModuleLoader__.load({
 				wmReadBudgetLabel: 'Budget di lettura',
 				wmReadBudgetHelp: 'Budget di token per lettura; ogni turno arriva al massimo al doppio.',
 				wmNumberInvalid: 'Inserisci un numero intero di almeno {min}.',
+				wmNumberInvalidMax: 'Inserisci un numero compreso tra {min} e {max}.',
 				wmOrderInvalid: 'Le tre soglie devono salire rigorosamente: soft < hard < force.',
 				wmDenyModeLabel: 'Comportamento alla soglia hard',
 				wmDenyModeCap: 'Tetto e avviso',
@@ -3180,6 +3190,7 @@ window.__ModuleLoader__.load({
 				wmReadBudgetLabel: 'Orçamento de leitura',
 				wmReadBudgetHelp: 'Orçamento de tokens por leitura; cada turno se limita ao dobro disso.',
 				wmNumberInvalid: 'Informe um número inteiro de {min} ou mais.',
+				wmNumberInvalidMax: 'Informe um número entre {min} e {max}.',
 				wmOrderInvalid: 'Os três limiares devem subir estritamente: soft < hard < force.',
 				wmDenyModeLabel: 'Comportamento no limiar hard',
 				wmDenyModeCap: 'Limitar e avisar',
@@ -3425,6 +3436,7 @@ window.__ModuleLoader__.load({
 				wmReadBudgetLabel: 'Бюджет чтения',
 				wmReadBudgetHelp: 'Бюджет токенов на одно чтение; каждый ход ограничен удвоенным значением.',
 				wmNumberInvalid: 'Введите целое число не меньше {min}.',
+				wmNumberInvalidMax: 'Введите число от {min} до {max}.',
 				wmOrderInvalid: 'Три линии должны строго возрастать: soft < hard < force.',
 				wmDenyModeLabel: 'Поведение на линии hard',
 				wmDenyModeCap: 'Урезать и предупредить',
@@ -5269,7 +5281,7 @@ window.__ModuleLoader__.load({
 				(values.langConversation !== '' &&
 					!isCandidate(values.langConversation));
 			/** Per-field numeric validity: raw text (when present) must be a
-			 * whole number at or above the schema minimum. The trim and intent rows
+			 * plain number within the schema bounds. The trim and intent rows
 			 * share the same raw-text overlay and save gate. */
 			const numberInvalid = Object.fromEntries(
 								[
@@ -5282,7 +5294,7 @@ window.__ModuleLoader__.load({
 						return [
 							field,
 							raw !== undefined &&
-								(!/^\d+$/.test(raw.trim()) ||
+								(!/^\d+(?:\.\d+)?$/.test(raw.trim()) ||
 									Number(raw.trim()) < min ||
 									Number(raw.trim()) > (max ?? Infinity)),
 						];
@@ -5317,12 +5329,13 @@ window.__ModuleLoader__.load({
 				setFailed(false);
 			}
 
-			/** Number-input onChange: stage the raw text, commit only whole
-			 * numbers (the draft always holds parseable values). */
+			/** Number-input onChange: stage the raw text, commit only plain
+			 * numbers (integers or decimal fractions — the draft always holds
+			 * parseable values). */
 			function editNumber(field, raw) {
 				setNumText((previous) => ({ ...previous, [field]: raw }));
 				const trimmed = raw.trim();
-				if (/^\d+$/.test(trimmed)) edit(field, Number(trimmed));
+				if (/^\d+(?:\.\d+)?$/.test(trimmed)) edit(field, Number(trimmed));
 			}
 
 			/** Number-input onBlur: drop the overlay so the display falls back
@@ -5837,12 +5850,17 @@ window.__ModuleLoader__.load({
 				});
 			};
 
-			/** Status lines under one number row: minimum + order hints. */
+			/** Shared invalid-number hint: a finite max gets the range text. */
+			const numberInvalidText = (spec) =>
+				spec.max !== undefined && Number.isFinite(spec.max)
+					? t('wmNumberInvalidMax', { min: spec.min, max: spec.max })
+					: t('wmNumberInvalid', { min: spec.min });
+			/** Status lines under one number row: bounds + order hints. */
 			const wmNumberLines = (spec) => {
 				const lines = [];
 				if (numberInvalid[spec.field])
 					lines.push({
-						text: t('wmNumberInvalid', { min: spec.min }),
+						text: numberInvalidText(spec),
 						invalid: true,
 					});
 				if (orderInvalid && WM_ORDER_FIELDS.includes(spec.field))
@@ -5878,10 +5896,10 @@ window.__ModuleLoader__.load({
 				});
 			};
 
-			/** Status lines under one intent number row: minimum hint. */
+			/** Status lines under one intent number row: bounds hint. */
 			const intentNumberLines = (spec) =>
 				numberInvalid[spec.field]
-					? [{ text: t('wmNumberInvalid', { min: spec.min }), invalid: true }]
+					? [{ text: numberInvalidText(spec), invalid: true }]
 					: [];
 			/** One trim number input: the watermark rows' raw-text overlay
 			 * pattern under the trim section id (invalid text shows the
@@ -5910,10 +5928,10 @@ window.__ModuleLoader__.load({
 				});
 			};
 
-			/** Status lines under one trim number row: minimum hint. */
+			/** Status lines under one trim number row: bounds hint. */
 			const trimNumberLines = (spec) =>
 				numberInvalid[spec.field]
-					? [{ text: t('wmNumberInvalid', { min: spec.min }), invalid: true }]
+					? [{ text: numberInvalidText(spec), invalid: true }]
 					: [];
 
 			/** Intent option sets fed by the DSH model catalog (the same

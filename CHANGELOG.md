@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Settings fence hardened: the socket peer address must be loopback whenever it is present (a forged `Host: 127.0.0.1` from a LAN/remote peer is rejected), and every `POST /config` now requires `application/json` plus the `expected` snapshot (missing → 400), closing the skip-the-optimistic-lock write path.
+- Intent systemone classifier endpoints are restricted to loopback/private-network http(s) URLs, so a settings writer can no longer aim the per-turn conversation excerpt at a public server; every classifier POST is logged with the destination host.
+- `trimStateDir` is confined to the plugin's own state root (`<dshHome>/.dsh-switchman/state/trim/`) or the OS temp root (throwaway test state); any other value is refused and the default root is used.
+- Client-submitted settings numbers use strict coercion (`""`, booleans, `null`, and hex strings are rejected instead of becoming 0/1/16).
+- Watermark token budgets now carry schema bounds (min + a 10,000,000 cap) enforced by the settings fence and mirrored by the client page; the settings page also accepts decimal fractions (the subagent window ratio was previously impossible to enter), and out-of-range hints state both bounds.
+
+- 设置围栏加固：socket 对端地址非 loopback 即拒绝（伪造 `Host: 127.0.0.1` 的局域网/远程请求不再放行）；`POST /config` 一律要求 `application/json` 与 `expected` 快照（缺失返回 400），堵住跳过乐观锁的直写路径。
+- intent systemone 分类器端点仅允许 loopback/内网 http(s) URL，写入设置不再能把逐轮对话摘录发往公网服务器；每次分类器 POST 都记录目标主机。
+- `trimStateDir` 限制在插件自身状态根（`<dshHome>/.dsh-switchman/state/trim/`）或 OS 临时根（临时测试状态）内；其余取值被拒绝并回退默认根。
+- 客户端提交的设置数值改为严格解析（`""`、布尔、`null`、十六进制串直接拒绝，不再变成 0/1/16）。
+- 水位令牌预算写入带上限（schema min + 10,000,000 上限，围栏与设置页同界）；设置页支持小数输入（此前子代理窗口比例无法填写）；越界提示同时显示上下界。
+
+
+### Fixed
+
+- `scripts/dsh-app-source.mjs` now disables the Electron asar shim (`process.noAsar`) under the app's embedded Node, so the validate preset probe can parse the packaged `app.asar` by hand again.
+- 运行在应用内嵌 Node 下时 `scripts/dsh-app-source.mjs` 现会关闭 Electron 的 asar shim（`process.noAsar`），validate 的预设探测得以重新手工解析打包的 `app.asar`。
+
 ## [1.11.6] — 2026-11-14
 
 ### English

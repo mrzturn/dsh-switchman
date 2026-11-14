@@ -31,8 +31,8 @@
  * trimLadderT3Tokens, trimLadderT3MinBlocks.
  */
 
-import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, mkdirSync, realpathSync, renameSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { buildView, estimateTokensOf, injectView, isFoldSummaryMessage, ledgerIsStale, messageTokens, rangeIsSegmentAligned, refOf, refPositions } from "./view.js";
 import { computeFoldableRange, evaluateTrigger, EMERGENCY_COOLDOWN_MS } from "./trigger.js";
 import { LADDER_SYSTEM_PROMPT, mechanicalSummary, renderLadderMaterial, renderMaterial, summarizeWithModel } from "./summarizer.js";
@@ -41,6 +41,30 @@ import { createMetrics, extractUsage, promptTokensOf, wrapStreamForMetrics } fro
 import { forkLinkOf, loadForkLinks, recordForkLink, resolveInheritance, INHERIT_WINDOW_MS } from "./fork.js";
 import { createSurfaceFoldPass } from "./surface.js";
 import { childSessionIdOf } from "../subagent-model.js";
+import { tmpdir } from "node:os";
+import { dshHome } from "../lib/dsh-home.js";
+/** Resolve the configured ledger state dir to an absolute path that
+ *  stays inside the plugin's own state root (<dshHome>/.dsh-switchman/
+ *  state/trim/) or the OS temp root (os.tmpdir(), for throwaway test
+ *  state). The dir is settings-writable, and the ledger writer mkdirSyncs
+ *  and writes JSON there — an arbitrary out-of-root value would aim that
+ *  writer at any directory. Empty/unset keeps the store default; a
+ *  relative value resolves inside the root; anything else is refused
+ *  with a warn and the default root is used. Exported for tests. */
+export function resolveStateDir(raw, warn = () => {}) {
+	const root = resolve(dshHome(), ".dsh-switchman", "state", "trim");
+	if (typeof raw !== "string" || raw.trim() === "") return undefined;
+	const candidate = resolve(root, raw);
+	if (candidate === root || candidate.startsWith(root + "/")) return candidate;
+	// The OS temp root hosts throwaway state (tests mkdtemp under it); it is
+	// per-user and 0700 on macOS/Linux, so it stays inside the threat model.
+	const tmpRoots = [resolve(tmpdir())];
+	try { tmpRoots.push(realpathSync(tmpRoots[0])); } catch { /* first is enough */ }
+	if (tmpRoots.some((t) => candidate === t || candidate.startsWith(t + "/"))) return candidate;
+	warn(`dsh-switchman: trimStateDir refused (must stay under ${root} or the OS temp root): ${raw}`);
+	return undefined;
+}
+
 
 // ---- agent reference helpers --------------------------------------------------
 
@@ -362,7 +386,7 @@ export function applyContextTrim(ctx, config) {
 
 	// Per-process pipeline state (process-wide by design: ledgers persist on
 	// disk per session, metrics/captures live per session in memory).
-	const store = createStore({ stateDir: readString(config, "trimStateDir", null) ?? undefined, warn });
+	const store = createStore({ stateDir: resolveStateDir(readString(config, "trimStateDir", null), warn) ?? undefined, warn });
 
 	// Surface-replace pass (docs/surface-fold.md): ships committed fold blocks
 	// onto the session surface so folds reach the wire even for frozen

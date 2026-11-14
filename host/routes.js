@@ -88,22 +88,24 @@ const POOL_FIELDS = [
 	"poolVision",
 	"poolReview",
 ];
-const NUMBER_FIELDS = [
-	"wmSoftTokens",
-	"wmHardTokens",
-	"wmForceTokens",
-	"wmReadBudgetTokens",
-	"wmSubagentForceTokens",
-];
 /** Watermark numbers with REAL bounds (host/config.js schema): rejected (not
- *  clamped) on write, defaulted on read — NUMBER_FIELDS only rejects negatives,
- *  which would let a 0 ratio silently disable subagent tier scaling. */
+ *  clamped) on write, defaulted on read — a negative-only check would let a 0
+ *  ratio silently disable subagent tier scaling, and let an astronomic token
+ *  budget (a fat-fingered or hostile write) wedge the tier math. The token cap
+ *  is 10,000,000: every real model window is orders of magnitude smaller. This
+ *  group MUST mirror the client page's WM_NUMBER_FIELDS: a field coerced here
+ *  but never sent by the client fails every fenced write (and vice versa). */
 const WM_BOUNDED_NUMBER_FIELDS = [
+	{ field: "wmSoftTokens", min: 1000, max: 10000000, def: 80000 },
+	{ field: "wmHardTokens", min: 2000, max: 10000000, def: 95000 },
+	{ field: "wmForceTokens", min: 3000, max: 10000000, def: 150000 },
+	{ field: "wmReadBudgetTokens", min: 200, max: 10000000, def: 3000 },
+	{ field: "wmSubagentForceTokens", min: 0, max: 10000000, def: 0 },
 	{ field: "wmSubagentWindowRatio", min: 0.1, max: 1, def: 0.75 },
 ];
-/** Trim numbers carry their own schema bounds (host/config.js), so the
- *  shared NUMBER_FIELDS coercion (which only rejects negatives) is too
- *  loose — these validate against each field's declared min/max. This group
+/** Trim numbers carry their own schema bounds (host/config.js), so a
+ *  negative-only coercion is too loose — these validate against each
+ *  field's declared min/max. This group
  *  MUST mirror the client page's TRIM_NUMBER_FIELDS: a field coerced here
  *  but never sent by the client fails every fenced write (and vice versa). */
 const TRIM_NUMBER_FIELDS = [
@@ -142,9 +144,9 @@ const BOOLEAN_FIELDS = [
 	"trimProtectTaskIntent",
 	"surfaceFold",
 ];
-/** Intent numbers carry their own schema bounds (config.js), so the shared
- *  NUMBER_FIELDS coercion (which only rejects negatives) is too loose — these
- *  validate against each field's declared min/max. */
+/** Intent numbers carry their own schema bounds (config.js), so a
+ *  negative-only coercion is too loose — these validate against each
+ *  field's declared min/max. */
 const INTENT_NUMBER_FIELDS = [
 	{ field: "intentCacheTtlSeconds", min: 0, max: Number.POSITIVE_INFINITY, def: 300 },
 	{ field: "intentSwitchConfidence", min: 0, max: 100, def: 80 },
@@ -225,6 +227,28 @@ function isLoopbackHostname(hostname) {
 	return parts.length === 4 && parts.every((p) => /^\d+$/u.test(p)) && parts[0] === "127";
 }
 
+/** Whether the socket peer address is loopback. Absent (non-TCP transport,
+ *  e.g. a unix-socket/IPC listener) passes — the Host/Origin header fence
+ *  still applies. A PRESENT address must be loopback so a LAN or remote
+ *  TCP peer can never ride a forged Host header through the fence. */
+function isLoopbackRemoteAddress(request) {
+	const raw = request.socket?.remoteAddress ?? request.connection?.remoteAddress;
+	if (raw === undefined || raw === null || raw === "") return true;
+	const host = raw.startsWith("::ffff:") ? raw.slice(7) : raw;
+	if (host === "::1") return true;
+	const parts = host.split(".");
+	return parts.length === 4 && parts.every((p) => /^\d{1,3}$/u.test(p)) && parts[0] === "127";
+}
+
+/** Whether a state-changing request declares a JSON body. Same-origin
+ *  fetches always do (client.js sets content-type on every POST); simple
+ *  cross-origin form posts cannot — belt-and-braces under the
+ *  Host/socket fence. */
+function isJsonContentType(request) {
+	const header = request.headers["content-type"];
+	return typeof header === "string" && header.trim().toLowerCase().startsWith("application/json");
+}
+
 /** Whether this request comes from this machine's own browser page. */
 function isLoopbackRequest(request) {
 	const host = request.headers?.host;
@@ -236,6 +260,7 @@ function isLoopbackRequest(request) {
 		return false;
 	}
 	if (!isLoopbackHostname(hostUrl.hostname)) return false;
+	if (!isLoopbackRemoteAddress(request)) return false;
 	if (request.headers["sec-fetch-site"] === "cross-site") return false;
 	const origin = request.headers.origin;
 	if (origin === undefined) return true;
@@ -389,10 +414,6 @@ export function snapshotOf(config) {
 		const raw = Number(rawOf(config?.[field]));
 		values[field] = Number.isFinite(raw) ? raw : def;
 	}
-	for (const field of NUMBER_FIELDS) {
-		const raw = Number(rawOf(config?.[field]));
-		values[field] = Number.isFinite(raw) ? raw : 0;
-	}
 	for (const { field, def } of WM_BOUNDED_NUMBER_FIELDS) {
 		const raw = Number(rawOf(config?.[field]));
 		values[field] = Number.isFinite(raw) ? raw : def;
@@ -416,6 +437,20 @@ function whitelistSyncOf(config) {
 /** Coerce and validate a client-submitted values object; null when invalid. */
 /** Validate+normalize an incoming settings payload; exported so the
  *  smoke suite can exercise the PUT-fence round-trip invariant. */
+/** Strict numeric coercion for client-submitted settings. Only finite
+ *  JSON numbers and plain decimal strings coerce; "", booleans, null,
+ *  and hex/other-radix strings become NaN (rejected by the callers'
+ *  Number.isFinite check) instead of silently becoming 0/1/16. */
+function strictNumberOf(value) {
+	if (typeof value === "number") return Number.isFinite(value) ? value : Number.NaN;
+	if (typeof value === "string") {
+		const trimmed = value.trim();
+		if (trimmed === "" || /^[+-]?0[xXbBoO]/u.test(trimmed) || !/^[+-]?\d+(\.\d+)?$/u.test(trimmed)) return Number.NaN;
+		return Number(trimmed);
+	}
+	return Number.NaN;
+}
+
 export function coerceValues(input) {
 	if (input === null || typeof input !== "object" || Array.isArray(input)) return null;
 	const values = {};
@@ -458,7 +493,7 @@ export function coerceValues(input) {
 	if (!ENUM_FIELDS.intentClassifierKind.includes(input.intentClassifierKind)) return null;
 	values.intentClassifierKind = input.intentClassifierKind;
 	for (const { field, min, max } of INTENT_NUMBER_FIELDS) {
-		const raw = Number(input[field]);
+		const raw = strictNumberOf(input[field]);
 		if (!Number.isFinite(raw) || raw < min || raw > max) return null;
 		values[field] = raw;
 	}
@@ -475,17 +510,12 @@ export function coerceValues(input) {
 		values[field] = input[field];
 	}
 	for (const { field, min, max } of TRIM_NUMBER_FIELDS) {
-		const raw = Number(input[field]);
+		const raw = strictNumberOf(input[field]);
 		if (!Number.isFinite(raw) || raw < min || raw > max) return null;
 		values[field] = raw;
 	}
-	for (const field of NUMBER_FIELDS) {
-		const raw = Number(input[field]);
-		if (!Number.isFinite(raw) || raw < 0) return null;
-		values[field] = raw;
-	}
 	for (const { field, min, max } of WM_BOUNDED_NUMBER_FIELDS) {
-		const raw = Number(input[field]);
+		const raw = strictNumberOf(input[field]);
 		if (!Number.isFinite(raw) || raw < min || raw > max) return null;
 		values[field] = raw;
 	}
@@ -594,6 +624,10 @@ export function makeRoutes(ctx, config) {
 					writeJson(res, 405, { error: `method not allowed: ${req.method}` });
 					return;
 				}
+					if (!isJsonContentType(req)) {
+						writeJson(res, 415, { error: "unsupported media type: content-type must be application/json" });
+						return;
+					}
 				let body;
 				try {
 					body = await readJsonBody(req);
@@ -609,6 +643,10 @@ export function makeRoutes(ctx, config) {
 				// Optimistic-concurrency fence: when the client submits the
 				// snapshot it loaded (`expected`), require it to still match.
 				const current = snapshotOf(config);
+				if (body?.expected === undefined || body?.expected === null) {
+					writeJson(res, 400, { error: "missing expected snapshot: the optimistic-concurrency fence is required — send the values snapshot you loaded" });
+					return;
+				}
 				if (body.expected !== undefined) {
 					const expected = coerceValues(body.expected);
 					// Compare candidate rows through the idempotent merge on
@@ -732,6 +770,10 @@ export function makeRoutes(ctx, config) {
 			path: ROUTES.intentReset,
 			handler: async (req, res) => {
 				if (!guard(req, res, "POST")) return;
+					if (!isJsonContentType(req)) {
+						writeJson(res, 415, { error: "unsupported media type: content-type must be application/json" });
+						return;
+					}
 				let body;
 				try {
 					body = await readJsonBody(req);
@@ -753,6 +795,10 @@ export function makeRoutes(ctx, config) {
 			path: ROUTES.uiLocale,
 			handler: async (req, res) => {
 				if (!guard(req, res, "POST")) return;
+					if (!isJsonContentType(req)) {
+						writeJson(res, 415, { error: "unsupported media type: content-type must be application/json" });
+						return;
+					}
 				let body;
 				try {
 					body = await readJsonBody(req);

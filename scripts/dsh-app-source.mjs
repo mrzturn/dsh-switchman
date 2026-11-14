@@ -13,6 +13,11 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync } from "node:fs";
 import { homedir } from "node:os";
 
+// The asar readers below walk archive bytes directly; neutralize Electron's
+// asar-patched fs (when this runs under an Electron binary) so the archive
+// file itself can be opened raw.
+process.noAsar = true;
+
 export const APP_ROOT = process.env.DSH_APP_ROOT ?? "/Applications/DeepSeek Harness.app/Contents/Resources/app";
 
 /** Read one file out of an asar archive (plain header walk, no dependency). */

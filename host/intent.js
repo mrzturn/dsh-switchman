@@ -553,6 +553,38 @@ async function classifyOnce(ctx, config, route, system, input, turnSignal) {
 	}
 }
 
+/** Whether a classifier endpoint URL may receive conversation excerpts.
+ *  The systemone channel is meant for a LOCAL/LAN decision endpoint
+ *  (ollama); an arbitrary URL would turn the setting into an
+ *  exfiltration channel — any settings writer could aim the per-turn
+ *  excerpt (recent conversation text) at a public server. Allowed:
+ *  http/https URLs whose host is loopback (localhost, 127/8, ::1) or
+ *  private-network (RFC1918 10/8, 172.16/12, 192.168/16, link-local
+ *  169.254/16, fe80::/10, unique-local fc00::/7). Everything else is
+ *  rejected before any byte leaves the process; the classifier then
+ *  fails open to the fallback chain. Exported for tests. */
+export function isAllowedClassifierEndpoint(endpoint) {
+	if (typeof endpoint !== "string") return false;
+	let url;
+	try {
+		url = new URL(endpoint.trim());
+	} catch {
+		return false;
+	}
+	if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+	const host = url.hostname.toLowerCase().replace(/^\[|\]$/gu, "");
+	if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return true;
+	const parts = host.split(".");
+	if (parts.length === 4 && parts.every((p) => /^\d{1,3}$/u.test(p))) {
+		const octets = parts.map(Number);
+		if (octets.some((n) => n > 255)) return false;
+		const [a, b] = octets;
+		return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+	}
+	// IPv6 (brackets stripped): loopback, link-local fe80::/10, unique-local fc00::/7.
+	return host === "::1" || host.startsWith("fe80:") || /^[fF][cCdD][0-9a-fA-F]{2}:/.test(host);
+}
+
 /**
  * Classify via an ollama /v1/systemone decision endpoint (direct HTTP —
  * no llm-service provider registration needed; the model name comes from
@@ -567,6 +599,8 @@ async function classifyOnce(ctx, config, route, system, input, turnSignal) {
 export async function classifySystemone(ctx, config, candidates, current, excerpt, turnSignal) {
 	const endpoint = readField(config.intentClassifierEndpoint).trim();
 	if (endpoint === "") throw new Error("systemone endpoint unset (intentClassifierEndpoint)");
+	if (!isAllowedClassifierEndpoint(endpoint))
+		throw new Error(`systemone endpoint refused (loopback/private URLs only): ${endpoint}`);
 	const model = readField(config.intentClassifierSystemoneModel).trim();
 	if (model === "") throw new Error("systemone model unset (intentClassifierSystemoneModel)");
 	if (candidates.length === 0) throw new Error("no candidates");
@@ -603,6 +637,9 @@ export async function classifySystemone(ctx, config, candidates, current, excerp
 	const signal = turnSignal instanceof AbortSignal ? AbortSignal.any([controller.signal, turnSignal]) : controller.signal;
 	try {
 		signal.throwIfAborted();
+		// Auditable egress record: the classifier ships a conversation excerpt
+		// off-process — every send is logged with the destination host.
+		ctx?.logger?.info?.(`dsh-switchman: intent systemone classifier POST ${new URL(endpoint).host} (excerpt ~${excerpt.length} chars)`);
 		const response = await fetch(endpoint, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
@@ -774,7 +811,7 @@ export async function intentStateOf(ctx, config, sessionId = null) {
 		// catalog route must not mark the feature unconfigured.
 		configured:
 			(kind === "systemone"
-				? readField(config.intentClassifierEndpoint).trim() !== "" &&
+				? isAllowedClassifierEndpoint(readField(config.intentClassifierEndpoint).trim()) &&
 					readField(config.intentClassifierSystemoneModel).trim() !== ""
 				: classifier !== null) &&
 			candidates.length > 0,
