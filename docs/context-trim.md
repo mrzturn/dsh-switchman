@@ -274,20 +274,27 @@ same-turn `ctx_trim_fold`. Rules:
   (`ADVISORY_NUDGE_REPEAT_MS`, `index.js:286`); any band change re-speaks
   immediately, including escalation to critical (`trimAdvisoryCriticalPercent`,
   default `95`) and a downgrade to high after a partial fold.
-- When pressure falls below the line, a tail sweep prunes every live nudge it
+- When pressure falls below the line, a tail sweep retires every live nudge it
 can see — the recorded seq joined with a bounded last-50-node scan, so
 restarts and registry evictions cannot leave a stale nudge behind — logs one
 `below-line` row, and the next crossing starts a fresh episode.
 - Delivery requires a usable session surface and no open compaction lock. An
   unavailable surface logs `skip why=surface-unavailable`.
-- Before replacing a nudge, the engine prunes its prior surface node; prunes
-touch only seqs still live on the surface (one point-sized `compaction/prune`
-event each), so a prior a fold already consumed is a no-op. Each speak
-carries a unique `trim_nudge_*` id. After a restart, it scans up to the last
-50 model-visible surface nodes for an orphaned nudge, prunes it, logs
-`advisory-nudge orphan-pruned seqs=…`, and speaks once with the current
-pressure and band. Failed prune or append operations log `skip why=prune-failed`
-or `skip why=append-failed` and can retry on a later dispatch.
+- Before replacing a nudge, the engine retires its prior surface node; retirement
+touches only seqs still live on the surface, so a prior a fold already consumed
+is a no-op. Retirement follows the host shadow-price protocol: each seq gets a
+point-sized `compaction/prune` metering event paired with an adjacent
+`user/message` replacement (`surfaceOp: {op:"replace", startSeq, endSeq}` +
+`sourceEventSeqs`) whose stub id (`trim_retired_nudge_*`) and text
+intentionally miss both live-nudge signatures — the replacement, not the bare
+prune, is what removes the node from `surface.nodes` (a bare prune never moves
+the live surface, which once re-pruned the same nudge on every step boundary,
+2026-11-14). Each speak carries a unique `trim_nudge_*` id. After a restart, it
+scans up to the last 50 model-visible surface nodes for an orphaned nudge,
+retires it, logs `advisory-nudge orphan-pruned seqs=…`, and speaks once with
+the current pressure and band. Failed prune or append operations log
+`skip why=prune-failed` or `skip why=append-failed` and can retry on a later
+dispatch.
 - `off` and `auto` modes never nudge. The lines are config fields
   (`config.js:273-277`); an inverted or out-of-range pair falls back to 65/95
   instead of silencing the nudge (`advisoryNudgeLines`, `index.js:291`).
