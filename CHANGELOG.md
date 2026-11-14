@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The per-dispatch `view-applied` decision row now carries the engine module's build stamp (`b=<mtime ms>`), so a host process still running a pre-reload copy of the trim engine is identifiable in the log without after-the-fact reconciliation (2026-11-15: a stale module kept nudging at 81–125 % for two hours while the new relief code sat uninstalled on disk).
+- Advisory critical relief gates are audible: when a session sits at the critical line and the relief gate holds it back (cooldown / cycle in flight / no capture / relief disabled), one throttled `advisory-relief skip why=…` row per minute names the gate instead of staying silent.
+- 逐派发的 `view-applied` 决策行现附带引擎模块构建戳（`b=<mtime 毫秒>`）：宿主进程仍在运行重载前的旧引擎副本时，日志一眼可见，无需事后对账（2026-11-15 实况：旧模块在 81–125% 连续 nudge 两小时，而新 relief 代码静静躺在磁盘上）。
+- Advisory 临界救援闸门可听化：会话到达临界线而闸门拦下救援（冷却中 / 周期在飞 / 无 capture / 开关关闭）时，每分钟一条限流的 `advisory-relief skip why=…` 行指名具体闸门，不再静默。
 - `scripts/dsh-app-source.mjs` now disables the Electron asar shim (`process.noAsar`) under the app's embedded Node, so the validate preset probe can parse the packaged `app.asar` by hand again.
 - 运行在应用内嵌 Node 下时 `scripts/dsh-app-source.mjs` 现会关闭 Electron 的 asar shim（`process.noAsar`），validate 的预设探测得以重新手工解析打包的 `app.asar`。
 - The whitelist replace-sync now includes `modelRank` in the union (the dispatch fallback route is registered only there, and enforce mode denies routes outside "pools or modelRank"); when the DSH installation does not offer the agent-team bundle at all, the enable records a terminal `not-offered` state instead of retrying forever.

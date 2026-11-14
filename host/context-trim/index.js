@@ -43,6 +43,22 @@ import { createSurfaceFoldPass } from "./surface.js";
 import { childSessionIdOf } from "../subagent-model.js";
 import { tmpdir } from "node:os";
 import { dshHome } from "../lib/dsh-home.js";
+import { fileURLToPath } from "node:url";
+
+// Module build stamp ([2026-11-15]-[stale-module observability]): the
+// per-dispatch view-applied row carries it, so a host process still
+// running a pre-reload copy of this engine is identifiable in
+// decisions.log without after-the-fact reconciliation. Fail-open: 0
+// omits the field (2026-11-15 incident: a stale module nudged at
+// 81-125% for two hours while the relief code sat uninstalled on disk —
+// nothing in the log distinguished the running copy from the repo one).
+const MODULE_BUILD_STAMP = (() => {
+	try {
+		return Math.round(statSync(fileURLToPath(import.meta.url)).mtimeMs);
+	} catch {
+		return 0;
+	}
+})();
 /** Resolve the configured ledger state dir to an absolute path that
  *  stays inside the plugin's own state root (<dshHome>/.dsh-switchman/
  *  state/trim/) or the OS temp root (os.tmpdir(), for throwaway test
@@ -577,6 +593,21 @@ export function applyContextTrim(ctx, config) {
 					if (inFlight.get(sessionId) === cycleToken) inFlight.delete(sessionId);
 				}
 			})();
+		} else if (critical) {
+			// Audible silence ([2026-11-15]-[relief skip diagnostics]): the turn-25
+			// incident hid here — a session sat at 81-125% critical while the gate
+			// held, and the only trace was a two-hour view-applied reconciliation.
+			// One throttled row per minute names the exact gate that held the
+			// relief back (cooldown / cycle in flight / no capture / disabled).
+			if (now - (reliefSkipLogAt.get(sessionId) ?? 0) >= 60_000) {
+				reliefSkipLogAt.set(sessionId, now);
+				if (reliefSkipLogAt.size > 200) reliefSkipLogAt.delete(reliefSkipLogAt.keys().next().value);
+				const why = !reliefEnabledNow() ? "relief-disabled"
+					: inFlight.has(sessionId) ? "cycle-in-flight"
+					: !captures.has(sessionId) ? "no-capture"
+					: "cooldown";
+				decisionLog(`session=${sessionId} advisory-relief skip why=${why} pressure=${Math.round(pressurePercent)}%`);
+			}
 		}
 		// Any band CHANGE re-speaks immediately: escalation high->critical, and
 		// intentionally also a downgrade back into high after a partial fold.
@@ -641,6 +672,7 @@ export function applyContextTrim(ctx, config) {
 	// commit cools the relief like a success, or a failing range retries at
 	// every dispatch forever). Bounded 200 like the sibling registries.
 	const reliefBySession = new Map();
+	const reliefSkipLogAt = new Map(); // sessionId -> epoch ms of the last relief-skip diagnostic row (60 s throttle, bounded 200)
 	const lastStreamCheckAt = new Map(); // sessionId -> epoch ms of last stream-path fold check (throttle)
 	const epochResetDoneBySession = new Map(); // sessionId -> ledger-stale baseline reset already done for this host epoch (cleared when a fold applies again)
 
@@ -941,7 +973,7 @@ export function applyContextTrim(ctx, config) {
 		// Per-request application evidence: whether the ledger's blocks actually
 		// locate inside THIS re-send (the host may compact/replace history, in
 		// which case applied=0 explains a stuck-high view without any failure).
-		decisionLog(`session=${sessionId} view-applied applied=${view.applied} foldedMsgs=${view.foldedMessages} view=${Math.round(viewTokens)} blocks=${blocksCount} injected=${injected}${wireTokens === null ? "" : ` wire=${wireTokens}`}`);
+		decisionLog(`session=${sessionId} view-applied applied=${view.applied} foldedMsgs=${view.foldedMessages} view=${Math.round(viewTokens)} blocks=${blocksCount} injected=${injected}${wireTokens === null ? "" : ` wire=${wireTokens}`}${MODULE_BUILD_STAMP > 0 ? ` b=${MODULE_BUILD_STAMP}` : ""}`);
 		// Side-dispatch guard: auxiliary llm calls that inherit the session id
 		// (web-search summaries, title generation, fold-span material) present
 		// tiny arrays in which the ledger cannot locate. Accepting them as the

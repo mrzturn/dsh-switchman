@@ -1676,9 +1676,10 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 			await dispatch(listener, sid, 85_000); // relief folds here
 			await pollUntil(() => handle.store.ledgerOf(sid).blocks.length === 1);
 			await dispatch(listener, sid, 86_000); // still critical, but cooling
-			await new Promise((resolve) => setImmediate(() => setImmediate(resolve))); // cooldown gate logs no row
+			await new Promise((resolve) => setImmediate(() => setImmediate(resolve))); // cooldown logs the throttled skip row
 			assert.equal(handle.store.ledgerOf(sid).blocks.length, 1, "no second fold inside the cooldown");
 			assert.equal(reliefRows(cfg).filter((line) => line.includes("outcome=folded:")).length, 1);
+			assert.equal(reliefRows(cfg).filter((line) => line.includes("skip why=cooldown")).length, 1, "the cooldown is audible");
 		} finally {
 			rmSync(cfg.trimStateDir, { recursive: true, force: true });
 		}
@@ -1698,7 +1699,8 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 			await new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
 			assert.match(liveNudgeTexts(session).join("\n"), /CRITICAL/u, "the nudge still speaks");
 			assert.equal(handle.store.ledgerOf(sid).blocks.length, 0, "no engine fold");
-			assert.equal(reliefRows(cfg).length, 0, "no relief rows at all");
+			assert.equal(reliefRows(cfg).filter((line) => line.includes("outcome=")).length, 0, "no relief outcome rows");
+			assert.equal(reliefRows(cfg).filter((line) => line.includes("skip why=relief-disabled")).length, 1, "the disabled relief is audible");
 		} finally {
 			rmSync(cfg.trimStateDir, { recursive: true, force: true });
 		}
