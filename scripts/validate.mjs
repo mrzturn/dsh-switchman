@@ -437,22 +437,22 @@ if (!SKIP_HOST_CHECK) console.log(`doctrine suffix length: ${suffixes[0].length}
 const intent = await import(new URL("../host/intent.js", import.meta.url));
 
 // effectiveContextWindow: the 0.8 handover floor, its opt-out, defaults, clamp.
-assert.equal(intent.effectiveContextWindow({}), 200000, "empty config keeps the 200000 default window");
+assert.equal(intent.effectiveContextWindow({}), 250000, "empty config keeps the 250000 default window");
 assert.equal(
 	intent.effectiveContextWindow({ wmAutoHandover: true, intentContextWindow: 100000 }),
-	187500,
-	"default wmForceTokens path: floor = ceil(150000 / 0.8) must lift a small window",
+	250000,
+	"default wmForceTokens path: floor = ceil(200000 / 0.8) must lift a small window",
 );
 // Boundary equality: with the default wmForceTokens the floor is the SMALLEST
 // window whose 0.8 auto-compaction line still reaches the force watermark —
-// 0.8 x 187500 = 150000 lands exactly on force (ceil exactness, not overshoot).
-const defaultForceFloor = Math.ceil(150000 / 0.8);
-assert.equal(defaultForceFloor, 187500, "default force floor is exactly ceil(150000 / 0.8)");
-assert.ok(0.8 * defaultForceFloor >= 150000, "0.8 x floor reaches force (equality holds at the boundary)");
-assert.ok(0.8 * (defaultForceFloor - 1) < 150000, "one token less would drop the 0.8 line below force — floor is minimal");
+// 0.8 x 250000 = 200000 lands exactly on force (ceil exactness, not overshoot).
+const defaultForceFloor = Math.ceil(200000 / 0.8);
+assert.equal(defaultForceFloor, 250000, "default force floor is exactly ceil(200000 / 0.8)");
+assert.ok(0.8 * defaultForceFloor >= 200000, "0.8 x floor reaches force (equality holds at the boundary)");
+assert.ok(0.8 * (defaultForceFloor - 1) < 200000, "one token less would drop the 0.8 line below force — floor is minimal");
 assert.equal(
-	intent.effectiveContextWindow({ wmAutoHandover: true, intentContextWindow: 100000, wmForceTokens: 200000 }),
-	250000,
+	intent.effectiveContextWindow({ wmAutoHandover: true, intentContextWindow: 100000, wmForceTokens: 300000 }),
+	375000,
 	"explicit wmForceTokens drives the floor",
 );
 assert.equal(
@@ -506,7 +506,7 @@ assert.equal(
 );
 assert.equal(
 	(await liveAdapter.resolveModel("dsh-switchman-auto", "auto")).context.contextWindow,
-	200000,
+	250000,
 	"resolveModel declares the effective window",
 );
 const offAdapter = liveAdapter;
@@ -549,7 +549,7 @@ const state = await intent.intentStateOf(
 	},
 	null,
 );
-assert.equal(state.context.contextWindow, 200000, "intent-state reports the effective window");
+assert.equal(state.context.contextWindow, 250000, "intent-state reports the effective window");
 assert.equal(state.context.minCandidateWindow, 64000, "probe keeps the smallest KNOWN window (null probes skipped)");
 assert.equal(state.context.minCandidateModel, "small", "probe names the narrowest candidate");
 assert.equal(state.context.overflowRisk, true, "64000 < 130000 flags overflow risk");
@@ -566,7 +566,7 @@ const safeState = await intent.intentStateOf(
 	null,
 );
 assert.equal(safeState.context.minCandidateWindow, 400000, "a known wide window is reported");
-assert.equal(safeState.context.overflowRisk, false, "default wmForceTokens path: 400000 >= 150000 is not risky");
+assert.equal(safeState.context.overflowRisk, false, "default wmForceTokens path: 400000 >= 200000 is not risky");
 const noLlmState = await intent.intentStateOf(
 	{ get: () => null },
 	{ intentCandidates: [{ provider: "ok", model: "wide" }] },
