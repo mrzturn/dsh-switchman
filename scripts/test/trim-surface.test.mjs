@@ -140,6 +140,54 @@ function seededSession(id) {
 	return session;
 }
 
+test("ctx_trim_fold chains an immediate surface ship (via=fold-commit)", async (t) => {
+	let listener = null;
+	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
+	const { ctx, registered, agentsById } = mockCtx({ llmFiber: fiber });
+	ctx.get = () => null;
+	// The tool resolves its session via agents.currentInitiator (host shape).
+	ctx.agents.currentInitiator = () => ({ session: { id: "surf-fc" } });
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-surface-fc-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	// Advisory mode: the fold must come from the TOOL, not an auto cycle, so the
+	// priming dispatch must not start a fold cycle of its own.
+	const handle = applyContextTrim(ctx, { ...config, trimMode: "advisory", trimStateDir: stateDir });
+	const session = mockSession("surf-fc");
+	const cap = [];
+	for (let i = 1; i <= 12; i++) {
+		const u = { id: `fu${i}`, role: "user", source: { kind: "user" }, content: [{ type: "text", text: `fu${i} ` + "F".repeat(4_000) }] };
+		const a = { id: `fa${i}`, role: "assistant", source: { kind: "model" }, content: [{ type: "text", text: `fa${i} ` + "F".repeat(4_000) }] };
+		session.append("user/message", u, { surfaceOp: "append" });
+		session.append("assistant/message", { message: a }, { surfaceOp: "append" });
+		cap.push(u, a);
+	}
+	agentsById.set("surf-fc", { session });
+	async function* empty() {}
+	// Prime the capture with the SAME message objects the surface derives, so
+	// commit-time captureFoldSeqs can resolve refs against the live nodes. The
+	// stream is deliberately NOT consumed: the stream-path fallback sweep must
+	// stay out of this test — only the tool-chained sweep may ship here.
+	listener({ sessionId: "surf-fc", messages: cap.slice(), provider: "p", model: "m" }, () => empty());
+	const foldTool = registered.find((tool) => tool.name === "ctx_trim_fold");
+	// Fold fu2..fa6 (5 whole pairs): clear of node 0 (task-intent head) and the
+	// protected tail, and segment-aligned.
+	const first = await foldTool.execute({ firstId: refOf(cap[2], 2), lastId: refOf(cap[11], 11), count: 10, summary: "immediate ship fold" });
+	assert.match(first, /Folded 10 messages/u);
+	assert.match(first, /surface ship/u, "the return advertises the chained ship");
+	const block = handle.store.ledgerOf("surf-fc").blocks.at(-1);
+	assert.notEqual(block, undefined, "the fold committed");
+	// NO boundary event fired: only the tool-chained sweep can ship here.
+	assert.equal(await poll(() => block.surfaceReplaced !== null && block.surfaceReplaced !== undefined), true, "the fold-commit sweep ships without turn-stopping/idle");
+	const replace = session.rawEvents.find((event) => event.surfaceOp?.op === "replace");
+	assert.notEqual(replace, undefined, "a replace pair reached the mock surface");
+	assert.match(decisionsOf(stateDir), /via=fold-commit/u, "the ship row carries via=fold-commit");
+	const derived = session.deriveMessages().map((message) => message?.id);
+	assert.equal(derived.includes("fu2"), false, "fold start fu2 left the projection");
+	assert.equal(derived.includes("fa6"), false, "fold end fa6 left the projection");
+	assert.equal(derived.includes("fu1"), true, "task-intent head survives");
+	assert.equal(derived.includes("fu7"), true, "the tail survives");
+});
+
 test("frozen dispatch: fold commits, turn-stopping appends the surface replace pair", async (t) => {
 	let listener = null;
 	const fiber = { on: (event, fn) => { if (event === "llm/stream") listener = fn; }, off: () => {}, effect: () => {} };
@@ -357,11 +405,13 @@ test("crash window: lost surfaceReplaced marker never re-ships the range", async
 	hooks["agent/status"]({ status: "idle", agent: { session: { id: "surf-c" } } });
 	await poll(() => false, 40);
 	// The shadowed seqs left surface.nodes when the range shipped, so the
-	// stored capture no longer validates → incomplete-seqs hard skip, and no
-	// second replacement is appended.
+	// stored capture can never validate again: the block terminates as
+	// superseded (material already off the wire) — and no second
+	// replacement is ever appended.
 	assert.equal(session.rawEvents.length, afterShip, "no second replace append");
 	assert.equal(session.rawEvents.filter((event) => event.surfaceOp?.op === "replace").length, 1, "exactly one replace event ever");
-	assert.match(decisionsOf(stateDir), /session=surf-c surface-replace skipped reason=incomplete-seqs/u);
+	assert.equal(block.surfaceSuperseded?.reason, "shadowed", "terminal supersede — the shipped range never re-ships");
+	assert.match(decisionsOf(stateDir), /session=surf-c surface-replace skipped reason=superseded-shadowed/u);
 });
 
 test("surface channel alive: a recent ship stands down the wire-raw fold pause and banner", async (t) => {
@@ -892,7 +942,7 @@ test("wire truth: view-applied logs the tally; pressure tiers use max(view, wire
 	assert.equal(handle.store.ledgerOf("wire-2").blocks.length, 1, "pressure tier committed a fold");
 });
 
-test("stale capture with vanished refs: incomplete-seqs tombstone, no guessed range", async (t) => {
+test("stale capture with a fully-shadowed range: terminal supersede, no guessed range", async (t) => {
 	const { ctx, agentsById } = mockCtx({ withAgents: true });
 	ctx.get = () => null;
 	const stateDir = mkdtempSync(join(tmpdir(), "trim-surface-gone-"));
@@ -908,23 +958,35 @@ test("stale capture with vanished refs: incomplete-seqs tombstone, no guessed ra
 	assert.deepEqual(block.surfaceSeqs, [0, 1, 2, 3]);
 	// Another fold already shadowed that EXACT range: the capture endpoints
 	// left the surface AND the refs no longer resolve. Neither resolution path
-	// can produce an honest range, so the block must tombstone as
-	// incomplete-seqs (the hard-skip branch) instead of guessing.
+	// can produce an honest range, and the material is already off the wire —
+	// the block must terminate as superseded instead of guessing or living
+	// forever in the generation-keyed incomplete-seqs retry loop.
 	shipReplace(session, 0, 3, "other");
 	const eventsBefore = session.rawEvents.length;
 	await handle.surfacePass.sweep("surf-gone", "test");
 	assert.equal(block.surfaceReplaced, undefined, "never shipped");
-	assert.equal(block.surfaceSkip?.reason, "incomplete-seqs", "hard skip kept");
+	assert.equal(block.surfaceSuperseded?.reason, "shadowed", "terminal supersede");
+	assert.equal(block.surfaceSkip, undefined, "no generation-keyed tombstone remains");
 	assert.equal(session.rawEvents.length, eventsBefore, "nothing appended");
-	// The tombstone is keyed on the surface generation: a stable surface stays
-	// quiet on later sweeps.
+	// The supersede is terminal: later sweeps stay silent with no
+	// generation bump and no retry rows.
 	await handle.surfacePass.sweep("surf-gone", "test");
-	const rows = decisionsOf(stateDir).split("\n").filter((line) => line.includes("session=surf-gone") && line.includes("reason=incomplete-seqs"));
-	assert.equal(rows.length, 1, "the tombstoned block logs once per surface generation");
+	const rows = decisionsOf(stateDir).split("\n").filter((line) => line.includes("session=surf-gone") && line.includes("reason=superseded-shadowed"));
+	assert.equal(rows.length, 1, "the superseded block logs exactly once");
 	assert.match(rows[0], /block=.*/u);
+	// A ladder consuming the superseded block terminates with it: the
+	// consumed replacement node can never materialize, and no
+	// generation-keyed retry can revive either block.
+	const ladder = handle.store.commitFold("surf-gone", { consumes: [block.id], summary: "Doomed distill.", kind: "summary", tier: 2, approxTokens: 500 }, null);
+	assert.equal(ladder.ok, true);
+	await handle.surfacePass.sweep("surf-gone", "test");
+	assert.equal(ladder.block.surfaceReplaced, undefined, "ladder never ships");
+	assert.equal(ladder.block.surfaceSuperseded?.reason, "ladder-consumed-superseded", "ladder terminates with its consumed block");
+	assert.equal(ladder.block.surfaceSkip, undefined, "no generation-keyed tombstone on the ladder");
+	assert.equal(session.rawEvents.length, eventsBefore, "nothing appended across all sweeps");
 });
 
-test("stale capture whose refs locate an earlier look-alike span: tombstoned, never re-targeted", async (t) => {
+test("stale capture whose refs locate an earlier look-alike span: superseded, never re-targeted", async (t) => {
 	const { ctx, agentsById } = mockCtx({ withAgents: true });
 	ctx.get = () => null;
 	const stateDir = mkdtempSync(join(tmpdir(), "trim-surface-look-"));
@@ -957,9 +1019,47 @@ test("stale capture whose refs locate an earlier look-alike span: tombstoned, ne
 	const nodesBefore = session.surface.nodes.slice();
 	await handle.surfacePass.sweep("surf-look", "test");
 	assert.equal(block.surfaceReplaced, undefined, "never re-targets the earlier look-alike span");
-	assert.equal(block.surfaceSkip?.reason, "incomplete-seqs", "hard skip kept");
+	assert.equal(block.surfaceSuperseded?.reason, "shadowed", "the fully-shadowed capture terminates");
+	assert.equal(block.surfaceSkip, undefined, "no generation-keyed tombstone remains");
 	assert.deepEqual(session.surface.nodes, nodesBefore, "surface untouched — no look-alike range shadowed");
-	assert.match(decisionsOf(stateDir), /session=surf-look surface-replace skipped reason=incomplete-seqs .*block=b-look relocated-range/u);
+	assert.match(decisionsOf(stateDir), /session=surf-look surface-replace skipped reason=superseded-shadowed .*block=b-look relocated-range/u);
+});
+
+test("partial shadow: some capture seqs still live keeps the incomplete-seqs hard skip", async (t) => {
+	const { ctx, agentsById } = mockCtx({ withAgents: true });
+	ctx.get = () => null;
+	const stateDir = mkdtempSync(join(tmpdir(), "trim-surface-psh-"));
+	t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+	const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+	const session = mockSession("surf-psh");
+	const text = (who) => [{ type: "text", text: `${who} ` + "P".repeat(500) }];
+	const dupP = () => ({ role: "user", source: { kind: "user" }, content: text("dup-p") });
+	const dupQ = () => ({ role: "assistant", source: { kind: "model" }, content: text("dup-q") });
+	session.append("user/message", { id: "u1", role: "user", source: { kind: "user" }, content: text("u1") }, { surfaceOp: "append" });
+	session.append("assistant/message", { message: { id: "a1", role: "assistant", source: { kind: "model" }, content: text("a1") } }, { surfaceOp: "append" });
+	session.append("user/message", dupP(), { surfaceOp: "append" });
+	session.append("assistant/message", { message: dupQ() }, { surfaceOp: "append" });
+	session.append("user/message", { id: "u2", role: "user", source: { kind: "user" }, content: text("u2") }, { surfaceOp: "append" });
+	session.append("assistant/message", { message: { id: "a2", role: "assistant", source: { kind: "model" }, content: text("a2") } }, { surfaceOp: "append" });
+	session.append("user/message", dupP(), { surfaceOp: "append" });
+	session.append("assistant/message", { message: dupQ() }, { surfaceOp: "append" });
+	agentsById.set("surf-psh", { session });
+	// Capture [6,7]; a partial host shadow kills only seq 6 — seq 7 stays
+	// live, so the material is PARTIALLY on the wire. Supersede must NOT
+	// fire (all-gone is false): the block keeps the generation-keyed
+	// incomplete-seqs hard skip and never re-targets.
+	const block = { id: "b-psh", kind: "summary", tier: "model", refRange: { firstId: refOf(dupP(), 0), lastId: refOf(dupQ(), 0) }, count: 2, approxTokens: 500, summary: "Partial shadow block.", surfaceSeqs: [6, 7] };
+	handle.store.ledgerOf("surf-psh").blocks.push(block);
+	shipReplace(session, 6, 6, "other");
+	const eventsBefore = session.rawEvents.length;
+	const nodesBefore = session.surface.nodes.slice();
+	await handle.surfacePass.sweep("surf-psh", "test");
+	assert.equal(block.surfaceReplaced, undefined, "never ships");
+	assert.equal(block.surfaceSuperseded, undefined, "a live seq keeps the block retryable — no terminal supersede");
+	assert.equal(block.surfaceSkip?.reason, "incomplete-seqs", "hard skip kept for the partial shadow");
+	assert.equal(session.rawEvents.length, eventsBefore, "nothing appended by the sweep");
+	assert.deepEqual(session.surface.nodes, nodesBefore, "surface untouched — no re-target");
+	assert.match(decisionsOf(stateDir), /session=surf-psh surface-replace skipped reason=incomplete-seqs .*block=b-psh relocated-range/u);
 });
 
 test("open compaction lock: supported() false and maybeFold burns no summary call", async (t) => {

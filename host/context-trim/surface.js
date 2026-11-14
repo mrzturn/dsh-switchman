@@ -723,6 +723,21 @@ export function createSurfaceFoldPass(deps = {}) {
 		return mark !== null && typeof mark === "object" && typeof mark.reason === "string" && mark.reason !== "" ? mark : null;
 	}
 
+	/** Terminal supersede test: EVERY captured event seq has left the live
+	 * surface, so the fold's material is already off the wire (host
+	 * compaction consumed the range, or an earlier ship whose marker was
+	 * later lost). Such a capture can never validate again —
+	 * the block terminates as surfaceSuperseded instead of living forever
+	 * in the generation-keyed incomplete-seqs retry loop. */
+	function captureFullyShadowed(nodes, block) {
+		// An unreadable/empty surface is fail-safe: nothing is proven gone,
+		// so never terminalize on it (a valid block would be lost forever).
+		if (!Array.isArray(nodes) || nodes.length === 0) return false;
+		if (!Array.isArray(block?.surfaceSeqs) || block.surfaceSeqs.length === 0) return false;
+		const live = new Set(nodes);
+		return block.surfaceSeqs.every((seq) => !live.has(seq));
+	}
+
 	/** One no-op row (only when the pass had pending work — a vacuous sweep
 	 * with nothing to ship stays silent, matching the early-return style of
 	 * the fold cycle's own action=none rows). Whole-pass reasons (disabled /
@@ -768,6 +783,8 @@ export function createSurfaceFoldPass(deps = {}) {
 		})();
 		const pending = blocks.filter((block) => {
 			if (block?.surfaceReplaced !== null && block?.surfaceReplaced !== undefined) return false;
+			// Terminal supersede (see captureFullyShadowed): never pending again.
+			if (block?.surfaceSuperseded !== null && block?.surfaceSuperseded !== undefined) return false;
 			const tomb = tombstoneOf(block);
 			if (tomb === null) return true;
 			// Re-open only when the surface content changed since the skip.
@@ -831,6 +848,21 @@ export function createSurfaceFoldPass(deps = {}) {
 				}
 				const waiting = consumed.find((entry) => entry.surfaceReplaced === null || entry.surfaceReplaced === undefined);
 				if (waiting !== undefined) {
+					if (waiting?.surfaceSuperseded !== null && waiting?.surfaceSuperseded !== undefined) {
+						// The consumed block's material left the surface entirely: its
+						// replacement node can never materialize, so the distillation
+						// is terminal too (same proof as the T1 supersede — no
+						// generation-keyed retry can revive either block).
+						block.surfaceSuperseded = { reason: "ladder-consumed-superseded", at: Date.now() };
+						delete block.surfaceSkip;
+						try {
+							store.persist(ledger);
+						} catch {
+							/* best effort */
+						}
+						skip(sessionId, "superseded-ladder-consumed", via, `block=${block.id} consumed=${waiting.id}`, false);
+						continue;
+					}
 					if (tombstoneOf(waiting) !== null) {
 						// A consumed block is hard-skipped on this generation: its
 						// replacement node can never materialize, so the ladder span
@@ -1017,6 +1049,23 @@ export function createSurfaceFoldPass(deps = {}) {
 				const located = locateOnSurface(pairs, block);
 				if (located === null) {
 					if (Array.isArray(block.surfaceSeqs)) {
+						if (captureFullyShadowed(nodes, block)) {
+							// Every captured seq has left the live surface: the range was
+							// already shadowed wholesale (host compaction, a prior ship
+							// whose marker was later lost). The material is
+							// off the wire and this capture can never validate again —
+							// terminate the block instead of re-tombstoning it on every
+							// generation bump (the pending filter drops it for good).
+							block.surfaceSuperseded = { reason: "shadowed", at: Date.now() };
+							delete block.surfaceSkip;
+							try {
+								store.persist(ledger);
+							} catch {
+								/* best effort */
+							}
+							skip(sessionId, "superseded-shadowed", via, `block=${block.id}`, false);
+							continue;
+						}
 						block.surfaceSkip = { reason: "incomplete-seqs", contentGeneration: liveGeneration, at: Date.now() };
 						skip(sessionId, "incomplete-seqs", via, `block=${block.id}`, false);
 					} else {
@@ -1041,6 +1090,23 @@ export function createSurfaceFoldPass(deps = {}) {
 						&& nodes[located[0]] === storedFirst
 						&& nodes[located[1]] === storedLast;
 					if (!endpointsMatch) {
+						if (captureFullyShadowed(nodes, block)) {
+							// Every captured seq has left the live surface: the range was
+							// already shadowed wholesale (host compaction, a prior ship
+							// whose marker was later lost). The material is
+							// off the wire and this capture can never validate again —
+							// terminate the block instead of re-tombstoning it on every
+							// generation bump (the pending filter drops it for good).
+							block.surfaceSuperseded = { reason: "shadowed", at: Date.now() };
+							delete block.surfaceSkip;
+							try {
+								store.persist(ledger);
+							} catch {
+								/* best effort */
+							}
+							skip(sessionId, "superseded-shadowed", via, `block=${block.id} relocated-range`, false);
+							continue;
+						}
 						block.surfaceSkip = { reason: "incomplete-seqs", contentGeneration: liveGeneration, at: Date.now() };
 						skip(sessionId, "incomplete-seqs", via, `block=${block.id} relocated-range`, false);
 						continue;

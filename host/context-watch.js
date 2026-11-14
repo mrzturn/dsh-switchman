@@ -276,7 +276,11 @@ function subagentWindowTokens(ctx, state, sessionId) {
 async function primeSubagentWindow(ctx, state, route, key) {
 	try {
 		const llm = ctx.get?.("llm", false);
-		const info = await llm?.resolveModelInfo?.({ provider: route.provider, model: route.model });
+		// Host contract: resolveModelInfo(provider, model) takes TWO strings. The
+		// object shape threw NO_ADAPTER and subagent window scaling silently fell
+		// back to static tiers (found 2026-11-14; same contract every other
+		// call site already follows).
+		const info = await llm?.resolveModelInfo?.(route.provider, route.model);
 		const windowTokens = info?.context?.contextWindow;
 		const value = Number.isFinite(windowTokens) && windowTokens > 0 ? windowTokens : null;
 		state.subWindow.set(key, { value, at: Date.now() });

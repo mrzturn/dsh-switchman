@@ -440,19 +440,32 @@ export function applyContextTrim(ctx, config) {
 			return;
 		}
 		const cached = windowCache.get(model.provider + "/" + model.model);
+		let resolvedWindow; // model-resolved window, or the configured cap when unknown
 		if (cached === undefined) {
-			// Truly unknown: warm up single-flight; the nudge lands on a later dispatch.
+			// Unknown: warm up single-flight but stay AUDIBLE — fall back to the
+			// configured cap (the same denominator the emergency tier uses), so a
+			// model whose metadata never resolves still gets nudged at the fold
+			// line instead of burning to force unseen (2026-11-14: window-unknown
+			// swallowed every nudge at 89% pressure).
 			warmWindowOnce(model, Date.now());
+			resolvedWindow = windowCapNow();
+		} else {
+			// Stale-but-known still gates correctly: effectiveWindowTokens binds to the
+			// configured cap for every model larger than it, so the pressure math is
+			// unchanged. Re-warm in the background instead of burning this boundary.
+			if (Date.now() - cached.at >= 600_000) warmWindowOnce(model, Date.now());
+			// Resolution failed inside the TTL: same cap fallback instead of going
+			// quiet (no retry hammering — the warm-up stays single-flight).
+			resolvedWindow = cached.windowTokens ?? windowCapNow();
+		}
+		// Bind the resolved window to the configured cap before computing pressure.
+		const windowTokens = effectiveWindowTokens(resolvedWindow, windowCapNow());
+		if (windowTokens === null) {
+			// Cap unavailable too (wmForceTokens=0 and no explicit cap): nothing to
+			// measure against — the one remaining legitimate silence.
 			decisionLog("advisory-nudge skip why=window-unknown");
 			return;
 		}
-		// Stale-but-known still gates correctly: effectiveWindowTokens binds to the
-		// configured cap for every model larger than it, so the pressure math is
-		// unchanged. Re-warm in the background instead of burning this boundary.
-		if (Date.now() - cached.at >= 600_000) warmWindowOnce(model, Date.now());
-		if (cached.windowTokens === null) return; // resolution failed inside the TTL — skip quietly, no retry hammering
-		const windowTokens = effectiveWindowTokens(cached.windowTokens, windowCapNow());
-		if (windowTokens === null) return;
 		const wire = wireTokensOf(sessionId);
 		const mass = Math.max(Number.isFinite(wire) ? wire : 0, Number.isFinite(viewTokens) ? viewTokens : 0);
 		if (mass <= 0) return;
@@ -1376,7 +1389,18 @@ export function applyContextTrim(ctx, config) {
 				const lowLedger = store.ledgerOf(sessionId);
 				const lowView = estimateTokensOf(buildView(capture.messages, lowLedger, { protectedTail: thresholdsNow().protectedTail }).messages);
 				store.recordFoldBaseline(sessionId, capture.viewTokens, lowView);
-				return `Folded ${count} messages into block ${result.block.id}. The view applies on the next model call.`;
+				// Ship the fresh block onto the session surface NOW instead of waiting for
+				// the next idle/turn-stopping boundary: a fold committed mid-turn used to
+				// stay meter-only for the rest of the turn (2026-11-14 live test: two
+				// tool-path folds left the wire carrying raw history for ~11 min at 97%
+				// pressure — injected=none on frozen dispatches, both blocks pending).
+				// The sweep's own guards (enabled flag, capable session, compaction lock,
+				// per-block validation) fail closed to pending; the boundary sweeps
+				// remain the closure pass.
+				void surfacePass.sweep(sessionId, "fold-commit").catch((error) => {
+					decisionLog(`session=${sessionId} surface-replace failed via=fold-commit why=${error?.message ?? error}`);
+				});
+				return `Folded ${count} messages into block ${result.block.id}. An immediate surface ship was queued (via=fold-commit): when it lands, even frozen dispatches carry the reduced history; if the surface cannot accept it right now the block stays pending and the boundary sweeps retry.`;
 			},
 		});
 	} catch (error) {

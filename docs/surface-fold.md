@@ -34,8 +34,10 @@ We clone that mechanism for folds.
 New module `host/context-trim/surface.js`, wired from context-watch.js (or a
 small Service registration in index.js):
 
-1. Trigger: `ctx.on('agent/turn-stopping')` (serial, no request in flight) plus
-   an idle sweep for child/idle sessions. Per session:
+1. Trigger: `ctx.on('agent/turn-stopping')` (serial, no request in flight), an
+   idle sweep for child/idle sessions, and an immediate sweep chained right
+   after a successful `ctx_trim_fold` commit (`via=fold-commit`) so a mid-turn
+   fold ships without waiting for the next turn boundary. Per session:
    - If the ledger has committed fold blocks that are NOT yet reflected on the
      wire surface (the wire=raw case: blocks folded during freeze windows), and
      the session's live surface still contains the shadowed message range:
@@ -116,6 +118,24 @@ seq with a range another block already replaced. Collision checks prefer the
 marker's shipped seq set (`surfaceReplaced.seqs`) and fall back to the other
 block's capture, then to the numeric interval for legacy markers. Otherwise the
 `incomplete-seqs` tombstone stays.
+
+EXCEPTION — terminal supersede (2026-11-14, F6): when EVERY stored capture seq has
+left the live surface, the block's material is provably off the wire (a host compaction
+consumed the range wholesale, or an earlier ship's marker was lost in a crash window)
+and the capture can never validate again. The block
+then terminates as `surfaceSuperseded` (`reason=shadowed`) instead of cycling in the
+generation-keyed `incomplete-seqs` retry loop, and a ladder block whose consumed block
+is superseded terminates with it (`reason=ladder-consumed-superseded`). Decision rows
+`surface-replace skipped reason=superseded-shadowed|superseded-ladder-consumed` log
+once per block; the pending filter drops superseded blocks permanently. Partial shadows
+(some capture seqs still live — a look-alike re-location WITH live seqs, an overlap,
+endpoints gone but a live middle) keep the hard skip: there, shipping is either still
+possible after a surface change or would require a guess the design forbids.
+
+The supersede is TERMINAL by design: it keys on event-seq absence from the live surface,
+which assumes seq identity is stable (never renumbered). If a manual log repair ever
+resurrects the shadowed seqs, clear the block's `surfaceSuperseded` marker to make the
+block eligible for sweep again.
 
 `surfacePass.supported()` also requires that no durable
 `compaction/start..compaction/end` lock is open, since `sweep` defers under
