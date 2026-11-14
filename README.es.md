@@ -163,6 +163,12 @@ Todas las claves viven en Ajustes → dsh-switchman; los valores por defecto sal
 - Las líneas de protocolo (`[SWITCHMAN:LANG|POOLS|WATERMARK|TEAMS]`) están deliberadamente en inglés y son estables byte a byte — no las localices.
 - `npm pack --dry-run` debe mantenerse en la forma auditada de 60 archivos / ~380 kB (~1,26 MB descomprimido; `docs/` queda excluido).
 
+## Descargas
+
+Todas las descargas de npm desde la primera publicación, acumuladas — dibujadas a partir de la [API oficial de descargas de npm](https://api.npmjs.org/) y actualizadas a diario por GitHub Actions ([script del gráfico](scripts/downloads-chart.mjs)):
+
+![Descargas acumuladas de npm para dsh-switchman](docs/assets/downloads.svg)
+
 ## License
 
 MIT

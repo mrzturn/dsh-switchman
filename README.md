@@ -172,6 +172,12 @@ All keys live in Settings → dsh-switchman; defaults from `host/config.js`:
 
 The tiered folding design (T1/T2/T3) was inspired by [billion-context](https://github.com/ranxianglei/billion-context) — thank you for open-sourcing the idea.
 
+## Downloads
+
+All-time npm downloads since the first release, cumulative — drawn from the official [npm downloads API](https://api.npmjs.org/) and refreshed daily by GitHub Actions ([chart script](scripts/downloads-chart.mjs)):
+
+![All-time cumulative npm downloads for dsh-switchman](docs/assets/downloads.svg)
+
 ## License
 
 MIT

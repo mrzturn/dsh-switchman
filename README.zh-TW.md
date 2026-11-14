@@ -163,6 +163,12 @@ bash <安裝目錄>/skills/db-query/scripts/setup.sh
 - 協定行（`[SWITCHMAN:LANG|POOLS|WATERMARK|TEAMS]`）刻意保持英文且位元組穩定——不要在地化。
 - `npm pack --dry-run` 應保持稽核過的 60 個檔案 / ~380 kB 形態（解壓後 ~1.26 MB，`docs/` 不進包）。
 
+## 下載量
+
+自首次發布以來的 npm 累計下載量 — 資料來自官方 [npm downloads API](https://api.npmjs.org/)，由 GitHub Actions 每日自動重繪（[圖表腳本](scripts/downloads-chart.mjs)）：
+
+![dsh-switchman 的 npm 累計下載量](docs/assets/downloads.svg)
+
 ## License
 
 MIT

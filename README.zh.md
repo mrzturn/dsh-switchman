@@ -164,6 +164,12 @@ bash <安装目录>/skills/db-query/scripts/setup.sh
 - `npm pack --dry-run` 应保持审计过的 60 文件 / ~380 kB 形态（解压后 ~1.26 MB，`docs/` 不进包）。
 - **零运行时依赖——硬性不变量。** 宿主侧包（`@deepseek-ai/schemastery`、cordis 等）只允许声明为 `peerDependencies`，由运行中的 DSH 用它自己的副本满足。普通 `dependencies` 会被物理安装进 profile 工作区（`<profile>/node_modules/…`），从而对同处 profile 的其他插件遮蔽宿主副本——1.7.0 把 schemastery 声明为普通依赖时，正是这个机制让 dshmarket 插件市场崩溃（一个进程里出现两份 schemastery，市场产生的 schema 与宿主不再同类）。`scripts/validate.mjs` 会在 `dependencies` 再次出现时直接失败；因此安装、升级、卸载 dsh-switchman 都不会再影响 dshmarket 或任何其他社区包在运行时解析到的模块。
 
+## 下载量
+
+自首次发布以来的 npm 累计下载量 — 数据来自官方 [npm downloads API](https://api.npmjs.org/)，由 GitHub Actions 每日自动重绘（[图表脚本](scripts/downloads-chart.mjs)）：
+
+![dsh-switchman 的 npm 累计下载量](docs/assets/downloads.svg)
+
 ## License
 
 MIT

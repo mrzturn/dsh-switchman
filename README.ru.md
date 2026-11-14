@@ -163,6 +163,12 @@ bash <install-dir>/skills/db-query/scripts/setup.sh
 - Строки протокола (`[SWITCHMAN:LANG|POOLS|WATERMARK|TEAMS]`) намеренно оставлены на английском и стабильны побайтово — не локализуйте их.
 - `npm pack --dry-run` должен сохранять аудированную форму: 60 файлов / ~380 kB (~1,26 МБ распаковано; `docs/` исключён).
 
+## Загрузки
+
+Все загрузки npm с момента первого релиза, накопительно — построено по официальному [npm downloads API](https://api.npmjs.org/) и ежедневно обновляется GitHub Actions ([скрипт графика](scripts/downloads-chart.mjs)):
+
+![Кумулятивные загрузки npm для dsh-switchman](docs/assets/downloads.svg)
+
 ## License
 
 MIT

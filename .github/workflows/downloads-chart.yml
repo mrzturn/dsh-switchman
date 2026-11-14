@@ -1,0 +1,39 @@
+name: Downloads chart
+
+# Redraw docs/assets/downloads.svg once a day from the official npm
+# downloads API (release day -> last settled day, cumulative) and commit
+# it, so the
+# README chart stays current without any client-side JS (GitHub strips
+# scripts from READMEs, so the chart is pre-rendered SVG).
+on:
+  schedule:
+    - cron: "37 10 * * *" # daily 10:37 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: downloads-chart
+  cancel-in-progress: false
+
+jobs:
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node scripts/downloads-chart.mjs
+      - name: Commit refreshed chart
+        run: |
+          git config user.name "downloads-chart-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add docs/assets/downloads.svg
+          if git diff --cached --quiet; then
+            echo "chart unchanged — nothing to commit"
+          else
+            git commit -m "chore: refresh npm downloads chart [skip ci]"
+            git push
+          fi

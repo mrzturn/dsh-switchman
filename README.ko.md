@@ -163,6 +163,12 @@ bash <설치-디렉터리>/skills/db-query/scripts/setup.sh
 - 프로토콜 행(`[SWITCHMAN:LANG|POOLS|WATERMARK|TEAMS]`)은 의도적으로 영어 그대로 바이트 안정으로 둔다 — 현지화하지 않는다.
 - `npm pack --dry-run`은 감사된 60 파일 / ~380 kB 형태를 유지해야 한다(~1.26 MB 해제, `docs/`는 제외된다).
 
+## 다운로드
+
+첫 출시 이후의 npm 누적 다운로드 수입니다. 공식 [npm downloads API](https://api.npmjs.org/)에서 그려지며 GitHub Actions가 매일 자동 갱신합니다 ([차트 스크립트](scripts/downloads-chart.mjs)):
+
+![dsh-switchman의 npm 누적 다운로드 수](docs/assets/downloads.svg)
+
 ## License
 
 MIT
