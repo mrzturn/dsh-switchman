@@ -582,7 +582,7 @@ export function createSurfaceFoldPass(deps = {}) {
 		const session = sessionOf(sessionId);
 		if (!surfaceCapable(session)) return { seq: null, error: null };
 		try {
-			const event = session.append("user/message", nudgeMessage(sessionId, text));
+			const event = session.append("user/message", nudgeMessage(sessionId, text), { surfaceOp: "append" });
 			return { seq: Number.isFinite(event?.seq) ? event.seq : null, error: null };
 		} catch (error) {
 			return { seq: null, error: String(error?.message ?? error) };
