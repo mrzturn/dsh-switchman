@@ -84,15 +84,16 @@ export const Config = z.object({
 	 *  the plugin UI into that locale (extra locales resolve
 	 *  client-side from the inline EXTRA_UI_DICTS table, falling back
 	 *  to English). */
-	uiLocale: z.union(["auto", "en", "zh", "zh-TW", "ja", "ko", "de", "es", "fr", "it", "pt", "ru"]).default("auto").volatile(),
+	uiLocale: z.union(["auto", "en", "zh", "zh-TW", "ja", "ko", "de", "es", "fr", "it", "pt", "ru"]).default("zh").volatile(),
 
 	// --- Phase 1: project language preference -----------------------------
 	/** Where the three language slots live: "global" = these profile-level
 	 *  fields below; "project" = each project's .switchman/lang.json (per
 	 *  session cwd; missing file = ask once per session and save there). */
-	langScope: z.union(["global", "project"]).default("global").volatile(),
-	/** Language for conversational replies. Empty = ask once, then remember. */
-	langConversation: z.string().default("").volatile(),
+	langScope: z.union(["global", "project"]).default("project").volatile(),
+	/** Language for conversational replies (shipped default zh-CN). Empty =
+	 *  ask once, then remember. */
+	langConversation: z.string().default("zh-CN").volatile(),
 	/** Language for code comments. Empty = follow langConversation. */
 	langComments: z.string().default("").volatile(),
 	/** Language for documents the agent authors. Empty = follow langConversation. */
@@ -132,22 +133,21 @@ export const Config = z.object({
 	// --- Phase 3: context watermark control --------------------------------
 	/** Soft watermark: advisory banner + delegation nudge (tokens). */
 	wmSoftTokens: z.number().min(1000).max(10000000).default(80000).volatile(),
-	/** Hard watermark: read budget tightens, wrap-up advised (tokens). 95k
-	 *  sits just under the trim pressure line (65% of the 150k window ≈
-	 *  97.5k): past
-	 *  this point the fold engine is already folding, so per-call read
-	 *  budgets must tighten at the SAME boundary — agent sessions grow in
-	 *  PULSES (one large file read = tens of thousands of tokens injected
-	 *  at once, faster than any fold can commit), and the read budget is
-	 *  the only preventive valve on the pulse source. */
-	wmHardTokens: z.number().min(2000).max(10000000).default(95000).volatile(),
+	/** Hard watermark: read budget tightens, wrap-up advised (tokens). 100k
+	 *  sits just above the trim pressure line (45% of the 200k effective
+	 *  cap = 90k): by the time the hard tier tightens, the fold engine is
+	 *  already folding — the read budget stays the preventive valve on the
+	 *  pulse source: agent sessions grow in PULSES (one large file read =
+	 *  tens of thousands of tokens injected at once, faster than any fold
+	 *  can commit). */
+	wmHardTokens: z.number().min(2000).max(10000000).default(100000).volatile(),
 	/** Force watermark: handover document + compaction (tokens). */
-	wmForceTokens: z.number().min(3000).max(10000000).default(150000).volatile(),
+	wmForceTokens: z.number().min(3000).max(10000000).default(200000).volatile(),
 	/** Per-TURN read budget (inspection C16 — the name predates the turn
 	 *  accounting): read/glob/grep/bash results accumulate against it within
 	 *  one turn; the account resets after 15 idle minutes and the pre/post
 	 *  gates act at 2.4× this value (CEILING_MULTIPLE in context-watch.js). */
-	wmReadBudgetTokens: z.number().min(200).max(10000000).default(3000).volatile(),
+	wmReadBudgetTokens: z.number().min(200).max(10000000).default(3500).volatile(),
 	/** Hard-tier behavior: cap reads and advise, or deny outright. */
 	wmDenyMode: z.union(["cap", "deny"]).default("cap").volatile(),
 	/** Force tier triggers the handover (document + compaction) automatically. */
@@ -173,7 +173,7 @@ export const Config = z.object({
 	 *  doctrine, no whitelist detection (the DSH factory conservative team
 	 *  policy takes over); the bundle is never disabled and the whitelist is
 	 *  never cleared. */
-	teamsMode: z.boolean().default(false).volatile(),
+	teamsMode: z.boolean().default(true).volatile(),
 	/** Replace-sync the dispatch model union (the six pools plus modelRank)
 	 *  into DSH's subagent model-selection whitelist
 	 *  (`subagent-model-selection-settings`) whenever the teams
@@ -185,7 +185,7 @@ export const Config = z.object({
 	 *  "pools or modelRank" — leaving it out would strand that route.
 	 *  The whitelist only applies to top-level sessions composed
 	 *  afterwards. */
-	syncWhitelist: z.boolean().default(false).volatile(),
+	syncWhitelist: z.boolean().default(true).volatile(),
 
 	// --- Intent recognition: classifier-routed "auto" model ----------------
 	/** Master switch for intent routing (design: .dsh-switchman/plans/
@@ -242,7 +242,7 @@ export const Config = z.object({
 	 *  ceil(wmForceTokens / 0.8) so the smooth handover always fires before
 	 *  the 0.8×-window auto-compaction (see effectiveContextWindow in
 	 *  host/intent.js). */
-	intentContextWindow: z.number().min(1024).default(200000).volatile(),
+	intentContextWindow: z.number().min(1024).default(250000).volatile(),
 	/** Optional fallback route after classification fails when no prior route
 	 *  is available; empty = the first candidate. An optional effort pin
 	 *  overrides the fallback model's default. */
@@ -258,27 +258,27 @@ export const Config = z.object({
 	 *  "advisory" = expose ctx_trim_fold/ctx_trim_status + the protocol head
 	 *  so the session model can fold itself, "auto" = everything plus
 	 *  idle-boundary automatic folds (growth gate / pressure / emergency). */
-	trimMode: z.union(["off", "advisory", "auto"]).default("auto").volatile(),
+	trimMode: z.union(["off", "advisory", "auto"]).default("advisory").volatile(),
 	/** Growth gate (tier a): fold when the outbound-view estimate grew this
 	 *  much since the last fold. */
 	trimGrowthTokens: z.number().min(1000).default(22500).volatile(),
 	/** Growth gate companion: the contiguous compressible increment must
 	 *  also reach this many estimated tokens (chars/4 heuristic). */
-	trimIncrementTokens: z.number().min(1000).default(25000).volatile(),
+	trimIncrementTokens: z.number().min(1000).default(45000).volatile(),
 	/** Pressure tier (tier b): fold when view usage reaches this percent of
 	 *  the context window (requires a resolvable window; otherwise skipped). */
-	trimPressurePercent: z.number().min(1).max(100).default(65).volatile(),
+	trimPressurePercent: z.number().min(1).max(100).default(45).volatile(),
 	/** Emergency tier (tier c): forced MECHANICAL fold (no side-model call)
 	 *  at this percent of the window; cooldown-gated. */
-	trimEmergencyPercent: z.number().min(1).max(100).default(95).volatile(),
+	trimEmergencyPercent: z.number().min(1).max(100).default(90).volatile(),
 	/** Advisory mode speak line: the model is nudged to fold when pressure
 	 *  reaches this percent of the window (default sits below the protocol's
 	 *  own 80% fold line, nudging while folding headroom is still comfortable). */
-	trimAdvisoryPercent: z.number().min(1).max(100).default(65).volatile(),
+	trimAdvisoryPercent: z.number().min(1).max(100).default(50).volatile(),
 	/** Advisory mode escalation line: at this percent the nudge escalates to a
 	 *  fold-down-this-turn order; must stay above trimAdvisoryPercent (an
 	 *  inverted or out-of-range pair falls back to 65/95). */
-	trimAdvisoryCriticalPercent: z.number().min(1).max(100).default(95).volatile(),
+	trimAdvisoryCriticalPercent: z.number().min(1).max(100).default(90).volatile(),
 	/** [2026-11-07]-[growth/increment constants are absolute tokens
 	 *  calibrated for the default 150k effective window]-[scaling
 	 *  trimWindowTokens down without scaling trimGrowthTokens /
@@ -289,13 +289,16 @@ export const Config = z.object({
 	 *  2026-11-09 steady-growth recalibration — one fold per ~22.5k of new
 	 *  work instead of one every ~2 minutes; pressure pins the 50-100k band
 	 *  ceiling).]
+	 *  [2026-11-14]-[shipped defaults recalibrated to the 200k force
+	 *  window]-[increment 45000 ≈ window/4.4, growth 22500 ≈ window × 0.11;
+	 *  pressure/emergency 45%/90%, advisory 50%/90%, hard watermark 100k.]
 	 *  Effective-window cap for the tier math: tier points are computed
 	 *  against min(model-resolved window, cap). 0 = auto (cap follows
 	 *  wmForceTokens, so folds always fire ahead of the handover tier). */
 	trimWindowTokens: z.number().min(0).default(0).volatile(),
 	/** Last N messages of a history are never folded (the live tail the
 	 *  next model call reasons over). */
-	trimProtectedTail: z.number().min(0).max(100).default(10).volatile(),
+	trimProtectedTail: z.number().min(0).max(100).default(6).volatile(),
 	/** Side-model fold cadence cap per rolling hour (emergency mechanical
 	 *  folds are exempt; they have their own cooldown). 30 sits just above
 	 *  the pure T1 demand of continuous full-rate generation (~27 folds/hour

@@ -97,9 +97,9 @@ const POOL_FIELDS = [
  *  but never sent by the client fails every fenced write (and vice versa). */
 const WM_BOUNDED_NUMBER_FIELDS = [
 	{ field: "wmSoftTokens", min: 1000, max: 10000000, def: 80000 },
-	{ field: "wmHardTokens", min: 2000, max: 10000000, def: 95000 },
-	{ field: "wmForceTokens", min: 3000, max: 10000000, def: 150000 },
-	{ field: "wmReadBudgetTokens", min: 200, max: 10000000, def: 3000 },
+	{ field: "wmHardTokens", min: 2000, max: 10000000, def: 100000 },
+	{ field: "wmForceTokens", min: 3000, max: 10000000, def: 200000 },
+	{ field: "wmReadBudgetTokens", min: 200, max: 10000000, def: 3500 },
 	{ field: "wmSubagentForceTokens", min: 0, max: 10000000, def: 0 },
 	{ field: "wmSubagentWindowRatio", min: 0.1, max: 1, def: 0.75 },
 ];
@@ -110,13 +110,13 @@ const WM_BOUNDED_NUMBER_FIELDS = [
  *  but never sent by the client fails every fenced write (and vice versa). */
 const TRIM_NUMBER_FIELDS = [
 	{ field: "trimGrowthTokens", min: 1000, max: Number.POSITIVE_INFINITY, def: 22500 },
-	{ field: "trimIncrementTokens", min: 1000, max: Number.POSITIVE_INFINITY, def: 25000 },
-	{ field: "trimPressurePercent", min: 5, max: 100, def: 65 },
-	{ field: "trimEmergencyPercent", min: 5, max: 100, def: 95 },
-	{ field: "trimAdvisoryPercent", min: 5, max: 100, def: 65 },
-	{ field: "trimAdvisoryCriticalPercent", min: 5, max: 100, def: 95 },
+	{ field: "trimIncrementTokens", min: 1000, max: Number.POSITIVE_INFINITY, def: 45000 },
+	{ field: "trimPressurePercent", min: 5, max: 100, def: 45 },
+	{ field: "trimEmergencyPercent", min: 5, max: 100, def: 90 },
+	{ field: "trimAdvisoryPercent", min: 5, max: 100, def: 50 },
+	{ field: "trimAdvisoryCriticalPercent", min: 5, max: 100, def: 90 },
 	{ field: "trimWindowTokens", min: 0, max: Number.POSITIVE_INFINITY, def: 0 },
-	{ field: "trimProtectedTail", min: 0, max: 100, def: 10 },
+	{ field: "trimProtectedTail", min: 0, max: 100, def: 6 },
 	{ field: "trimLadderT2Tokens", min: 1000, max: Number.POSITIVE_INFINITY, def: 8000 },
 	{ field: "trimLadderT2MinBlocks", min: 2, max: 200, def: 3 },
 	{ field: "trimLadderT3Tokens", min: 1000, max: Number.POSITIVE_INFINITY, def: 6000 },
@@ -153,7 +153,7 @@ const INTENT_NUMBER_FIELDS = [
 	{ field: "intentTimeoutMs", min: 200, max: Number.POSITIVE_INFINITY, def: 60000 },
 	{ field: "intentHistoryMessages", min: 1, max: 20, def: 6 },
 	{ field: "intentHistoryMaxChars", min: 200, max: 20000, def: 2400 },
-	{ field: "intentContextWindow", min: 1024, max: Number.POSITIVE_INFINITY, def: 200000 },
+	{ field: "intentContextWindow", min: 1024, max: Number.POSITIVE_INFINITY, def: 250000 },
 ];
 /** Intent classifier routes round-trip the "unset" {provider:"", model:""}
  *  pair, so they validate against the loosened cleanIntentRoute (both keys

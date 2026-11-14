@@ -30,6 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The whitelist replace-sync now includes `modelRank` in the union (the dispatch fallback route is registered only there, and enforce mode denies routes outside "pools or modelRank"); when the DSH installation does not offer the agent-team bundle at all, the enable records a terminal `not-offered` state instead of retrying forever.
 - 白名单同步的并集现在包含 `modelRank`（派发回退路由只在那里登记，enforce 模式会拒绝「池与 modelRank」之外的路由）；DSH 安装完全不提供 agent-team bundle 时，启用动作记录终态 `not-offered`，不再无限重试。
 
+### Changed
+
+- Defaults recalibrated to the tuned live profile: hard watermark 100k, force watermark 200k, per-turn read budget 3500, intent context window 250000 (exactly the wmAutoHandover floor for the new force tier), trim increment 45000, trim pressure/emergency 45%/90%, advisory pair 50%/90%, protected tail 6.
+- Behavior defaults follow the live tuning: trimMode advisory, teamsMode and syncWhitelist on, uiLocale zh, langScope project, langConversation zh-CN.
+- 出厂默认按实机调校同步：硬水位 100k、强制水位 200k、单轮读取预算 3500、intent 上下文窗口 250000（恰为新强制档的 wmAutoHandover 下限）、trim 增量 45000、trim 压力/紧急 45%/90%、advisory 对 50%/90%、保护尾部 6。
+- 行为类默认随实机调校：trimMode=advisory、teamsMode 与 syncWhitelist 默认开、uiLocale=zh、langScope=project、langConversation=zh-CN。
+
 ## [1.11.6] — 2026-11-14
 
 ### English

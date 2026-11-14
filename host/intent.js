@@ -144,9 +144,9 @@ function routeOf(value) {
  *  handover off the user's raw window is respected as-is — they opted out
  *  of the handover pipeline, so the 0.8 line may sit wherever they put it. */
 export function effectiveContextWindow(config) {
-	const user = Math.max(1024, Math.round(readNumber(config.intentContextWindow, 200000)));
+	const user = Math.max(1024, Math.round(readNumber(config.intentContextWindow, 250000)));
 	if (!readBool(config.wmAutoHandover)) return user;
-	const floor = Math.ceil(readNumber(config.wmForceTokens, 150000) / 0.8);
+	const floor = Math.ceil(readNumber(config.wmForceTokens, 200000) / 0.8);
 	return Math.max(user, floor);
 }
 
@@ -803,7 +803,7 @@ export async function intentStateOf(ctx, config, sessionId = null) {
 			}
 		}
 	}
-	const forceTokens = readNumber(config.wmForceTokens, 150000);
+	const forceTokens = readNumber(config.wmForceTokens, 200000);
 	return {
 		enabled,
 		autoSelected: selection?.provider === AUTO_PROVIDER,

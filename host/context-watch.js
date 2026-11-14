@@ -136,8 +136,8 @@ function isRoot(ctx, agent) {
 function readThresholds(config) {
 	return {
 		soft: readNumber(config.wmSoftTokens, 80000),
-		hard: readNumber(config.wmHardTokens, 95000),
-		force: readNumber(config.wmForceTokens, 150000),
+		hard: readNumber(config.wmHardTokens, 100000),
+		force: readNumber(config.wmForceTokens, 200000),
 	};
 }
 
