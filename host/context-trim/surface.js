@@ -593,7 +593,25 @@ export function createSurfaceFoldPass(deps = {}) {
 	 * consumed one, and re-shadowing a vanished seq fails the v4 validator.
 	 * Each seq gets its own prune event (start === end) so a non-contiguous
 	 * set can never cover unlisted live turns — matching the contiguous
-	 * range/seq pairing of the ladder and T1 passes. */
+	 * range/seq pairing of the ladder and T1 passes. The metering prune is
+	 * paired with its replacement (shadow-price protocol, mirroring the
+	 * host's compaction-tool-result-pruner): the surfaceOp replace on the
+	 * replacement is what actually retires the node from surface.nodes —
+	 * a bare compaction/prune never moves the live surface, so without
+	 * the pair the same nudge was re-found and re-pruned on EVERY boundary
+	 * (one duplicate fold-marker event per step, 2026-11-14). */
+	/** Retired-nudge stub: id and text intentionally miss both nudgeScan
+	 * signatures (id prefix "trim_nudge_", text prefix "[SWITCHMAN:TRIM]
+	 * Advisory nudge") so a retired stub is never re-discovered. */
+	function retiredNudgeMessage(sessionId) {
+		const token = String(sessionId ?? "").replace(/[^A-Za-z0-9_-]/gu, "_").slice(0, 128) || "session";
+		return {
+			id: "trim_retired_nudge_" + token + "_" + (++nudgeCounter),
+			role: "user",
+			content: [{ type: "text", text: "[SWITCHMAN:TRIM] (advisory nudge retired — pressure is back below the fold line)" }],
+			source: { kind: "user" },
+		};
+	}
 	function nudgePrune(sessionId, seqs) {
 		try {
 			const session = sessionOf(sessionId);
@@ -622,6 +640,18 @@ export function createSurfaceFoldPass(deps = {}) {
 					shadowedTokenCount: 1,
 				});
 				if (!Number.isFinite(event?.seq)) return false;
+				// Shadow-price pairing: the replacement — not the metering
+				// prune — retires the node from the live surface.
+				let retired;
+				try {
+					retired = session.append("user/message", retiredNudgeMessage(sessionId), {
+						surfaceOp: { op: "replace", startSeq: seq, endSeq: seq },
+						sourceEventSeqs: [seq],
+					});
+				} catch {
+					return false;
+				}
+				if (!Number.isFinite(retired?.seq)) return false;
 			}
 			return true;
 		} catch {

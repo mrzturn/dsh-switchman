@@ -1368,11 +1368,20 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 			append(type, data, opts) {
 				const event = { type, data, seq: this.seq++, ...(opts === undefined ? {} : { opts }) };
 				this.events[event.seq] = event;
-				if (type === "user/message" && Array.isArray(this.surface?.nodes)) this.surface.nodes.push(event.seq);
-				if (type === "compaction/prune" && Array.isArray(this.surface?.nodes)) {
-					const shadowed = new Set(data?.shadowedSeqs ?? []);
-					this.surface.nodes = this.surface.nodes.filter((seq) => !shadowed.has(seq));
+				const nodes = Array.isArray(this.surface?.nodes) ? this.surface.nodes : null;
+				const op = opts?.surfaceOp;
+				if (nodes !== null && op?.op === "replace") {
+					// Collapse the covered span to the replacement node, like the host.
+					const from = nodes.indexOf(op.startSeq);
+					const to = nodes.indexOf(op.endSeq);
+					if (from !== -1 && to !== -1 && to >= from) nodes.splice(from, to - from + 1, event.seq);
+					else nodes.push(event.seq);
+				} else if (nodes !== null && (type === "user/message" || type === "tool/result")) {
+					nodes.push(event.seq);
 				}
+				// A bare compaction/prune intentionally does NOT touch nodes: the
+				// real surface only moves via surfaceOp. Emulating removal here once
+				// masked the per-step nudge re-prune churn (2026-11-14).
 				return event;
 			},
 			eventAt(seq) { return this.events[seq]; },
@@ -1860,6 +1869,37 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 			await dispatch(listener, sid, 10_000);
 			assert.equal(liveNudges(session).length, 0);
 			assert.equal(pruneEvents(session).length, 1, "the below-line sweep prunes exactly the live nudge");
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
+	test("retiring a nudge pairs the metering prune with a surfaceOp replacement: zero churn afterwards", async () => {
+		const { ctx, hooks, sessions } = nudgeCtx();
+		const cfg = nudgeConfig();
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const sid = "sess-nudge-retire";
+		try {
+			await dispatch(listener, sid, 90_000); // prime the above-line wire (pressure lags one dispatch)
+			await dispatch(listener, sid, 90_000); // the nudge speaks
+			const session = sessions.get(sid);
+			assert.equal(liveNudges(session).length, 1);
+			await dispatch(listener, sid, 10_000); // pressure lags one dispatch: still above-line in-band
+			await dispatch(listener, sid, 10_000); // below-line wire: retire it
+			assert.equal(liveNudges(session).length, 0);
+			assert.equal(pruneEvents(session).length, 1, "one point prune");
+			const pairs = session.events.filter((e) => e?.opts?.surfaceOp?.op === "replace");
+			assert.equal(pairs.length, 1, "the metering prune is paired with a surfaceOp replacement");
+			assert.equal(pairs[0].opts.surfaceOp.startSeq, pairs[0].opts.surfaceOp.endSeq, "point replacement");
+			assert.match(String(pairs[0].data?.id ?? ""), /^trim_retired_nudge_/u);
+			const stubText = pairs[0].data?.content?.[0]?.text ?? "";
+			assert.ok(!stubText.startsWith("[SWITCHMAN:TRIM] Advisory nudge"), "stub escapes nudgeScan signatures");
+			const seqBefore = session.seq;
+			await dispatch(listener, sid, 10_000); // next below-line boundary
+			assert.equal(pruneEvents(session).length, 1, "no duplicate prune on the next boundary");
+			assert.equal(session.events.filter((e) => e?.opts?.surfaceOp?.op === "replace").length, 1, "no duplicate replacement");
+			assert.equal(session.seq, seqBefore, "the retired nudge produces zero per-step churn");
 		} finally {
 			rmSync(cfg.trimStateDir, { recursive: true, force: true });
 		}
