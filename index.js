@@ -34,8 +34,9 @@
  * Teams mode mounts two more layers: host/teams.js carries the team clauses
  * extracted from the cordis.patch.yml suffix in a `[SWITCHMAN:TEAMS]` section
  * (order 10250, injected only while teamsMode is ON) plus the deferred ON
- * orchestration (agent-team bundle enable, then the optional six-pool
- * → DSH whitelist replace-sync); host/subagent-model.js annotates successful
+ * orchestration (agent-team bundle enable, then the optional dispatch-model
+ * union — six pools + modelRank — → DSH whitelist replace-sync);
+ * host/subagent-model.js annotates successful
  * subagent / subagent_fork results with one `model: provider/model@effort`
  * line from the child session's modelSelection projection (the same channel
  * host/vision.js reuses for the per-session vision-state verdict).

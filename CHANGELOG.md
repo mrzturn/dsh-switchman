@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `scripts/dsh-app-source.mjs` now disables the Electron asar shim (`process.noAsar`) under the app's embedded Node, so the validate preset probe can parse the packaged `app.asar` by hand again.
 - 运行在应用内嵌 Node 下时 `scripts/dsh-app-source.mjs` 现会关闭 Electron 的 asar shim（`process.noAsar`），validate 的预设探测得以重新手工解析打包的 `app.asar`。
+- The whitelist replace-sync now includes `modelRank` in the union (the dispatch fallback route is registered only there, and enforce mode denies routes outside "pools or modelRank"); when the DSH installation does not offer the agent-team bundle at all, the enable records a terminal `not-offered` state instead of retrying forever.
+- 白名单同步的并集现在包含 `modelRank`（派发回退路由只在那里登记，enforce 模式会拒绝「池与 modelRank」之外的路由）；DSH 安装完全不提供 agent-team bundle 时，启用动作记录终态 `not-offered`，不再无限重试。
 
 ## [1.11.6] — 2026-11-14
 

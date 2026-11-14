@@ -14,9 +14,10 @@
  *   it never runs synchronously inside plugin apply (bundle changes must not
  *   nest inside the apply HMR transaction — boot/hmr forbids it): first
  *   `pluginManager.setBundleEnabled('@deepseek-ai/dsh-experimental-agent-
- *   team-profile', true)` (latched per process; never disabled on OFF), then
- *   — only when `syncWhitelist` is also ON — one replace-sync of the six-
- *   pool union into DSH's `subagent-model-selection-settings` whitelist
+ *   team-profile', true)` (never disabled on OFF; re-verified every run),
+ *   then — only when `syncWhitelist` is also ON — one replace-sync of the
+ *   dispatch model union (six pools + modelRank) into DSH's
+ *   `subagent-model-selection-settings` whitelist
  *   (`settings.describe()` → `settings.mutate(...)`, re-describing and
  *   retrying up to 3 attempts on SettingsConflictError). Replace semantics:
  *   switchman is the single source of truth, so the deduplicated exact
@@ -111,14 +112,15 @@ function readBool(field) {
 // ---- module state ----------------------------------------------------------
 
 /** Last whitelist replace-sync outcome for routes.js's whitelistSync config
- *  field; null when no sync has run in this process. Shape:
+ *  field; null when no sync has run in this process. The synced set is the
+ *  dispatch model union (six pools + modelRank). Shape:
  *  { ok: boolean, count: number, at: number, error?: string }. */
 let lastSync = null;
 
 /** Last bundle-ensure outcome for routes.js's teamsBundle field; null before
  *  the first orchestration. Shape: { ok, at, state, error? } with state in
- *  selected | applied | restart-required | failed | cancelled | <unknown
- *  application value> | unavailable. */
+ *  selected | applied | restart-required | not-offered | failed | cancelled
+ *  | <unknown application value> | unavailable. */
 let lastBundleState = null;
 
 /** Set when a run must be retried from a clean context: either it was
@@ -147,16 +149,35 @@ function isNestedHmrError(error) {
 	return /cannot be nested/iu.test(String(error?.message ?? ""));
 }
 
-/** Deduplicated exact (provider, model) union of the six pools. Exact string
- *  identity (trimmed) — DSH's whitelist authorizes exact pairs and its
+/** Deduplicated exact (provider, model) union of the six pools PLUS
+ *  modelRank. modelRank belongs in the whitelist union: its head is the
+ *  dispatch fallback route (orderedPool head / modelRank[0] in dispatch.js),
+ *  enforce mode denies any route outside "pools or modelRank", and a
+ *  rank-only head would otherwise leave subagent dispatch unable to name
+ *  its own fallback (the whitelist silently strips it). Rank entries are
+ *  { provider, model, tier? }; tier is ignored here. Exact string identity
+ *  (trimmed) — DSH's whitelist authorizes exact pairs and its
  *  assertAllowedModelRoutes rejects repeated provider/model routes outright. */
-function poolUnion(config) {
+function dispatchModelUnion(config) {
 	const seen = new Set();
 	const routes = [];
 	for (const lane of LANES) {
 		const raw = readValue(config?.[laneField(lane)]);
 		if (!Array.isArray(raw)) continue;
 		for (const entry of raw) {
+			if (entry === null || typeof entry !== "object") continue;
+			const provider = typeof entry.provider === "string" ? entry.provider.trim() : "";
+			const model = typeof entry.model === "string" ? entry.model.trim() : "";
+			if (provider === "" || model === "") continue;
+			const key = `${provider}\u0000${model}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			routes.push({ provider, model });
+		}
+	}
+	const rank = readValue(config?.modelRank);
+	if (Array.isArray(rank)) {
+		for (const entry of rank) {
 			if (entry === null || typeof entry !== "object") continue;
 			const provider = typeof entry.provider === "string" ? entry.provider.trim() : "";
 			const model = typeof entry.model === "string" ? entry.model.trim() : "";
@@ -183,8 +204,11 @@ function poolUnion(config) {
  *  before reload can throw). There is deliberately NO process-level success
  *  latch — the DSH-side toggle can be flipped off at any time, so every
  *  orchestration re-verifies via listBundles and re-enables when needed.
- *  A missing pluginManager service only warns; the doctrine section still
- *  renders, the tools simply stay absent. */
+ *  A bundle this DSH installation does not offer at all (absent from the
+ *  listBundles inventory) is terminal, not a failure: enabling it could
+ *  never succeed, so the orchestration records not-offered once and does
+ *  not arm a retry. A missing pluginManager service only warns; the
+ *  doctrine section still renders, the tools simply stay absent. */
 async function ensureTeamsBundle(ctx) {
 	const manager = ctx.get?.("pluginManager", false);
 	if (manager === undefined || manager === null || typeof manager.setBundleEnabled !== "function") {
@@ -198,6 +222,28 @@ async function ensureTeamsBundle(ctx) {
 			const selected = Array.isArray(bundles)
 				? bundles.find((item) => item?.name === TEAMS_BUNDLE)
 				: undefined;
+			if (selected === undefined) {
+				// Not in the inventory at all. listBundles enumerates the manifest
+				// selection ∪ recorded dependencies ∪ the installation manifest ∪
+				// the official on-demand catalog; app-boot strips retired bundles
+				// from the manifest, and bundleManifest() resolves packages only
+				// from those same sources. A name absent from all of them cannot
+				// be enabled — DSH's toggle would resolve application:'failed'
+				// (not-bundle) on every attempt — so record the terminal state
+				// once and leave pendingNestedRetry untouched (no retry loop
+				// against a fact; a future DSH update that ships the bundle
+				// re-enters this function at the next orchestration trigger).
+				lastBundleState = {
+					ok: false,
+					at: Date.now(),
+					state: "not-offered",
+					error: TEAMS_BUNDLE + " is not offered by this DSH installation"
+						+ " (absent from the profile manifest, dependencies, and the"
+						+ " official catalog); enable skipped",
+				};
+				ctx.logger?.warn?.("dsh-switchman: agent-team bundle not offered by this installation; enable skipped (teams tools stay absent)");
+				return;
+			}
 			if (selected?.enabled === true) {
 				// Already selected in the profile manifest: no call, no reload —
 				// and deliberately NO process-level latch. The user may flip the
@@ -246,12 +292,12 @@ async function ensureTeamsBundle(ctx) {
 	}
 }
 
-/** One replace-sync of the six-pool union into the DSH whitelist. describe →
+/** One replace-sync of the dispatch model union into the DSH whitelist. describe →
  *  mutate with the fresh revision; SettingsConflictError retries (re-describe
  *  first) up to MAX_MUTATE_ATTEMPTS total. Every terminal outcome lands in
  *  the module-level lastSync status; nothing throws. */
 async function syncWhitelist(ctx, config) {
-	const routes = poolUnion(config);
+	const routes = dispatchModelUnion(config);
 	if (routes.length === 0) {
 		// DSH's invariant: enabled=true with an empty allowedModels breaks
 		// every new session's composition — skipping is the only safe move.
@@ -259,7 +305,7 @@ async function syncWhitelist(ctx, config) {
 			ok: false,
 			count: 0,
 			at: Date.now(),
-			error: "six-pool union is empty; sync skipped (enabled=true requires a non-empty allowedModels)",
+			error: "dispatch model union (six pools + modelRank) is empty; sync skipped (enabled=true requires a non-empty allowedModels)",
 		};
 		ctx.logger?.warn?.(`dsh-switchman: whitelist sync skipped: ${lastSync.error}`);
 		return;
@@ -583,4 +629,4 @@ function applyTeams(ctx, config) {
 	syncChildMessageTool();
 }
 
-export { applyTeams, pumpTeamsOrchestration, SWITCHMAN_SETTINGS_NS, TEAMS_SECTION_TEXT, scheduleTeamsOrchestration, teamsBundleState, teamsSyncSnapshot };
+export { applyTeams, dispatchModelUnion, ensureTeamsBundle, pumpTeamsOrchestration, SWITCHMAN_SETTINGS_NS, TEAMS_SECTION_TEXT, scheduleTeamsOrchestration, teamsBundleState, teamsSyncSnapshot };

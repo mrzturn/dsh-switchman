@@ -174,12 +174,16 @@ export const Config = z.object({
 	 *  policy takes over); the bundle is never disabled and the whitelist is
 	 *  never cleared. */
 	teamsMode: z.boolean().default(false).volatile(),
-	/** Replace-sync the six-pool union into DSH's subagent model-selection
-	 *  whitelist (`subagent-model-selection-settings`) whenever the teams
+	/** Replace-sync the dispatch model union (the six pools plus modelRank)
+	 *  into DSH's subagent model-selection whitelist
+	 *  (`subagent-model-selection-settings`) whenever the teams
 	 *  orchestration runs — an INDEPENDENT switch: it does not require
 	 *  teamsMode, and teamsMode alone does not sync. switchman is the single
 	 *  source of truth: the deduplicated union overwrites allowedModels
-	 *  wholesale. The whitelist only applies to top-level sessions composed
+	 *  wholesale. modelRank belongs in the union because its head is the
+	 *  dispatch fallback route and enforce mode denies anything outside
+	 *  "pools or modelRank" — leaving it out would strand that route.
+	 *  The whitelist only applies to top-level sessions composed
 	 *  afterwards. */
 	syncWhitelist: z.boolean().default(false).volatile(),
 
