@@ -35,7 +35,7 @@
 import { execFile as execFileCb } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, copyFile, mkdir, open, rm } from "node:fs/promises";
+import { access, copyFile, mkdir, open, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { dshHome } from "./lib/dsh-home.js";
@@ -141,7 +141,19 @@ async function materializeImage(store, ref, warn) {
 		if (await exists(dst)) return { path: dst };
 		try {
 			await mkdir(dir, { recursive: true });
-			await copyFile(src, dst);
+			// Copy to a temp name and rename into place: copyFile interrupted
+			// mid-write (ENOSPC, process exit) must not leave a partial dst
+			// that the exists() cache above would serve forever (the same
+			// corrupt-cache invariant looksLikePng guards on the transcode
+			// path). rename is atomic on the same directory.
+			const tmp = `${dst}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
+			try {
+				await copyFile(src, tmp);
+				await rename(tmp, dst);
+			} catch (error) {
+				await drop(tmp);
+				throw error;
+			}
 			return { path: dst };
 		} catch (error) {
 			warn(`vision: native copy failed (${error?.message ?? error})`);
@@ -184,7 +196,16 @@ async function materializeImage(store, ref, warn) {
 	const ext = FALLBACK_EXT.get(String(ref?.mediaType ?? "").toLowerCase()) ?? "img";
 	const raw = join(dir, `${hash}.${ext}`);
 	try {
-		await copyFile(src, raw);
+		// Same partial-file guard as the native path above: the fallback
+		// copy must not leave a half-written ${hash}.${ext} behind either.
+		const tmp = `${raw}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
+		try {
+			await copyFile(src, tmp);
+			await rename(tmp, raw);
+		} catch (error) {
+			await drop(tmp);
+			throw error;
+		}
 		warn(`vision: no PNG converter available; kept ${ref?.mediaType} copy at ${raw}`);
 		return {
 			path: raw,

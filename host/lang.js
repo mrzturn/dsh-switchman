@@ -55,10 +55,12 @@ const PROJECT_FILE = "lang.json";
 /** How long a cached settings-describe locale stays fresh (ms). */
 const LOCALE_CACHE_MS = 10_000;
 
-/** Normalize one language value: trim and bound the length; anything else → null. */
+/** Normalize one language value: trim, collapse internal whitespace (newlines
+ *  would break the single-line [SWITCHMAN:LANG] anchor and could smuggle extra
+ *  protocol lines into the system prompt), bound the length; anything else → null. */
 function normalizeLangValue(value) {
 	if (typeof value !== "string") return null;
-	const trimmed = value.trim();
+	const trimmed = value.trim().replace(/\s+/gu, " ");
 	if (trimmed.length === 0 || trimmed.length > MAX_LANG_LEN) return null;
 	return trimmed;
 }

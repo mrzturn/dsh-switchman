@@ -267,18 +267,18 @@ export const Config = z.object({
 	trimIncrementTokens: z.number().min(1000).default(45000).volatile(),
 	/** Pressure tier (tier b): fold when view usage reaches this percent of
 	 *  the context window (requires a resolvable window; otherwise skipped). */
-	trimPressurePercent: z.number().min(1).max(100).default(45).volatile(),
+	trimPressurePercent: z.number().min(5).max(100).default(45).volatile(),
 	/** Emergency tier (tier c): forced MECHANICAL fold (no side-model call)
 	 *  at this percent of the window; cooldown-gated. */
-	trimEmergencyPercent: z.number().min(1).max(100).default(90).volatile(),
+	trimEmergencyPercent: z.number().min(5).max(100).default(90).volatile(),
 	/** Advisory mode speak line: the model is nudged to fold when pressure
 	 *  reaches this percent of the window (default sits below the protocol's
 	 *  own 80% fold line, nudging while folding headroom is still comfortable). */
-	trimAdvisoryPercent: z.number().min(1).max(100).default(50).volatile(),
+	trimAdvisoryPercent: z.number().min(5).max(100).default(50).volatile(),
 	/** Advisory mode escalation line: at this percent the nudge escalates to a
 	 *  fold-down-this-turn order; must stay above trimAdvisoryPercent (an
 	 *  inverted or out-of-range pair falls back to 50/80). */
-	trimAdvisoryCriticalPercent: z.number().min(1).max(100).default(80).volatile(),
+	trimAdvisoryCriticalPercent: z.number().min(5).max(100).default(80).volatile(),
 	/** [2026-11-15]-[advisory critical relief fold]-[at the critical advisory
 	 *  line the engine itself performs ONE mechanical (emergency-style) fold,
 	 *  90 s cooldown (EMERGENCY_COOLDOWN_MS), instead of only nudging — the

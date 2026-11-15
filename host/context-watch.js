@@ -154,8 +154,9 @@ export function measureNow(ctx, agent) {
 		// longer receives — high bias), while the bare view never counts the
 		// system/tool sections (low bias). max(view, wire) fixes both and puts
 		// the watermark tiers (soft/hard/force + read budget) on the SAME
-		// boundary as the fold engine — wmHardTokens 95k ≈ trim pressure
-		// 97.5k (65% of the 150k window) — holds in units, not just in
+		// boundary as the fold engine — wmHardTokens 100k = trimAdvisoryPercent
+		// 50% × the 200k cap, and wmForceTokens 200k = the cap itself — holds
+		// in units, not just in
 		// numbers. Strictly additive +
 		// fail-open: any trim failure falls back to the stored measure.
 		try {
@@ -207,7 +208,11 @@ const PAUSED_LINE =
 function renderRootWatermark(level, status) {
 	if (level === "ok") return "";
 	if (level === "soft") return "[SWITCHMAN:WATERMARK] soft tier: prefer delegating lightweight work (subagent/workflow) over reading more context yourself.";
-	if (level === "hard") return "[SWITCHMAN:WATERMARK] hard tier: stop broad reading (read/glob/grep are budget-limited this turn) and start wrapping up.";
+	if (level === "hard")
+		return (
+			"[SWITCHMAN:WATERMARK] hard tier: stop broad reading (read/glob/grep are budget-limited this turn) and start wrapping up. " +
+			"If a fold or handover was committed within the last turn, this tier may reflect pre-fold pressure — the next turn carries the reduced history; do not re-verify with broad reads."
+		);
 	const lines = ["[SWITCHMAN:WATERMARK] force tier: MANDATORY wrap-up now — produce the final answer from what you already hold."];
 	const phase = status?.phase;
 	if (phase === "backup") {
@@ -904,7 +909,7 @@ function applyContextWatch(ctx, config) {
 			if (sessionId !== null && ACCOUNT_TOOLS.has(exec?.name ?? "")) {
 				const entry = accountRead(state, sessionId, resultTokens(result));
 				if (GATED_TOOLS.has(exec.name) && !state.paused.has(sessionId)) {
-					const budget = readNumber(config.wmReadBudgetTokens, 3000);
+					const budget = readNumber(config.wmReadBudgetTokens, 3500);
 					const ceiling = budget * CEILING_MULTIPLE;
 					const used = measureNow(ctx, exec.agent);
 					const th = readThresholds(config);
@@ -950,7 +955,7 @@ function applyContextWatch(ctx, config) {
 			if (!GATED_TOOLS.has(exec?.name ?? "")) return next();
 			const sessionId = sessionIdOf(exec?.agent);
 			if (sessionId === null || state.paused.has(sessionId)) return next();
-			const budget = readNumber(config.wmReadBudgetTokens, 3000);
+			const budget = readNumber(config.wmReadBudgetTokens, 3500);
 			if (turnUsed(state, sessionId) < budget * CEILING_MULTIPLE) return next();
 			const used = measureNow(ctx, exec.agent);
 			if (used === null) return next();

@@ -196,7 +196,7 @@ window.__ModuleLoader__.load({
 		const WM_NUMBER_FIELDS = [
 			{ field: 'wmSoftTokens', min: 1000, max: 10000000, def: 80000 },
 			{ field: 'wmHardTokens', min: 2000, max: 10000000, def: 100000 },
-			{ field: 'wmForceTokens', min: 3000, max: 10000000, undefined },
+			{ field: 'wmForceTokens', min: 3000, max: 10000000, def: 200000 },
 			{ field: 'wmReadBudgetTokens', min: 200, max: 10000000, def: 3500 },
 			{ field: 'wmSubagentForceTokens', min: 0, max: 10000000, def: 0 },
 			{ field: 'wmSubagentWindowRatio', min: 0.1, max: 1, def: 0.75 },
@@ -4193,8 +4193,30 @@ window.__ModuleLoader__.load({
 		 * Polls the Host trim-pressure route every 15s; disabled trim, an
 		 * unknown window, or any fetch failure renders null (fail-silent).
 		 * Pure display — no interactive controls. */
-		function TrimDockEntry({ t, sessionId }) {
+		function TrimDockEntry({ t, sessionId, useProjection }) {
 			const [snap, setSnap] = React.useState(null);
+			// Realtime trigger ([2026-11-15] user report: after a fold ships the chip
+			// kept the pre-fold percentage for up to one 15s poll — the Host snapshot
+			// recomputes per request, so the lag was entirely client-side). The
+			// contextPressure projection face folds EVERY surface event, including
+			// the trim engine's fold-commit replacements, so its value changes the
+			// moment a fold lands; it is also stable-primitive-safe to observe with
+			// useSyncExternalStore (the shipped ContextMeter does exactly this).
+			// Subscribing to that face makes the poll loop fetch immediately on
+			// each pressure change (fold commit AND normal turn growth) and keeps
+			// the 15s timer only as the drift fallback (cooldown countdown, model
+			// window changes — inputs the projection does not see).
+			const projectionHook =
+				typeof useProjection === 'function' ? useProjection : () => undefined;
+			const pressureFace = projectionHook('contextPressure');
+			const pressureSignal =
+				pressureFace == null
+					? null
+					: `${pressureFace.projectedTokens ?? pressureFace.pressureTokens ?? ''}|${pressureFace.contextWindow ?? ''}`;
+			const [pulse, setPulse] = React.useState(0);
+			React.useEffect(() => {
+				setPulse((n) => n + 1);
+			}, [pressureSignal]);
 			React.useEffect(() => {
 				let stopped = false;
 				let timer = null;
@@ -4242,7 +4264,7 @@ window.__ModuleLoader__.load({
 					stopped = true;
 					if (timer !== null) clearTimeout(timer);
 				};
-			}, [sessionId]);
+			}, [sessionId, pulse]);
 			if (snap === null) return null;
 			// Same dock-column formula as the sibling chips: keep the chip's
 			// left edge tracking the centered composer card.

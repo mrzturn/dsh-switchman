@@ -523,8 +523,9 @@ export function ledgerFoldedTokens(messages, ledger) {
 }
 
 /** Ladder census of one ledger: the ACTIVE tier-1 and tier-2 populations
- * (id + summary mass estimate + approxTokens) the trigger and the ladder
- * ship pass read. Pure; never throws. */
+ * (id + summary mass estimate + approxTokens). Test/inspection helper —
+ * NOT read by the trigger: production uses index.js ladderRunsOf, which
+ * also collects tier-3 runs for T3 planning. Pure; never throws. */
 export function ladderCensusOf(ledger, countTokens = null) {
 	const estimate = typeof countTokens === "function"
 		? countTokens

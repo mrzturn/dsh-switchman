@@ -330,6 +330,28 @@ const CLIENT_SOURCE = readFileSync(fileURLToPath(new URL("../client.js", import.
 assert.match(CLIENT_SOURCE, /ctx\.locale\.register\(/u, "client.js must register its locale namespace");
 assert.match(CLIENT_SOURCE, /ctx\.locale\.bind\(/u, "client.js must bind its locale namespace");
 
+// --- bundled capability snapshot: parseable and non-empty ------------------
+// host/lib/rank.js serves pool ordering from host/data/capability-default.json
+// and degrades SILENTLY to an empty table on any read/parse failure (warn
+// once, pools keep configured order) — so a corrupt or emptied snapshot can
+// ship without any other gate going red. Assert here instead: the file must
+// parse and yield at least one model entry; rank's own unit tests cover the
+// scoring semantics.
+const CAPABILITY_JSON = fileURLToPath(new URL("../host/data/capability-default.json", import.meta.url));
+assert.ok(existsSync(CAPABILITY_JSON), "host/data/capability-default.json is missing");
+const capabilityData = JSON.parse(readFileSync(CAPABILITY_JSON, "utf8"));
+assert.equal(
+	typeof capabilityData.models,
+	"object",
+	"capability-default.json must carry a models table",
+);
+assert.ok(
+	capabilityData.models !== null &&
+		!Array.isArray(capabilityData.models) &&
+		Object.keys(capabilityData.models).length > 0,
+	"capability-default.json models table must not be empty (rank silently degrades to no capability tiers)",
+);
+
 // --- bundled skills: same parse subset as index.js, shape + assets intact ---
 const INDEX_SOURCE = readFileSync(fileURLToPath(new URL("../index.js", import.meta.url)), "utf8");
 assert.match(INDEX_SOURCE, /inject\s*=\s*\[[^\]]*"skills"/u, "index.js must inject the skills service");
@@ -408,13 +430,13 @@ for (const level of ["soft", "hard", "force"]) {
 		const b = cw.renderRootWatermark(level, status);
 		assert.equal(a, b, `renderRootWatermark(${level}) must be deterministic`);
 		assert.ok(a.length > 0, `${level} tier must render a live root line`);
-		assert.doesNotMatch(a, /%|~\d+k|of budget|\d+ min/u, `renderRootWatermark(${level}) must stay number-free`);
+		assert.doesNotMatch(a, /\d/u, `renderRootWatermark(${level}) must stay number-free (same invariant as the byte-stable head)`);
 	}
 	const s1 = cw.renderSubWatermark(level);
 	const s2 = cw.renderSubWatermark(level);
 	assert.equal(s1, s2, `renderSubWatermark(${level}) must be deterministic`);
 	assert.ok(s1.length > 0, `${level} tier must render a live sub line`);
-	assert.doesNotMatch(s1, /%|~\d+k|of budget|\d+ min/u, `renderSubWatermark(${level}) must stay number-free`);
+	assert.doesNotMatch(s1, /\d/u, `renderSubWatermark(${level}) must stay number-free (same invariant as the byte-stable head)`);
 }
 const cwSource = readFileSync(fileURLToPath(new URL("../host/context-watch.js", import.meta.url)), "utf8");
 assert.match(cwSource, /ctx\.systemPrompt\.context\(\s*\{/u, "watermark must register the tail runtime-context channel");

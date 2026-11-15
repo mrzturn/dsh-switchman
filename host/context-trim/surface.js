@@ -1334,7 +1334,11 @@ export function createSurfaceFoldPass(deps = {}) {
 				const sessionId = sessionIdOfAgent(payload?.agent);
 				if (sessionId === null) return;
 				const hint = payload?.agent !== null && typeof payload?.agent === "object" ? payload.agent.session : null;
-				void sweep(sessionId, "turn-stopping", hint);
+				void sweep(sessionId, "turn-stopping", hint).catch(() => {
+					/* sweep is fire-and-forget on this boundary; a rejection must not
+					   surface as an unhandledRejection (the listener's own try only
+					   covers synchronous throws — async rejects bypass it). */
+				});
 			} catch {
 				/* listener must never throw */
 			}

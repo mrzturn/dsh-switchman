@@ -577,7 +577,11 @@ export function applyContextTrim(ctx, config) {
 					return;
 				}
 				advisoryNudgeBySession.delete(sessionId);
-				decisionLog("advisory-nudge below-line pressure=" + Math.round(pressurePercent) + "% mass=" + Math.round(mass) + " resolved=" + cached.windowTokens + " cap=" + windowCapNow() + " pruned=" + seqs.size);
+				// Log the resolved denominator (cap fallback included), not
+				// cached.windowTokens — on a cache miss `cached` is undefined
+				// here and this row threw after a successful prune
+				// (2026-11-15T02:28:12Z advisory-nudge-failed).
+				decisionLog("advisory-nudge below-line pressure=" + Math.round(pressurePercent) + "% mass=" + Math.round(mass) + " resolved=" + resolvedWindow + " cap=" + windowCapNow() + " pruned=" + seqs.size);
 			} else if (prior !== undefined) {
 				advisoryNudgeBySession.delete(sessionId); // nothing visible left; close the episode quietly
 			}
@@ -890,14 +894,18 @@ export function applyContextTrim(ctx, config) {
 	const thresholdsNow = () => ({
 		growthTokens: readNumber(config, "trimGrowthTokens", 22_500),
 		incrementTokens: readNumber(config, "trimIncrementTokens", 45_000),
+		// Count-typed fields integerize here (Math.round): the schema allows
+		// decimals (z.number()), but trigger.js gates them with Number.isInteger
+		// — a non-integer config value would otherwise fall back to the
+		// hard-coded default silently (convention mismatch, F6).
 		pressurePercent: readNumber(config, "trimPressurePercent", 45),
 		emergencyPercent: readNumber(config, "trimEmergencyPercent", 90),
-		protectedTail: Math.max(0, Math.round(readNumber(config, "trimProtectedTail", 10))),
-		maxFoldsPerHour: readNumber(config, "trimMaxFoldsPerHour", 30),
+		protectedTail: Math.max(0, Math.round(readNumber(config, "trimProtectedTail", 6))),
+		maxFoldsPerHour: Math.max(1, Math.round(readNumber(config, "trimMaxFoldsPerHour", 30))),
 		ladderT2Tokens: readNumber(config, "trimLadderT2Tokens", 8_000),
-		ladderT2MinBlocks: readNumber(config, "trimLadderT2MinBlocks", 3),
+		ladderT2MinBlocks: Math.max(2, Math.round(readNumber(config, "trimLadderT2MinBlocks", 3))),
 		ladderT3Tokens: readNumber(config, "trimLadderT3Tokens", 6_000),
-		ladderT3MinBlocks: readNumber(config, "trimLadderT3MinBlocks", 2),
+		ladderT3MinBlocks: Math.max(2, Math.round(readNumber(config, "trimLadderT3MinBlocks", 2))),
 		protectTaskIntent: readBool(config, "trimProtectTaskIntent", true),
 	});
 	const ladderEnabledNow = () => readBool(config, "trimLadderEnabled", true);
@@ -1353,8 +1361,11 @@ export function applyContextTrim(ctx, config) {
 		// for 60s*2^(n-1) (cap 15 min) instead of re-firing at every idle
 		// boundary and stream check. Silent gate — the outcome row that armed
 		// the cooldown is already in decisions.log.
-		if (foldFailureCooldownOf(sessionId) > 0) return;
-		debug(`session=${sessionId} via=${via} skip failure-backoff remaining=${foldFailureCooldownOf(sessionId)}ms`);
+		const failureCooldown = foldFailureCooldownOf(sessionId);
+		if (failureCooldown > 0) {
+			debug(`session=${sessionId} via=${via} skip failure-backoff remaining=${failureCooldown}ms`);
+			return;
+		}
 		const capture = captures.get(sessionId);
 		if (capture === undefined) {
 			debug(`session=${sessionId} via=${via} skip no-capture`);
@@ -1484,7 +1495,12 @@ export function applyContextTrim(ctx, config) {
 					} catch {
 						/* sweep must never break the idle hook */
 					}
-				});
+						}).catch((error) => {
+							// Parity with the stream path: maybeFold is catch-total by design,
+							// but a dispose-cut throw or a future regression must not become
+							// an unhandled rejection on the void'd chain.
+							errorLog("fold-idle", error);
+						});
 			} catch {
 				/* idle hook must never throw */
 			}
@@ -1800,7 +1816,20 @@ export function applyContextTrim(ctx, config) {
 					if (nowMs - (lastStreamCheckAt.get(wrappedSession) ?? 0) >= 60_000) {
 						lastStreamCheckAt.set(wrappedSession, nowMs);
 						if (lastStreamCheckAt.size > 200) lastStreamCheckAt.delete(lastStreamCheckAt.keys().next().value);
-						void maybeFold(wrappedSession, "stream").finally(() => surfacePass.sweep(wrappedSession, "stream"));
+						void maybeFold(wrappedSession, "stream").finally(() => {
+							try {
+								void surfacePass.sweep(wrappedSession, "stream");
+							} catch (error) {
+								errorLog("surface-sweep-stream", error);
+							}
+						}).catch((error) => {
+							// maybeFold never rejects by design (its own catch is total), but a
+							// dispose-cut throw or a future regression must not become an
+							// unhandled rejection: the .finally here chains the sweep, so the
+							// void'd chain needs its own terminal handler (parity with the
+							// fold-commit sweep's .catch below).
+							errorLog("fold-stream", error);
+						});
 					}
 				}
 			} catch (error) {
@@ -1812,6 +1841,7 @@ export function applyContextTrim(ctx, config) {
 
 	try {
 		ctx.inject(["llm"], (llmCtx) => {
+			const disposeListenerOf = new Map(); // "llm/stream" -> the on() disposer of the current attach
 			const attach = () => {
 				try {
 					// Global + prepend: the cordis dispatch filter silently drops NON-global
@@ -1820,8 +1850,19 @@ export function applyContextTrim(ctx, config) {
 					// subtree) — that silenced the whole stream path for a resumed session
 					// while fresh sessions kept logging. Stock consumers (dsh-session-title)
 					// register exactly this way.
-					llmCtx.on?.("llm/stream", streamListener, { global: true, prepend: true });
-					decisionLog(`llm-attached hasOn=${typeof llmCtx.on} hasOff=${typeof llmCtx.off} hasEffect=${typeof llmCtx.effect} pid=${process.pid}`);
+					// [2026-11-15]-[llm-attach diagnostics proxy trap]: reading llmCtx.off
+					// through the context proxy THROWS on the cordis build the harness
+					// ships (the events mixin exposes on/once/emit/… but NOT off —
+					// vendor/cordis/src/reflect.ts get-trap: `cannot get property "off"
+					// without inject`). `?.` cannot defend against a throwing getter, so
+					// the old SUCCESS row itself raised, landed as llm-attach-failed, and
+					// the true success line vanished (2026-11-15 06:29Z). on()'s returned
+					// disposer is the unsubscribe API; off never existed here.
+					const disposeListener = llmCtx.on?.("llm/stream", streamListener, { global: true, prepend: true });
+					disposeListenerOf.set("llm/stream", disposeListener);
+					let hasOff = false;
+					try { hasOff = typeof llmCtx.off === "function"; } catch { hasOff = false; }
+					decisionLog(`llm-attached hasOn=${typeof llmCtx.on} hasOff=${hasOff} hasDisposer=${typeof disposeListener} hasEffect=${typeof llmCtx.effect} pid=${process.pid}`);
 				} catch (error) {
 					warn(`[context-trim] llm/stream attach failed: ${error?.message ?? error}`);
 					decisionLog(`llm-attach-failed why=${error?.message ?? error}`);
@@ -1834,14 +1875,21 @@ export function applyContextTrim(ctx, config) {
 				const effect = llmCtx.effect;
 				if (typeof effect === "function") {
 					effect(function* () {
-						yield () => {
-							try {
-								llmCtx.off?.("llm/stream", streamListener);
-							} catch {
-								/* best effort */
-							}
-						};
-					}, "context-trim-stream-listener");
+					yield () => {
+						try {
+							// The on() disposer is the only real unsubscribe: ctx.off is not
+							// exposed by this cordis build (see the attach comment above) — the
+							// old llmCtx.off?.() call threw on EVERY reload teardown and the
+							// cleanup silently never ran (fiber-unload auto-dispose was the
+							// only thing that actually removed the listener).
+							const dispose = disposeListenerOf.get("llm/stream");
+							disposeListenerOf.delete("llm/stream");
+							if (typeof dispose === "function") dispose();
+						} catch {
+							/* best effort */
+						}
+					};
+				}, "context-trim-stream-listener");
 				}
 			} catch {
 				/* effect registration is best-effort */
