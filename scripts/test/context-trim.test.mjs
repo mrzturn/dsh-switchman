@@ -1519,6 +1519,9 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		assert.match(critical, /97% ≥ 80%/u);
 		assert.notEqual(critical, high);
 		assert.notEqual(advisoryNudgeText(84, false), high, "different pressures render differently");
+		assert.match(high, /FOLD FIRST/u);
+		assert.match(high, /waits until pressure is back under the fold line/u);
+		assert.match(critical, /FOLD FIRST/u);
 	});
 
 	test("nudges once at the fold line on the surface tail, then stays quiet in-band", async () => {

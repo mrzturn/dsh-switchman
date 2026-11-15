@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 白名单同步的并集现在包含 `modelRank`（派发回退路由只在那里登记，enforce 模式会拒绝「池与 modelRank」之外的路由）；DSH 安装完全不提供 agent-team bundle 时，启用动作记录终态 `not-offered`，不再无限重试。
 
 ### Changed
+- Advisory nudges now lead with a FOLD FIRST preemption clause: the model must fold before continuing queued work unless the current step genuinely cannot be resumed mid-flight; defer means fold at the first safe pause, not at task end.
 - Advisory critical relief fold: at the critical advisory line the engine performs one mechanical (emergency-style) fold itself (90 s cooldown, new `trimCriticalRelief` switch, default on) instead of only nudging — the turn-25 incident (nudges ignored, 74%→99% in 28 minutes) burned the window down to host compaction.
 - Advisory nudge lines recalibrated 65/95 → 50/80: the speak line arrives earlier, the critical line now matches the live profile.
 - Advisory 提醒线重校准 65/95 → 50/80：提醒到达更早，critical 线与实机配置对齐。

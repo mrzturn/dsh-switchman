@@ -393,6 +393,7 @@ export function advisoryNudgeText(pressurePercent, critical, foldLine = ADVISORY
 	return [
 		'[SWITCHMAN:TRIM] Advisory nudge — pinned to the session tail until pressure falls below the fold line.',
 		`Live context pressure on this session has reached the fold line. ${action}`,
+		"FOLD FIRST: treat this nudge as a preemption, not background advice. Finish the current tool call if (and only if) aborting it mid-flight would leave broken state; otherwise interrupt the task queue and fold before continuing. Every queued step, plan item and pending subtask waits until pressure is back under the fold line. The only valid excuse to defer is a task that genuinely cannot be resumed after an interruption — and even then, fold at the first safe pause rather than at task end.",
 		"Act now: call ctx_trim_status to list compressible ranges, pick one contiguous range, and fold it with ctx_trim_fold (tool-call pairs fold together or not at all; existing summaries stay). If run_code is your only directly callable tool, run both inside a program: await tools.ctx_trim_status({}) then await tools.ctx_trim_fold({ firstId, lastId, count, summary }). Do not wait for a routine moment.",
 	].join("\n");
 }
