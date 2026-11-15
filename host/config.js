@@ -286,6 +286,13 @@ export const Config = z.object({
 	 *  burned the window down to host compaction. Off restores nudge-only
 	 *  advisory mode.] */
 	trimCriticalRelief: z.boolean().default(true).volatile(),
+	/** [2026-11-15]-[verbose debug log]-[the turn-25 + window-unknown
+	 *  incidents both hid inside silent gates that outcomes-only logging
+	 *  cannot see. On, every engine step, gate evaluation and decision path
+	 *  writes a debug row to decisions.log; off keeps the key decision rows
+	 *  only. Exceptions log full detail (message + stack frames) regardless
+	 *  of this switch.] */
+	trimVerboseLog: z.boolean().default(false).volatile(),
 	/** [2026-11-07]-[growth/increment constants are absolute tokens
 	 *  calibrated for the default 150k effective window]-[scaling
 	 *  trimWindowTokens down without scaling trimGrowthTokens /

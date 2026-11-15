@@ -153,6 +153,7 @@ const BOOLEAN_FIELDS = [
 	"trimLadderEnabled",
 	"trimProtectTaskIntent",
 	"trimCriticalRelief",
+	"trimVerboseLog",
 	"surfaceFold",
 ];
 /** Intent numbers carry their own schema bounds (config.js), so a

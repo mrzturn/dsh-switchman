@@ -514,7 +514,10 @@ export function applyContextTrim(ctx, config) {
 	 * cache reuse survives up to the nudge instead of invalidating the whole
 	 * prefix as the old system-head splice did. */
 	function deliverAdvisoryNudge(sessionId, viewTokens) {
-		if (modeNow() !== "advisory") return;
+		if (modeNow() !== "advisory") {
+			debug(`nudge skip mode=${modeNow()} session=${sessionId}`);
+			return;
+		}
 		const model = capturedModelBySession.get(sessionId) ?? null;
 		if (model === null) {
 			decisionLog("advisory-nudge skip why=no-captured-model");
@@ -553,7 +556,10 @@ export function applyContextTrim(ctx, config) {
 		}
 		const wire = wireTokensOf(sessionId);
 		const mass = Math.max(Number.isFinite(wire) ? wire : 0, Number.isFinite(viewTokens) ? viewTokens : 0);
-		if (mass <= 0) return;
+		if (mass <= 0) {
+			debug(`nudge skip empty-mass session=${sessionId}`);
+			return;
+		}
 		const pressurePercent = (mass / windowTokens) * 100;
 		const nudgeLines = advisoryNudgeLines(config);
 		const prior = advisoryNudgeBySession.get(sessionId);
@@ -636,6 +642,7 @@ export function applyContextTrim(ctx, config) {
 				}
 			})();
 		} else if (critical) {
+			debug(`relief gate held pressure=${Math.round(pressurePercent)}% session=${sessionId}`);
 			// Audible silence ([2026-11-15]-[relief skip diagnostics]): the turn-25
 			// incident hid here — a session sat at 81-125% critical while the gate
 			// held, and the only trace was a two-hour view-applied reconciliation.
@@ -644,7 +651,8 @@ export function applyContextTrim(ctx, config) {
 			if (now - (reliefSkipLogAt.get(sessionId) ?? 0) >= 60_000) {
 				reliefSkipLogAt.set(sessionId, now);
 				if (reliefSkipLogAt.size > 200) reliefSkipLogAt.delete(reliefSkipLogAt.keys().next().value);
-				const why = !reliefEnabledNow() ? "relief-disabled"
+				debug(`relief gate detail enabled=${reliefEnabledNow()} cycle=${inFlight.has(sessionId)} capture=${captures.has(sessionId)} sinceLast=${now - (reliefBySession.get(sessionId) ?? 0)}ms session=${sessionId}`);
+			const why = !reliefEnabledNow() ? "relief-disabled"
 					: inFlight.has(sessionId) ? "cycle-in-flight"
 					: !captures.has(sessionId) ? "no-capture"
 					: "cooldown";
@@ -653,7 +661,10 @@ export function applyContextTrim(ctx, config) {
 		}
 		// Any band CHANGE re-speaks immediately: escalation high->critical, and
 		// intentionally also a downgrade back into high after a partial fold.
-		if (prior !== undefined && prior.critical === critical && now - prior.at < ADVISORY_NUDGE_REPEAT_MS) return;
+		if (prior !== undefined && prior.critical === critical && now - prior.at < ADVISORY_NUDGE_REPEAT_MS) {
+			debug(`nudge throttle band=${critical ? "critical" : "high"} age=${now - prior.at}ms session=${sessionId}`);
+			return;
+		}
 		if (!surfacePass.nudgeSupported(sessionId)) {
 			decisionLog("advisory-nudge skip why=surface-unavailable pressure=" + Math.round(pressurePercent) + "%");
 			return;
@@ -688,6 +699,7 @@ export function applyContextTrim(ctx, config) {
 		const seq = appended.seq;
 		advisoryNudgeBySession.delete(sessionId); // re-insert: refresh recency so eviction drops the least recently nudged
 		advisoryNudgeBySession.set(sessionId, { at: now, critical, seq });
+		debug(`nudge prepared seq=${seq} level=${critical ? "critical" : "high"} pressure=${Math.round(pressurePercent)}% session=${sessionId}`);
 		if (advisoryNudgeBySession.size > 200) advisoryNudgeBySession.delete(advisoryNudgeBySession.keys().next().value);
 		decisionLog("session=" + sessionId + " advisory-nudge pressure=" + Math.round(pressurePercent) + "% mass=" + Math.round(mass) + " window=" + windowTokens + " level=" + (critical ? "critical" : "high") + " seq=" + seq);
 	}
@@ -759,6 +771,34 @@ export function applyContextTrim(ctx, config) {
 						const logPath = join(dir, "decisions.log");
 			if ((statSync(logPath, { throwIfNoEntry: false })?.size ?? 0) > 2_000_000) renameSync(logPath, `${logPath}.1`); // bound the log, keep one previous generation
 			appendFileSync(logPath, `${new Date().toISOString()} ${entry}\n`);
+		} catch {
+			/* observability must never throw */
+		}
+	}
+
+	/** Debug-trace verbosity gate ([2026-11-15]-[verbose debug log]): the
+	 *  turn-25 and window-unknown incidents both hid inside gates that
+	 *  outcomes-only logging never names. With trimVerboseLog on, every
+	 *  step/gate/decision path writes a debug row; off keeps key rows only. */
+	function verboseNow() {
+		try {
+			return readBool(config, "trimVerboseLog", false) === true;
+		} catch {
+			return false;
+		}
+	}
+	/** Verbose-only row: one line naming a step/gate/decision path. */
+	function debug(entry) {
+		if (!verboseNow()) return;
+		decisionLog("debug " + entry);
+	}
+	/** ALWAYS-ON exception detail ([2026-11-15]-[verbose debug log]):
+	 *  independent of trimVerboseLog — message + top stack frames, so a
+	 *  swallowed catch is reconstructable without reproducing it. */
+	function errorLog(where, error) {
+		try {
+			const stack = typeof error?.stack === "string" ? error.stack.split("\n").slice(0, 5).join(" | ") : "no-stack";
+			decisionLog(`error where=${where} msg=${error?.message ?? error} stack=${stack}`);
 		} catch {
 			/* observability must never throw */
 		}
@@ -1187,7 +1227,10 @@ export function applyContextTrim(ctx, config) {
 	 * Returns a short outcome string for logging. */
 	async function runFoldCycle(sessionId, decision, cycleStartedAt, cycleToken) {
 		const capture = captures.get(sessionId);
-		if (capture === undefined) return "no-capture";
+		if (capture === undefined) {
+			debug(`cycle step no-capture session=${sessionId}`);
+			return "no-capture";
+		}
 		const { protectedTail } = thresholdsNow();
 		// Ladder cycle (docs/ladder-fold.md): distill the decision's consumed
 		// run of block summaries into ONE replacement. Never mechanical — a
@@ -1232,6 +1275,7 @@ export function applyContextTrim(ctx, config) {
 		const refs = slice.map((message, i) => refOf(message, startIdx + i));
 		const count = slice.length;
 		const approxTokens = estimateTokensOf(slice);
+		debug(`cycle step begin kind=${decision.kind} tier=${decision.tier ?? "-"} range=${startIdx}..${endIdx} session=${sessionId}`);
 		let summary = null;
 		let kind = "summary";
 		let degraded = false; // set when a PRESSURE fold falls back to mechanical
@@ -1254,6 +1298,7 @@ export function applyContextTrim(ctx, config) {
 				onFail: (why) => decisionLog(`session=${sessionId} summary-fail route=${tag} why=${why} msgs=${count} ~${approxTokens}t`),
 				onNotice: (why) => decisionLog(`session=${sessionId} summary-retry route=${tag} why=${why} msgs=${count} ~${approxTokens}t`),
 			});
+			debug(`cycle step summarize route=${route ? `${route.provider}/${route.model}` : "none"} fallback=${fallback ? `${fallback.provider}/${fallback.model}` : "none"} msgs=${count} ~${approxTokens}t session=${sessionId}`);
 			summary = route !== null ? await summarize(route, "side") : null;
 			if (summary === null && fallback !== null && !sameRoute(fallback, route)) summary = await summarize(fallback, "fallback");
 			// Last resort for PRESSURE folds only: relief beats fidelity when
@@ -1271,6 +1316,7 @@ export function applyContextTrim(ctx, config) {
 		}
 		const positions = refPositions(capture.messages);
 		if (inFlight.get(sessionId) !== cycleToken) return "superseded"; // watchdog released us; a retry owns the session
+		debug(`cycle step commit kind=${kind} tier=${decision.tier} msgs=${count} ~${approxTokens}t session=${sessionId}`);
 		const result = store.commitFold(
 			sessionId,
 			{ refRange: { firstId: refs[0], lastId: refs[refs.length - 1] }, count, approxTokens, summary, kind, tier: decision.tier },
@@ -1295,15 +1341,25 @@ export function applyContextTrim(ctx, config) {
 	async function maybeFold(agent, via = "idle") {
 		const sessionId = agent;
 		if (sessionId === null || sessionId === undefined || sessionId === "") return;
-		if (!enabledNow() || modeNow() !== "auto") return;
-		if (inFlight.has(sessionId)) return;
+		if (!enabledNow() || modeNow() !== "auto") {
+			debug(`session=${sessionId} via=${via} skip enabled=${enabledNow()} mode=${modeNow()}`);
+			return;
+		}
+		if (inFlight.has(sessionId)) {
+			debug(`session=${sessionId} via=${via} skip cycle-in-flight`);
+			return;
+		}
 		// Failure backoff: a session whose recent cycles failed stays quiet
 		// for 60s*2^(n-1) (cap 15 min) instead of re-firing at every idle
 		// boundary and stream check. Silent gate — the outcome row that armed
 		// the cooldown is already in decisions.log.
 		if (foldFailureCooldownOf(sessionId) > 0) return;
+		debug(`session=${sessionId} via=${via} skip failure-backoff remaining=${foldFailureCooldownOf(sessionId)}ms`);
 		const capture = captures.get(sessionId);
-		if (capture === undefined) return;
+		if (capture === undefined) {
+			debug(`session=${sessionId} via=${via} skip no-capture`);
+			return;
+		}
 		// Injection-unavailable: the last dispatch could not carry the view
 		// (frozen options AND messages — the wire always ships raw history).
 		// Folding is pointless ONLY when NEITHER channel can reach the wire:
@@ -1382,6 +1438,7 @@ export function applyContextTrim(ctx, config) {
 			// that is a reload cut, not a model failure: log it and skip the ladder.
 			if (disposedSince(cycleStartedAt)) decisionLog(`session=${sessionId} outcome=reload-aborted tier=${decision?.tier ?? "-"}`);
 			else {
+				errorLog("fold-cycle", error);
 				recordFoldFailure(sessionId); // a thrown cycle counts as failed too
 				warn(`[context-trim] fold cycle failed: ${error?.message ?? error}`);
 			}
@@ -1687,6 +1744,7 @@ export function applyContextTrim(ctx, config) {
 							deliverAdvisoryNudge(applied.sessionId, applied.viewTokens);
 						} catch (error) {
 							decisionLog(`advisory-nudge-failed why=${error?.message ?? error}`);
+							errorLog("advisory-nudge", error);
 						}
 					}
 				}
@@ -1694,6 +1752,7 @@ export function applyContextTrim(ctx, config) {
 		} catch (error) {
 			decisionLog(`view-build-failed why=${error?.message ?? error}`);
 			warn(`[context-trim] view build failed: ${error?.message ?? error}`);
+			errorLog("view-build", error);
 		}
 		const result = next();
 		let wrappedSession = null;
@@ -1722,6 +1781,8 @@ export function applyContextTrim(ctx, config) {
 			});
 		} catch (error) {
 			warn(`[context-trim] stream wrap failed: ${error?.message ?? error}`);
+			decisionLog(`stream-wrap-failed why=${error?.message ?? error}`);
+			errorLog("stream-wrap", error);
 			return result;
 		} finally {
 			// Fallback fold check on the stream path: the agent/status idle event
@@ -1742,8 +1803,9 @@ export function applyContextTrim(ctx, config) {
 						void maybeFold(wrappedSession, "stream").finally(() => surfacePass.sweep(wrappedSession, "stream"));
 					}
 				}
-			} catch {
+			} catch (error) {
 				/* fallback must never break the stream */
+				errorLog("stream-fallback", error);
 			}
 		}
 	}
@@ -1762,6 +1824,8 @@ export function applyContextTrim(ctx, config) {
 					decisionLog(`llm-attached hasOn=${typeof llmCtx.on} hasOff=${typeof llmCtx.off} hasEffect=${typeof llmCtx.effect} pid=${process.pid}`);
 				} catch (error) {
 					warn(`[context-trim] llm/stream attach failed: ${error?.message ?? error}`);
+					decisionLog(`llm-attach-failed why=${error?.message ?? error}`);
+					errorLog("llm-attach", error);
 				}
 			};
 			// Reload-safe release (applyIntent precedent): undo the listener

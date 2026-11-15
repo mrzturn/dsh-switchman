@@ -83,6 +83,7 @@ function fullValues(overrides = {}) {
 		trimLadderEnabled: true,
 		trimProtectTaskIntent: true,
 		trimCriticalRelief: true,
+	trimVerboseLog: false,
 		surfaceFold: true,
 		...overrides,
 	};

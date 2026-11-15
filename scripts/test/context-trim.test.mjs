@@ -1524,6 +1524,68 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		assert.match(critical, /FOLD FIRST/u);
 	});
 
+
+	test("trimVerboseLog: off keeps decisions-only, on adds debug rows", async () => {
+		const { ctx, hooks, sessions } = nudgeCtx();
+		const cfg = { ...nudgeConfig(), trimAdvisoryPercent: 50, trimAdvisoryCriticalPercent: 80 };
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const logRows = (sid) => readFileSync(join(cfg.trimStateDir, "decisions.log"), "utf8").split("\n").filter((line) => line.includes(sid));
+		const sid = "sess-verbose-off";
+		try {
+			// Below-line dispatches only log a view-applied row when OFF; no debug rows.
+			await dispatch(listener, sid, 30_000);
+			await dispatch(listener, sid, 31_000);
+			assert.equal(logRows(sid).filter((line) => line.includes(" debug ")).length, 0, "no debug rows when the switch is off (default)");
+			assert.ok(logRows(sid).some((line) => line.includes("view-applied")), "key rows still logged when off");
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+		// Same shape with the switch ON: the fold-span / nudge gates name themselves.
+		const ctx2 = nudgeCtx();
+		const cfgOn2 = { ...nudgeConfig(), trimAdvisoryPercent: 50, trimAdvisoryCriticalPercent: 80, trimVerboseLog: true };
+		const handle2 = applyContextTrim(ctx2.ctx, cfgOn2);
+		const listener2 = ctx2.hooks["llm/stream"];
+		handle2.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const sid2 = "sess-verbose-on";
+		try {
+			await dispatch(listener2, sid2, 70_000); // wire lands delayed-once: first dispatch only primes it
+			await dispatch(listener2, sid2, 71_000); // now mass=70% ≥ 50% → speak (prior set)
+			await dispatch(listener2, sid2, 72_000); // same band → the throttle gate, debug-visible when ON
+			const rows = readFileSync(join(cfgOn2.trimStateDir, "decisions.log"), "utf8").split("\n").filter((line) => line.includes(sid2));
+			assert.ok(rows.some((line) => line.includes(" debug ") && line.includes("nudge throttle")), "verbose mode logs the nudge throttle gate as a debug row");
+			assert.ok(rows.some((line) => line.includes("advisory-nudge pressure=")), "the key nudge row still lands");
+			assert.ok(rows.every((line) => !line.includes(" debug ") || line.includes(" debug nudge ") || line.includes(" debug relief ") || line.includes(" debug cycle ") || line.includes("debug session=")), "debug rows carry the debug vocabulary");
+		} finally {
+			rmSync(cfgOn2.trimStateDir, { recursive: true, force: true });
+		}
+	});
+
+	test("errorLog: swallowed catches always write msg+stack regardless of trimVerboseLog", async () => {
+		const ctx3 = nudgeCtx();
+		const cfg3 = { ...nudgeConfig(), trimAdvisoryPercent: 50, trimAdvisoryCriticalPercent: 80, trimVerboseLog: false };
+		applyContextTrim(ctx3.ctx, cfg3);
+		const listener3 = ctx3.hooks["llm/stream"];
+		const sid = "sess-errorlog";
+		try {
+			// Force the view-build catch: a messages array whose .slice throws after applyViewToOptions
+			// passed the Array.isArray check (buildView still succeeds; rawSnapshot.slice throws).
+			const request = { sessionId: sid, messages: dispatchMessages(), provider: "p", model: "m" };
+			Object.defineProperty(request.messages, "slice", { value: () => { throw new TypeError("poisoned slice"); } });
+			try {
+				const result = listener3(request, () => (async function* () { yield { type: "finish", usage: { input_tokens: 1 } }; })());
+				for await (const chunk of result) void chunk;
+			} catch { /* the broken stream may rethrow; the error row must already be on disk */ }
+			const rows = readFileSync(join(cfg3.trimStateDir, "decisions.log"), "utf8").split("\n").filter((line) => line.includes("error where="));
+			assert.ok(rows.length > 0, "always-on error rows land with the switch OFF");
+			assert.ok(rows.some((line) => line.includes("msg=poisoned slice") && line.includes("stack=")), "rows carry message and stack");
+		} finally {
+			rmSync(cfg3.trimStateDir, { recursive: true, force: true });
+		}
+	});
+
+
 	test("nudges once at the fold line on the surface tail, then stays quiet in-band", async () => {
 		const { ctx, hooks, sessions } = nudgeCtx();
 		const cfg = nudgeConfig();
