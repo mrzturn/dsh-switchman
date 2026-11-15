@@ -927,10 +927,20 @@ export function applyContextTrim(ctx, config) {
 			const proj = projectedEntry !== undefined && Date.now() - projectedEntry.at <= TRIM_VIEW_MAX_AGE_MS ? Math.round(projectedEntry.totalTokens) : null;
 			const lines = advisoryNudgeLines(config);
 			const pressure = mass > 0 ? (mass / windowTokens) * 100 : 0;
+			// Cooldown story must match the GATE, not just the timestamp
+			// ([2026-11-15]-[relief snapshot coherence]): the gate is
+			// enabled + advisory + no cycle in flight + cooldown elapsed;
+			// reporting only the arithmetic let the chip claim "ready"
+			// while the engine would still skip (cycle in flight).
 			const reliefAt = reliefBySession.get(sessionId) ?? 0;
 			const reliefCooldownRemaining = reliefEnabledNow() && modeNow() === "advisory"
 				? Math.max(0, EMERGENCY_COOLDOWN_MS - (Date.now() - reliefAt))
 				: null;
+			const reliefReady = reliefCooldownRemaining !== null
+				&& reliefCooldownRemaining === 0
+				&& !inFlight.has(sessionId)
+				&& captures.has(sessionId);
+
 			return {
 				available: true,
 				mode: modeNow(),
@@ -944,6 +954,7 @@ export function applyContextTrim(ctx, config) {
 				criticalLine: lines.critical,
 				reliefEnabled: reliefEnabledNow(),
 				reliefCooldownRemaining,
+				reliefReady,
 			};
 		} catch {
 			return { available: false };
@@ -1601,6 +1612,11 @@ export function applyContextTrim(ctx, config) {
 					positions,
 				);
 				if (!result.ok) return `Fold rejected: ${result.reason}.`;
+				// Auditable commit ([2026-11-15]-[tool-fold observability]): the only
+				// prior trace was the fold-commit SURFACE sweep; a sweep that failed
+				// or stayed pending left the commit itself invisible in the log.
+				decisionLog(`session=${sessionId} via=tool action=fold tier=advisory block=${result.block.id} msgs=${count} tokens=~${result.block.approxTokens}`);
+
 				surfacePass.captureFoldSeqs(sessionId, result.block);
 				// Growth-gate baseline pair: pre-fold view (banner display) plus the
 				// post-fold low (tier-a anchor — keeps the gate armed after folds
@@ -1665,6 +1681,18 @@ export function applyContextTrim(ctx, config) {
 				if (usage !== null) {
 					metrics.recordUsage(wrappedSession, usage);
 					if (mainDispatch) noteTrimWireTokens(wrappedSession, usage);
+					// Second proj sample point ([2026-11-15]-[proj sampling gaps]):
+					// the agent/status idle boundary alone left proj=null on most rows —
+					// long-running turns never go idle mid-flight, so the view-applied
+					// column went dark exactly when the divergence data mattered. At
+					// response end the agent handle is resolvable via
+					// ctx.agents.get(sessionId) (the same service subagents.js reads);
+					// unreachable => the sample silently skips, as designed.
+					try {
+						noteTrimProjectedTokens(wrappedSession, ctx.agents?.get?.(wrappedSession), ctx);
+					} catch {
+						/* observability must never break the stream */
+					}
 				}
 			});
 		} catch (error) {

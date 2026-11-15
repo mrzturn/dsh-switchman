@@ -1735,10 +1735,12 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 			// 90% >= 80% critical: the relief fold FIRED during d2 and armed its 90 s cooldown — the snapshot reflects that.
 			assert.equal(typeof snap.reliefCooldownRemaining === "number" && snap.reliefCooldownRemaining >= 0, true, "cooldown armed by the just-fired relief");
 			assert.equal(handle.store.ledgerOf(sid).blocks.length, 1, "the relief fold committed one mechanical block");
+			assert.equal(snap.reliefReady, false, "cooldown armed => not ready");
 			// Unknown session: isolated, never another conversation pressure.
 			const unknown = trimPressureSnapshotOf("sess-never-seen");
 			assert.equal(unknown.available, true);
 			assert.equal(unknown.mass, 0);
+			assert.equal(unknown.reliefReady, false, "no capture => never ready");
 		} finally {
 			rmSync(cfg.trimStateDir, { recursive: true, force: true });
 		}

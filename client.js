@@ -939,6 +939,7 @@ window.__ModuleLoader__.load({
 		trimDockTipDomain: '折叠引擎口径：最近一次实付 prompt（max(view, wire)）÷ 有效窗口（含上限）——不是输入框旁上下文面板的预测口径，两者本就不同、不应收敛。',
 		trimDockTipMass: '实付 {mass} / 窗口 {window} tokens',
 		trimDockTipMode: '模式：{mode}（advisory=模型自行折叠；auto=引擎自动折叠）',
+		trimDockTipReady: '临界纾缓就绪：达到 80% 线即由引擎机械折叠一次',
 		trimDockTipCooldown: '临界纾缓冷却中，剩 {seconds}s',
 				trimEnabledLabel: '启用自动裁剪',
 				trimEnabledHelp: '上下文裁剪层的总开关。',
@@ -1222,6 +1223,7 @@ window.__ModuleLoader__.load({
 		trimDockTipDomain: 'Fold-engine domain: last PAID prompt (max of view/wire) over the effective window (cap included) — not the composer context meter projection; the two answer different questions and are not meant to converge.',
 		trimDockTipMass: 'paid {mass} / window {window} tokens',
 		trimDockTipMode: 'mode: {mode} (advisory = the model folds itself; auto = the engine folds)',
+		trimDockTipReady: 'critical relief ready: one mechanical engine fold fires at the critical line',
 		trimDockTipCooldown: 'critical relief cooling down, {seconds}s left',
 				trimEnabledLabel: 'Enable auto-trim',
 				trimEnabledHelp: 'Master switch for the context-trim layer.',
@@ -1513,6 +1515,7 @@ window.__ModuleLoader__.load({
 		trimDockTipDomain: '摺疊引擎口徑：最近一次實付 prompt（max(view, wire)）÷ 有效視窗（含上限）——不是輸入框旁上下文面板的預測口徑，兩者本就不同、不應收斂。',
 		trimDockTipMass: '實付 {mass} / 視窗 {window} tokens',
 		trimDockTipMode: '模式：{mode}（advisory=模型自行摺疊；auto=引擎自動摺疊）',
+		trimDockTipReady: '臨界紓緩就緒：達到 80% 線即由引擎機械摺疊一次',
 		trimDockTipCooldown: '臨界紓緩冷卻中，剩 {seconds}s',
 				trimEnabledLabel: '啟用自動裁剪',
 				trimEnabledHelp: '上下文裁剪層的總開關。',
@@ -1775,6 +1778,7 @@ window.__ModuleLoader__.load({
 		trimDockTipDomain: 'fold エンジンの基準：最後に支払った prompt（max(view, wire)）÷ 実効ウィンドウ（上限込み）——入力欄のコンテキストメーターの推定基準とは別物で、収束しないのが正常です。',
 		trimDockTipMass: '支払い済み {mass} / ウィンドウ {window} トークン',
 		trimDockTipMode: 'モード：{mode}（advisory=モデル自身が fold、auto=エンジンが fold）',
+		trimDockTipReady: 'critical relief 待機中：critical 線に達するとエンジンが 1 回機械的に fold します',
 		trimDockTipCooldown: 'critical relief クールダウン中、残り {seconds}秒',
 				trimEnabledLabel: '自動トリムを有効化',
 				trimEnabledHelp: 'コンテキストトリム層のマスタースイッチ。',
@@ -2032,6 +2036,7 @@ window.__ModuleLoader__.load({
 		trimDockTipDomain: 'fold 엔진 기준: 마지막 실제 결제 prompt(max(view, wire)) ÷ 실효 윈도우(상한 포함) — 입력창 컨텍스트 미터의 추정 기준과 다르며 수렴하지 않는 것이 정상입니다.',
 		trimDockTipMass: '결제 {mass} / 윈도우 {window} 토큰',
 		trimDockTipMode: '모드: {mode} (advisory=모델이 직접 fold, auto=엔진이 fold)',
+		trimDockTipReady: 'critical relief 대기 중: critical 선 도달 시 엔진이 한 번 기계적으로 fold합니다',
 		trimDockTipCooldown: 'critical relief 쿨다운 중, {seconds}초 남음',
 				trimEnabledLabel: '자동 트림 사용',
 				trimEnabledHelp: '컨텍스트 트림 계층의 마스터 스위치.',
@@ -2281,6 +2286,7 @@ window.__ModuleLoader__.load({
 		trimDockTipDomain: 'Fold-Engine-Domäne: zuletzt bezahlter Prompt (max aus view/wire) über das effektive Fenster (inkl. Limit) — nicht die Projektion des Kontextmessers; beide beantworten verschiedene Fragen und sollen nicht konvergieren.',
 		trimDockTipMass: 'bezahlt {mass} / Fenster {window} Token',
 		trimDockTipMode: 'Modus: {mode} (advisory = das Modell faltet selbst; auto = die Engine faltet)',
+		trimDockTipReady: 'Critical Relief bereit: an der Critical-Linie faltet die Engine einmal mechanisch',
 		trimDockTipCooldown: 'Critical-Relief-Cooldown, noch {seconds}s',
 				trimEnabledLabel: 'Auto-Trim aktivieren',
 				trimEnabledHelp: 'Hauptschalter für die Kontext-Trim-Schicht.',
@@ -2533,6 +2539,7 @@ window.__ModuleLoader__.load({
 		trimDockTipDomain: 'Dominio del motor de plegado: último prompt pagado (máx de view/wire) sobre la ventana efectiva (límite incluido) — no la proyección del medidor de contexto; ambos responden preguntas distintas y no están hechos para converger.',
 		trimDockTipMass: 'pagado {mass} / ventana {window} tokens',
 		trimDockTipMode: 'modo: {mode} (advisory = el modelo pliega; auto = pliega el motor)',
+		trimDockTipReady: 'alivio crítico listo: en la línea crítica el motor pliega una vez mecánicamente',
 		trimDockTipCooldown: 'alivio crítico enfriando, faltan {seconds}s',
 				trimEnabledLabel: 'Activar recorte automático',
 				trimEnabledHelp:
@@ -2786,6 +2793,7 @@ window.__ModuleLoader__.load({
 		trimDockTipDomain: 'Domaine du moteur de repli : dernier prompt payé (max de view/wire) sur la fenêtre effective (plafond inclus) — pas la projection du compteur de contexte ; les deux répondent à des questions différentes et ne sont pas faits pour converger.',
 		trimDockTipMass: 'payé {mass} / fenêtre {window} jetons',
 		trimDockTipMode: 'mode : {mode} (advisory = le modèle replie lui-même ; auto = le moteur replie)',
+		trimDockTipReady: 'soulagement critique prêt : à la ligne critique, le moteur replie une fois mécaniquement',
 		trimDockTipCooldown: 'soulagement critique en refroidissement, {seconds}s restantes',
 				trimEnabledLabel: 'Activer le rognage automatique',
 				trimEnabledHelp:
@@ -3039,6 +3047,7 @@ window.__ModuleLoader__.load({
 		trimDockTipDomain: 'Dominio del motore di ripiegamento: ultimo prompt pagato (max di view/wire) sulla finestra effettiva (limite incluso) — non la proiezione del misuratore di contesto; i due rispondono a domande diverse e non sono fatti per convergere.',
 		trimDockTipMass: 'pagato {mass} / finestra {window} token',
 		trimDockTipMode: 'modalità: {mode} (advisory = il modello ripiega da solo; auto = ripiega il motore)',
+		trimDockTipReady: 'sollievo critico pronto: alla linea critica il motore ripiega una volta meccanicamente',
 		trimDockTipCooldown: 'sollievo critico in raffreddamento, {seconds}s rimanenti',
 				trimEnabledLabel: 'Attiva riduzione automatica',
 				trimEnabledHelp:
@@ -3292,6 +3301,7 @@ window.__ModuleLoader__.load({
 		trimDockTipDomain: 'Domínio do motor de dobra: último prompt pago (máx de view/wire) sobre a janela efetiva (limite incluído) — não a projeção do medidor de contexto; ambos respondem perguntas diferentes e não estão feitos para convergir.',
 		trimDockTipMass: 'pago {mass} / janela {window} tokens',
 		trimDockTipMode: 'modo: {mode} (advisory = o modelo dobra; auto = o motor dobra)',
+		trimDockTipReady: 'alívio crítico pronto: na linha crítica o motor dobra uma vez mecanicamente',
 		trimDockTipCooldown: 'alívio crítico em arrefecimento, faltam {seconds}s',
 				trimEnabledLabel: 'Ativar corte automático',
 				trimEnabledHelp:
@@ -3545,6 +3555,7 @@ window.__ModuleLoader__.load({
 		trimDockTipDomain: 'Область движка сворачивания: последний оплаченный prompt (max от view/wire) делённый на эффективное окно (с лимитом) — не прогноз счётчика контекста; эти числа отвечают на разные вопросы и не должны сходиться.',
 		trimDockTipMass: 'оплачено {mass} / окно {window} токенов',
 		trimDockTipMode: 'режим: {mode} (advisory = модель сворачивает сама; auto = сворачивает движок)',
+		trimDockTipReady: 'критическое relief готово: у критической линии движок один раз свернёт механически',
 		trimDockTipCooldown: 'критическое relief на кулдауне, осталось {seconds}с',
 				trimEnabledLabel: 'Включить автообрезку',
 				trimEnabledHelp: 'Главный выключатель слоя обрезки контекста.',
@@ -4193,6 +4204,7 @@ window.__ModuleLoader__.load({
 									typeof value.reliefCooldownRemaining === 'number'
 										? Math.max(0, Math.round(value.reliefCooldownRemaining / 1000))
 										: null,
+								reliefReady: value.reliefReady === true,
 							};
 					} catch {
 						next = null;
@@ -4219,6 +4231,7 @@ window.__ModuleLoader__.load({
 				 snap.reliefCooldown !== null && snap.reliefCooldown > 0
 					? t('trimDockTipCooldown', { seconds: snap.reliefCooldown })
 					: null,
+				snap.reliefReady ? t('trimDockTipReady') : null,
 			].filter((line) => line !== null);
 			const nearCritical =
 				snap.criticalLine !== null && snap.pressure >= snap.criticalLine;
