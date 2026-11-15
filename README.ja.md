@@ -126,6 +126,8 @@ bash <インストールディレクトリ>/skills/db-query/scripts/setup.sh
 | `trimAdvisoryPercent` | `50` | advisory 通知線：圧力が実効ウィンドウのこの割合に達すると、モデルに `ctx_trim_fold` での即時 fold を促します（advisory モードのみ）。 |
 | `trimAdvisoryCriticalPercent` | `80` | critical 通知線：到達すると 10 分の同帯域スロットルを無視して即再通知。 |
 | `trimWindowTokens` | `0` | ティア計算の実効ウィンドウ上限：min(モデルウィンドウ, 上限) で計算。`0` = `wmForceTokens` に追従。 |
+| `trimCriticalRelief` | `true` | advisory critical relief：critical 線に達するとエンジン自身が機械的（emergency 相当）fold を 1 回実行、クールダウンは 90 秒。 |
+| — | — | trim のパーセントは入力欄のコンテキストメーターと直接比較できません：trim は最後に支払った prompt（max(view, wire)）を実効ウィンドウ（上限込み）で割り、メーターは次の prompt の推定量をモデルの全ウィンドウで割った値を表示します。 |
 | `trimProtectedTail` | `6` | 最後の N メッセージは決して fold されない。 |
 | `trimMaxFoldsPerHour` | `30` | ローリング1時間あたりのサイドモデル fold ペース上限（緊急段は対象外）。 |
 | `trimSideModel` | 未設定 | サマリ用サイドモデルのルート。空欄 = セッションの provider/model に追従（呼び出しの effort は継承しない）；ladder distillation もこのルートを使用。サマリの effort は別途手動固定でき、未設定ならモデルメタデータから有効な reasoning レベルの最小値を選ぶ。オン/オフのみのモデルは off。reasoning 非対応またはメタデータが利用できない場合は effort を送らず、モデル/アダプターのデフォルトに委ねる。 |

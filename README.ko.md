@@ -126,6 +126,8 @@ bash <설치-디렉터리>/skills/db-query/scripts/setup.sh
 | `trimAdvisoryPercent` | `50` | advisory 알림 선: 압력이 실효 윈도의 이 백분율에 도달하면 모델에게 `ctx_trim_fold`로 즉시 fold할 것을 권고(advisory 모드 전용). |
 | `trimAdvisoryCriticalPercent` | `80` | critical 알림 선: 도달 시 10분 동일 밴드 스로틀을 우회해 즉시 재알림. |
 | `trimWindowTokens` | `0` | 티어 계산의 유효 윈도우 상한: min(모델 윈도우, 상한)으로 계산. `0` = `wmForceTokens`를 따름. |
+| `trimCriticalRelief` | `true` | advisory critical relief: critical 선에 도달하면 엔진이 직접 기계적(emergency 방식) fold을 1회 수행, 쿨다운 90초. |
+| — | — | trim 백분율은 입력창의 컨텍스트 미터와 직접 비교할 수 없습니다: trim은 마지막 실제 결제 prompt(max(view, wire))를 실효 윈도우(상한 포함)로 나누고, 미터는 다음 prompt의 추정치를 모델 전체 윈도우로 나눈 값을 표시합니다. |
 | `trimProtectedTail` | `6` | 마지막 N개 메시지는 절대 fold되지 않는다. |
 | `trimMaxFoldsPerHour` | `30` | 롤링 1시간당 사이드 모델 fold 케이던스 상한(비상 단계는 제외). |
 | `trimSideModel` | 미설정 | 요약 side model 라우트. 비어 있으면 세션 provider/model을 따르며 호출의 effort는 상속하지 않음. ladder distillation도 이 라우트를 사용. 요약 effort는 별도로 수동 고정할 수 있으며, 고정하지 않으면 모델 메타데이터에서 사용 가능한 reasoning 단계 중 가장 낮은 단계를 선택. 켜기/끄기만 지원하는 모델은 off. reasoning 미지원 또는 메타데이터 없음이면 effort를 보내지 않아 모델/어댑터 기본 동작을 따름. |

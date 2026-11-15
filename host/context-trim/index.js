@@ -99,6 +99,7 @@ export function resolveStateDir(raw, warn = () => {}) {
 // it and the stored tally takes over.
 const trimViewBySession = new Map(); // sessionId -> { viewTokens, at, inject, lastNoneAt }
 const trimWireBySession = new Map(); // sessionId -> { promptTokens, at } — last sampled provider prompt of an accepted MAIN dispatch (side calls never write; a tiny inherited-id usage sample must not lower the watermark's wire floor)
+const trimProjectedBySession = new Map(); // sessionId -> { totalTokens, at } — last host-meter reading (tokenMeter.measure().totalTokens: provider-anchored projection of the NEXT prompt, the figure the DSH context panel displays). Observability only — recorded at the idle boundary where the agent object is reachable; the trim tiers never read it.
 const capturedModelBySession = new Map(); // sessionId -> { provider, model, at } — last stream-captured model route, read by the watermark layer to scale subagent tiers to the session's own model window
 /** Freshness TTL for the in-memory view/injection registry (watermark and
  *  banner display only). NEVER a fold gate: gating folds on "did the surface
@@ -213,6 +214,28 @@ function noteTrimWireTokens(sessionId, usage) {
 		if (promptTokens === null) return;
 		trimWireBySession.set(sessionId, { promptTokens, at: Date.now() });
 		if (trimWireBySession.size > 200) trimWireBySession.delete(trimWireBySession.keys().next().value);
+	} catch {
+		/* observability must never throw */
+	}
+}
+
+/** Record the host meter's projected prompt size for one session. Read from
+ * the agent/status idle boundary (the only place the agent object — and thus
+ * agent.session for tokenMeter.measure — is reachable in this layer). The
+ * figure is the DSH context panel's number (projectedTokens domain):
+ * provider-anchored plus heuristic surface deltas, i.e. what the NEXT prompt
+ * would cost — ahead of the wire, which only updates when the next response
+ * reports usage. Observability only: it lands in the view-applied row as
+ * proj=<n> so view/wire/proj divergence (estimator vs provider vs
+ * projection-domain) is one grep away. Fail-open, bounded (200 sessions). */
+function noteTrimProjectedTokens(sessionId, agent, ctx) {
+	try {
+		if (typeof sessionId !== "string" || sessionId === "") return;
+		const measurement = agent?.session ? ctx?.tokenMeter?.measure?.(agent.session) : undefined;
+		const total = Number.isFinite(measurement?.totalTokens) ? measurement.totalTokens : null;
+		if (total === null) return;
+		trimProjectedBySession.set(sessionId, { totalTokens: total, at: Date.now() });
+		if (trimProjectedBySession.size > 200) trimProjectedBySession.delete(trimProjectedBySession.keys().next().value);
 	} catch {
 		/* observability must never throw */
 	}
@@ -970,10 +993,16 @@ export function applyContextTrim(ctx, config) {
 		// previous response's usage) makes the view-vs-wire divergence visible
 		// instead of leaving the view estimate as the only lullaby in the log.
 		const wireTokens = wireTokensOf(sessionId);
+		// Projection truth in the row: the host meter's projected NEXT-prompt
+		// size (context-panel domain) sampled at the last idle boundary. Diverges
+		// from wire by design — wire is the last PAID prompt, proj estimates the
+		// next one — so the two columns bracket the real pressure band.
+		const projectedEntry = trimProjectedBySession.get(sessionId);
+		const projectedTokens = projectedEntry !== undefined && Date.now() - projectedEntry.at <= TRIM_VIEW_MAX_AGE_MS ? Math.round(projectedEntry.totalTokens) : null;
 		// Per-request application evidence: whether the ledger's blocks actually
 		// locate inside THIS re-send (the host may compact/replace history, in
 		// which case applied=0 explains a stuck-high view without any failure).
-		decisionLog(`session=${sessionId} view-applied applied=${view.applied} foldedMsgs=${view.foldedMessages} view=${Math.round(viewTokens)} blocks=${blocksCount} injected=${injected}${wireTokens === null ? "" : ` wire=${wireTokens}`}${MODULE_BUILD_STAMP > 0 ? ` b=${MODULE_BUILD_STAMP}` : ""}`);
+		decisionLog(`session=${sessionId} view-applied applied=${view.applied} foldedMsgs=${view.foldedMessages} view=${Math.round(viewTokens)} blocks=${blocksCount} injected=${injected}${wireTokens === null ? "" : ` wire=${wireTokens}`}${projectedTokens === null ? "" : ` proj=${projectedTokens}`}${MODULE_BUILD_STAMP > 0 ? ` b=${MODULE_BUILD_STAMP}` : ""}`);
 		// Side-dispatch guard: auxiliary llm calls that inherit the session id
 		// (web-search summaries, title generation, fold-span material) present
 		// tiny arrays in which the ledger cannot locate. Accepting them as the
@@ -1308,6 +1337,9 @@ export function applyContextTrim(ctx, config) {
 				// agent }) — derive the session id per host/context-watch.js:122.
 				const sessionId = agentSessionIdOf(payload?.agent);
 				if (sessionId === null) return;
+				// Meter projection sample: host meter's projected NEXT-prompt size
+				// (the context panel's figure) for the view-applied proj=<n> column.
+				noteTrimProjectedTokens(sessionId, payload?.agent, ctx);
 				// Fold first, then the surface-replace idle sweep (design
 				// docs/surface-fold.md): a block committed by this idle pass
 				// ships on the same boundary.

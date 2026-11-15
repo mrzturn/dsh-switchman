@@ -258,6 +258,22 @@ above the ~49-51k wire point where the growth gate's 45000 increment is reached,
 growth fires first in the normal case and pressure pins the ceiling. The 45000
 increment floor is the binding constraint, not the 22500 growth delta.
 
+### Reading trim percentages next to the DSH context panel
+
+Trim percentages use a different numerator AND denominator than the composer's
+context meter, so the two figures are not directly comparable and are not meant
+to converge. The panel shows the token meter's projection of the NEXT prompt
+over the model's full resolved window (e.g. 1,000,000 for a million-token model);
+trim tiers divide max(view, wire) — the last PAID prompt size, never a
+projection — by the effective window min(model window, trimWindowTokens ||
+wmForceTokens) (200000 with the default force watermark). A session can
+therefore legitimately read 80% on a trim nudge while the panel shows ~16%:
+the panel answers "how much of the model's window remains", trim answers "how
+close is the paid prompt to the fold-engine window". Both are correct; the
+decision-log view-applied row carries all three domains side by side (view=
+estimator, wire= provider-paid, proj= meter projection sampled at the last
+idle boundary) to make the divergence inspectable.
+
 ## Advisory-mode pressure nudge
 
 In `advisory` mode the session model is the fold driver, so the engine

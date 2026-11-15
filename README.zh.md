@@ -126,6 +126,8 @@ bash <安装目录>/skills/db-query/scripts/setup.sh
 | `trimAdvisoryPercent` | `50` | advisory 提醒线：压力达到有效窗口的该百分比时，引擎提醒模型立即用 `ctx_trim_fold` 折叠（仅 advisory 模式）。 |
 | `trimAdvisoryCriticalPercent` | `80` | critical 提醒线：到线立即重发提醒，不受 10 分钟同档节流限制。 |
 | `trimWindowTokens` | `0` | 窗口上限：压力与紧急档按 min(模型窗口, 上限) 计算。`0` = 跟随 `wmForceTokens`。 |
+| `trimCriticalRelief` | `true` | advisory 临界纾缓：到达 critical 线时引擎自行执行一次机械（紧急档式）折叠，90 秒冷却。 |
+| — | — | trim 百分比与输入框旁的上下文面板不可直接比较：trim 按最近一次实付 prompt（max(view, wire)）除以有效窗口（含上限）计算，面板显示的是计量器对下一次 prompt 的预测值除以模型全窗口。 |
 | `trimProtectedTail` | `6` | 最后 N 条消息永不折叠。 |
 | `trimMaxFoldsPerHour` | `30` | 每滚动小时 side model 折叠的节奏上限（紧急档豁免）。 |
 | `trimSideModel` | 未设置 | 写摘要的 side model 路由。留空 = 跟随会话当前 provider/model，不继承调用的 effort；ladder distillation 也使用此路由。摘要 effort 可单独手动固定；未固定时按模型元数据推荐最低启用的 reasoning 档，只有开/关选项时选 off。不支持 reasoning 或元数据不可用时不发送 effort，保留模型/适配器默认行为。 |

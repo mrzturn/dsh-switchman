@@ -126,6 +126,8 @@ All keys live in Settings → dsh-switchman; defaults from `host/config.js`:
 | `trimAdvisoryPercent` | `50` | Advisory nudge line: when pressure reaches this percent of the effective window, the engine nudges the model to fold now with `ctx_trim_fold` (advisory mode only). |
 | `trimAdvisoryCriticalPercent` | `80` | Critical nudge line: reaching it re-speaks the nudge immediately, bypassing the 10-minute same-band throttle. |
 | `trimWindowTokens` | `0` | Effective-window cap for tier math: tiers are computed against min(model window, cap). `0` = follow `wmForceTokens`. |
+| `trimCriticalRelief` | `true` | Advisory critical relief: at the critical line the engine itself performs one mechanical (emergency-style) fold, on a 90 s cooldown. |
+| — | — | Trim percentages are not comparable with the composer's context meter: trim divides the last paid prompt (max of view/wire) by the effective window (cap included), while the meter shows the meter's projected next prompt over the model's full window. |
 | `trimProtectedTail` | `6` | The last N messages are never folded. |
 | `trimMaxFoldsPerHour` | `30` | Side-model fold cadence cap per rolling hour (emergency folds are exempt). |
 | `trimSideModel` | unset | Route for the summary side model. Empty follows the session provider/model only, not its effort. The independent effort pin defaults to the lowest enabled reasoning level from model metadata; toggle-only models use `off`, while unsupported reasoning or missing metadata omits the effort and leaves the model default. Ladder distillations share the route and policy. |
