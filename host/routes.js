@@ -32,6 +32,14 @@
  *                                      auto-selection and pinned decision).
  *   POST /api/dsh-switchman/intent-reset — { session } clears one session's
  *                                      intent decision state (debug/reset).
+ *   GET  /api/dsh-switchman/trim-pressure — live trim-pressure snapshot for
+ *                                      the client dock chip (session-scoped
+ *                                      via the optional `session` query):
+ *                                      {available, mode, mass, window,
+ *                                      pressure, view, wire, proj,
+ *                                      advisoryLine, criticalLine,
+ *                                      reliefEnabled, reliefCooldownRemaining}.
+ *                                      Observability only — no gate reads it.
  *   POST /api/dsh-switchman/ui-locale — the client half reports its active
  *                                      UI locale (feeds the ask guidance's
  *                                      question language; no settings write).
@@ -49,6 +57,7 @@ import { INTENT_PRESETS, mergeIntentCandidates } from "./intent-presets.js";
 import { pumpTeamsOrchestration, scheduleTeamsOrchestration, SWITCHMAN_SETTINGS_NS, teamsBundleState, teamsSyncSnapshot } from "./teams.js";
 import { reportedUiLocale, setReportedUiLocale } from "./ui-locale.js";
 import { visionStateOf } from "./vision.js";
+import { trimPressureSnapshotOf } from "./context-trim/index.js";
 
 /** Route paths (client.js mirrors these literals). */
 const ROUTES = {
@@ -61,6 +70,7 @@ const ROUTES = {
 	intentState: "/api/dsh-switchman/intent-state",
 	intentReset: "/api/dsh-switchman/intent-reset",
 	uiLocale: "/api/dsh-switchman/ui-locale",
+	trimPressure: "/api/dsh-switchman/trim-pressure",
 };
 
 /** Settings namespace this plugin's writes target: the LOADER ENTRY id from
@@ -762,6 +772,23 @@ export function makeRoutes(ctx, config) {
 					writeJson(res, 200, await intentStateOf(ctx, config, typeof session === "string" && session !== "" ? session : null));
 				} catch (error) {
 					ctx.logger.warn(`dsh-switchman: intent-state read failed: ${error?.message ?? error}`);
+					writeJson(res, 500, { error: error?.message ?? String(error) });
+				}
+			},
+		},
+		{
+			kind: "exact",
+			path: ROUTES.trimPressure,
+			handler: async (req, res) => {
+				if (!guard(req, res, "GET")) return;
+				try {
+					// Optional `session` query parameter: the dock chip is
+					// session-scoped; a missing session id reports available=false
+					// (never another conversation's pressure).
+					const session = new URL(req.url ?? "/", "http://localhost").searchParams.get("session");
+					writeJson(res, 200, trimPressureSnapshotOf(typeof session === "string" && session !== "" ? session : ""));
+				} catch (error) {
+					ctx.logger.warn(`dsh-switchman: trim-pressure read failed: ${error?.message ?? error}`);
 					writeJson(res, 500, { error: error?.message ?? String(error) });
 				}
 			},

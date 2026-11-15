@@ -241,6 +241,23 @@ function noteTrimProjectedTokens(sessionId, agent, ctx) {
 	}
 }
 
+// ---- pressure-snapshot bridge (client badge) -------------------------------
+// The routes layer (host/routes.js) serves GET /trim-pressure for the client
+// dock chip; the live window/pressure math lives in THIS closure. A module
+// bridge mirrors the recentTrim*Of pattern: applyContextTrim publishes a
+// snapshot function once at mount; the route reads it per request. Null
+// publisher (module unloaded) or null window (nothing to measure against)
+// degrades to { available: false } — the chip renders nothing.
+let trimPressureSnapshotFn = null;
+export function trimPressureSnapshotOf(sessionId) {
+	try {
+		if (typeof trimPressureSnapshotFn !== "function") return { available: false };
+		return trimPressureSnapshotFn(sessionId) ?? { available: false };
+	} catch {
+		return { available: false };
+	}
+}
+
 /** Injection outcome of the last dispatch for one session ("in-place" |
  * "swapped" | "none"), or null when unknown or stale. Read by maybeFold:
  * when the wire cannot carry the view, folding cannot relieve anything and
@@ -883,6 +900,54 @@ export function applyContextTrim(ctx, config) {
 		if (explicit > 0) return explicit;
 		const force = readNumber(config, "wmForceTokens", 200_000);
 		return force > 0 ? force : null;
+	};
+
+	// Publish the client-badge snapshot bridge (module-level trimPressureSnapshotOf
+	// reads this). Every field is recomputed per request from live config + the
+	// session's captured model/window/wire — same math as the nudge line, no new
+	// state. viewTokens arrives from the recent-view bridge (10-min TTL); proj
+	// from the meter-projection registry. Failure of any component degrades that
+	// field to null; the chip hides on available=false or window=null.
+	trimPressureSnapshotFn = (sessionId) => {
+		try {
+			if (!enabledNow() || typeof sessionId !== "string" || sessionId === "") return { available: false };
+			const model = recentTrimModelOf(sessionId, TRIM_VIEW_MAX_AGE_MS);
+			let resolvedWindow = null;
+			if (model !== null) {
+				const cached = windowCache.get(model.provider + "/" + model.model);
+				if (cached !== undefined) resolvedWindow = cached.windowTokens ?? null;
+			}
+			const cap = windowCapNow();
+			const windowTokens = resolvedWindow !== null ? effectiveWindowTokens(resolvedWindow, cap) : cap;
+			if (windowTokens === null || windowTokens <= 0) return { available: false };
+			const viewTokens = recentTrimViewTokensOf(sessionId, TRIM_VIEW_MAX_AGE_MS);
+			const wire = wireTokensOf(sessionId);
+			const mass = Math.max(Number.isFinite(wire) ? wire : 0, Number.isFinite(viewTokens) ? viewTokens : 0);
+			const projectedEntry = trimProjectedBySession.get(sessionId);
+			const proj = projectedEntry !== undefined && Date.now() - projectedEntry.at <= TRIM_VIEW_MAX_AGE_MS ? Math.round(projectedEntry.totalTokens) : null;
+			const lines = advisoryNudgeLines(config);
+			const pressure = mass > 0 ? (mass / windowTokens) * 100 : 0;
+			const reliefAt = reliefBySession.get(sessionId) ?? 0;
+			const reliefCooldownRemaining = reliefEnabledNow() && modeNow() === "advisory"
+				? Math.max(0, EMERGENCY_COOLDOWN_MS - (Date.now() - reliefAt))
+				: null;
+			return {
+				available: true,
+				mode: modeNow(),
+				mass: Math.round(mass),
+				window: windowTokens,
+				pressure: Math.round(pressure),
+				view: viewTokens !== null ? Math.round(viewTokens) : null,
+				wire: Number.isFinite(wire) ? Math.round(wire) : null,
+				proj,
+				advisoryLine: lines.line,
+				criticalLine: lines.critical,
+				reliefEnabled: reliefEnabledNow(),
+				reliefCooldownRemaining,
+			};
+		} catch {
+			return { available: false };
+		}
 	};
 
 	/** Session id for a stream call: options.sessionId, else the current

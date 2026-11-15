@@ -13,7 +13,7 @@ import { createStore, emptyLedger, normalizeBlock } from "../../host/context-tri
 import { computeFoldableRange, evaluateTrigger, FOLD_MIN_INTERVAL_MS, EMERGENCY_COOLDOWN_MS } from "../../host/context-trim/trigger.js";
 import { mechanicalSummary, renderMaterial, summarizeWithModel, SUMMARY_SYSTEM_PROMPT, MAX_MATERIAL_CHARS, TRUNCATED_SUMMARY_MARK } from "../../host/context-trim/summarizer.js";
 import { createMetrics, extractUsage, promptTokensOf, wrapStreamForMetrics } from "../../host/context-trim/metrics.js";
-import { applyContextTrim, effectiveWindowTokens, TRIM_PROTOCOL_TEXT, ADVISORY_NUDGE_PERCENT, ADVISORY_NUDGE_CRITICAL_PERCENT, ADVISORY_NUDGE_REPEAT_MS, advisoryNudgeText } from "../../host/context-trim/index.js";
+import { applyContextTrim, effectiveWindowTokens, TRIM_PROTOCOL_TEXT, ADVISORY_NUDGE_PERCENT, ADVISORY_NUDGE_CRITICAL_PERCENT, ADVISORY_NUDGE_REPEAT_MS, advisoryNudgeText , trimPressureSnapshotOf } from "../../host/context-trim/index.js";
 
 /** Build a deterministic message list (no ids — refs must hash stably). */
 function makeMessages(n, seed = 0) {
@@ -1706,6 +1706,43 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		}
 	});
 
+	test("trim-pressure snapshot: the client badge reads the fold-engine domain", async () => {
+		const { ctx, hooks, sessions } = nudgeCtx();
+		const cfg = { ...nudgeConfig(), trimAdvisoryPercent: 50, trimAdvisoryCriticalPercent: 80, trimCriticalRelief: true };
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const sid = "sess-trim-snap";
+		try {
+			// Before any dispatch: view bridge empty, no wire — pressure 0 but available (window resolves).
+			const cold = trimPressureSnapshotOf(sid);
+			assert.equal(cold.available, true, "window known via cache; snapshot available");
+			assert.equal(cold.mode, "advisory");
+			assert.equal(cold.window, 200_000, "no captured model yet: the snapshot falls back to the cap (wmForceTokens default 200k), same denominator as the nudge");
+			assert.equal(cold.pressure, 0, "no paid prompt yet");
+			assert.equal(cold.advisoryLine, 50);
+			assert.equal(cold.criticalLine, 80);
+			// Two dispatches pay 90k each (the second re-sample is what the snapshot reads).
+			await dispatch(listener, sid, 90_000);
+			await dispatch(listener, sid, 90_000);
+			const snap = trimPressureSnapshotOf(sid);
+			assert.equal(snap.available, true);
+			assert.equal(snap.wire, 90_000, "wire = last sampled provider prompt");
+			assert.equal(snap.window, 100_000, "captured model + cached window now bind the effective window");
+			assert.equal(snap.pressure, 90, "pressure = paid prompt over effective window");
+			assert.ok(snap.mass >= 90_000, "mass = max(view, wire)");
+			assert.equal(snap.reliefEnabled, true);
+			// 90% >= 80% critical: the relief fold FIRED during d2 and armed its 90 s cooldown — the snapshot reflects that.
+			assert.equal(typeof snap.reliefCooldownRemaining === "number" && snap.reliefCooldownRemaining >= 0, true, "cooldown armed by the just-fired relief");
+			assert.equal(handle.store.ledgerOf(sid).blocks.length, 1, "the relief fold committed one mechanical block");
+			// Unknown session: isolated, never another conversation pressure.
+			const unknown = trimPressureSnapshotOf("sess-never-seen");
+			assert.equal(unknown.available, true);
+			assert.equal(unknown.mass, 0);
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
 	test("cache miss defers the nudge: async warm-up lands it on a later dispatch", async () => {
 		const resolves = [];
 		const { ctx, hooks, sessions } = nudgeCtx({ llmService: { resolveModelInfo: async (...args) => { resolves.push(args); return { context: { contextWindow: 100_000 } }; } } });

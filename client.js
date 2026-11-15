@@ -935,6 +935,11 @@ window.__ModuleLoader__.load({
 					'空闲时何时把历史折叠为摘要：off = 从不折叠，advisory = 模型自主折叠（压力达线时引擎在系统提示注入一次性提醒），auto = 自动折叠。',
 				trimCriticalReliefLabel: '临界救援折叠',
 				trimCriticalReliefHelp: '开启后（默认），advisory 模式压力到达临界线（trimAdvisoryCriticalPercent）时引擎自动执行一次机械折叠（90 秒冷却），不再只依赖提示。',
+		trimDockLabel: '折叠 {pressure}%（线 {line}%）',
+		trimDockTipDomain: '折叠引擎口径：最近一次实付 prompt（max(view, wire)）÷ 有效窗口（含上限）——不是输入框旁上下文面板的预测口径，两者本就不同、不应收敛。',
+		trimDockTipMass: '实付 {mass} / 窗口 {window} tokens',
+		trimDockTipMode: '模式：{mode}（advisory=模型自行折叠；auto=引擎自动折叠）',
+		trimDockTipCooldown: '临界纾缓冷却中，剩 {seconds}s',
 				trimEnabledLabel: '启用自动裁剪',
 				trimEnabledHelp: '上下文裁剪层的总开关。',
 				trimLadderEnabledLabel: '阶梯折叠（T1/T2/T3）',
@@ -1213,6 +1218,11 @@ window.__ModuleLoader__.load({
 					'When to fold history into summaries at idle: off = never, advisory = the model folds itself (the engine appends a one-off nudge line at the pressure line), auto = automatic folds.',
 				trimCriticalReliefLabel: 'Critical relief fold',
 				trimCriticalReliefHelp: 'When on (default), advisory mode performs one mechanical fold itself at the critical line (trimAdvisoryCriticalPercent, 90 s cooldown) instead of only nudging.',
+		trimDockLabel: 'fold {pressure}% (line {line}%)',
+		trimDockTipDomain: 'Fold-engine domain: last PAID prompt (max of view/wire) over the effective window (cap included) — not the composer context meter projection; the two answer different questions and are not meant to converge.',
+		trimDockTipMass: 'paid {mass} / window {window} tokens',
+		trimDockTipMode: 'mode: {mode} (advisory = the model folds itself; auto = the engine folds)',
+		trimDockTipCooldown: 'critical relief cooling down, {seconds}s left',
 				trimEnabledLabel: 'Enable auto-trim',
 				trimEnabledHelp: 'Master switch for the context-trim layer.',
 				trimLadderEnabledLabel: 'Ladder folding (T1/T2/T3)',
@@ -1499,6 +1509,11 @@ window.__ModuleLoader__.load({
 					'閒置時何時將歷史摺疊為摘要：off = 從不摺疊，advisory = 模型自主摺疊（達壓力線時引擎於系統提示注入一次性提醒），auto = 自動摺疊。',
 				trimCriticalReliefLabel: '臨界救援摺疊',
 				trimCriticalReliefHelp: '開啟後（預設），advisory 模式壓力到達臨界線（trimAdvisoryCriticalPercent）時引擎自動執行一次機械摺疊（90 秒冷卻），不再只依賴提示。',
+		trimDockLabel: '摺疊 {pressure}%（線 {line}%）',
+		trimDockTipDomain: '摺疊引擎口徑：最近一次實付 prompt（max(view, wire)）÷ 有效視窗（含上限）——不是輸入框旁上下文面板的預測口徑，兩者本就不同、不應收斂。',
+		trimDockTipMass: '實付 {mass} / 視窗 {window} tokens',
+		trimDockTipMode: '模式：{mode}（advisory=模型自行摺疊；auto=引擎自動摺疊）',
+		trimDockTipCooldown: '臨界紓緩冷卻中，剩 {seconds}s',
 				trimEnabledLabel: '啟用自動裁剪',
 				trimEnabledHelp: '上下文裁剪層的總開關。',
 				trimLadderEnabledLabel: '階梯摺疊（T1/T2/T3）',
@@ -1756,6 +1771,11 @@ window.__ModuleLoader__.load({
 					'アイドル時に履歴を要約へ折りたたむタイミング：off = 折りたたまない、advisory = モデルが自発的に折りたたむ（圧力しきい値でエンジンがシステムプロンプトに一度だけ注意喚起を追記）、auto = 自動で折りたたむ。',
 				trimCriticalReliefLabel: 'クリティカル救済フォールド',
 				trimCriticalReliefHelp: 'オン（既定）では、advisory モードで圧力が臨界線（trimAdvisoryCriticalPercent）に達した時点でエンジン自身が機械的フォールドを 1 回実行します（90 秒クールダウン）。',
+		trimDockLabel: 'fold {pressure}%（線 {line}%）',
+		trimDockTipDomain: 'fold エンジンの基準：最後に支払った prompt（max(view, wire)）÷ 実効ウィンドウ（上限込み）——入力欄のコンテキストメーターの推定基準とは別物で、収束しないのが正常です。',
+		trimDockTipMass: '支払い済み {mass} / ウィンドウ {window} トークン',
+		trimDockTipMode: 'モード：{mode}（advisory=モデル自身が fold、auto=エンジンが fold）',
+		trimDockTipCooldown: 'critical relief クールダウン中、残り {seconds}秒',
 				trimEnabledLabel: '自動トリムを有効化',
 				trimEnabledHelp: 'コンテキストトリム層のマスタースイッチ。',
 				trimGrowthLabel: '増加しきい値（token）',
@@ -2008,6 +2028,11 @@ window.__ModuleLoader__.load({
 					'유휴 시 언제 기록을 요약으로 접을지: off = 접지 않음, advisory = 모델이 스스로 접음(압력 임계값에서 엔진이 시스템 프롬프트에 일회성 알림 추가), auto = 자동 접기.',
 				trimCriticalReliefLabel: '임계 구제 폴드',
 				trimCriticalReliefHelp: '켜면(기본) advisory 모드에서 압력이 임계선(trimAdvisoryCriticalPercent)에 닿을 때 엔진이 직접 기계 폴드를 한 번 실행합니다(90초 쿨다운).',
+		trimDockLabel: 'fold {pressure}%（선 {line}%）',
+		trimDockTipDomain: 'fold 엔진 기준: 마지막 실제 결제 prompt(max(view, wire)) ÷ 실효 윈도우(상한 포함) — 입력창 컨텍스트 미터의 추정 기준과 다르며 수렴하지 않는 것이 정상입니다.',
+		trimDockTipMass: '결제 {mass} / 윈도우 {window} 토큰',
+		trimDockTipMode: '모드: {mode} (advisory=모델이 직접 fold, auto=엔진이 fold)',
+		trimDockTipCooldown: 'critical relief 쿨다운 중, {seconds}초 남음',
 				trimEnabledLabel: '자동 트림 사용',
 				trimEnabledHelp: '컨텍스트 트림 계층의 마스터 스위치.',
 				trimGrowthLabel: '증가 임계값(token)',
@@ -2252,6 +2277,11 @@ window.__ModuleLoader__.load({
 					'Wann der Verlauf im Leerlauf zu Zusammenfassungen gefaltet wird: off = nie, advisory = das Modell faltet selbst (der Motor hängt eine einmalige Erinnerung an den Systemprompt an), auto = automatisches Falten.',
 				trimCriticalReliefLabel: 'Kritische Notfaltung',
 				trimCriticalReliefHelp: 'Ein (Standard): Erreicht der Druck im Advisory-Modus die kritische Linie (trimAdvisoryCriticalPercent), faltet die Engine selbst einmal mechanisch (90 s Abklingzeit).',
+		trimDockLabel: 'Falten {pressure}% (Linie {line}%)',
+		trimDockTipDomain: 'Fold-Engine-Domäne: zuletzt bezahlter Prompt (max aus view/wire) über das effektive Fenster (inkl. Limit) — nicht die Projektion des Kontextmessers; beide beantworten verschiedene Fragen und sollen nicht konvergieren.',
+		trimDockTipMass: 'bezahlt {mass} / Fenster {window} Token',
+		trimDockTipMode: 'Modus: {mode} (advisory = das Modell faltet selbst; auto = die Engine faltet)',
+		trimDockTipCooldown: 'Critical-Relief-Cooldown, noch {seconds}s',
 				trimEnabledLabel: 'Auto-Trim aktivieren',
 				trimEnabledHelp: 'Hauptschalter für die Kontext-Trim-Schicht.',
 				trimGrowthLabel: 'Wachstumsschwelle (Token)',
@@ -2499,6 +2529,11 @@ window.__ModuleLoader__.load({
 					'Cuándo plegar el historial en resúmenes en reposo: off = nunca, advisory = el modelo pliega por sí mismo (el motor añade un aviso puntual al system prompt), auto = plegado automático.',
 				trimCriticalReliefLabel: 'Alivio crítico mecánico',
 				trimCriticalReliefHelp: 'Activado (predeterminado): en modo advisory, al llegar a la línea crítica (trimAdvisoryCriticalPercent), el motor pliega mecánicamente una vez por sí mismo (enfriamiento de 90 s).',
+		trimDockLabel: 'plegar {pressure}% (línea {line}%)',
+		trimDockTipDomain: 'Dominio del motor de plegado: último prompt pagado (máx de view/wire) sobre la ventana efectiva (límite incluido) — no la proyección del medidor de contexto; ambos responden preguntas distintas y no están hechos para converger.',
+		trimDockTipMass: 'pagado {mass} / ventana {window} tokens',
+		trimDockTipMode: 'modo: {mode} (advisory = el modelo pliega; auto = pliega el motor)',
+		trimDockTipCooldown: 'alivio crítico enfriando, faltan {seconds}s',
 				trimEnabledLabel: 'Activar recorte automático',
 				trimEnabledHelp:
 					'Interruptor maestro de la capa de recorte de contexto.',
@@ -2747,6 +2782,11 @@ window.__ModuleLoader__.load({
 					'Quand replier l’historique en résumés au repos : off = jamais, advisory = le modèle replie lui-même (le moteur ajoute un rappel ponctuel au system prompt), auto = repli automatique.',
 				trimCriticalReliefLabel: 'Secours mécanique critique',
 				trimCriticalReliefHelp: 'Activé (par défaut) : en mode advisory, quand la pression atteint la ligne critique (trimAdvisoryCriticalPercent), le moteur plie lui-même une fois mécaniquement (délai de 90 s).',
+		trimDockLabel: 'replier {pressure}% (ligne {line}%)',
+		trimDockTipDomain: 'Domaine du moteur de repli : dernier prompt payé (max de view/wire) sur la fenêtre effective (plafond inclus) — pas la projection du compteur de contexte ; les deux répondent à des questions différentes et ne sont pas faits pour converger.',
+		trimDockTipMass: 'payé {mass} / fenêtre {window} jetons',
+		trimDockTipMode: 'mode : {mode} (advisory = le modèle replie lui-même ; auto = le moteur replie)',
+		trimDockTipCooldown: 'soulagement critique en refroidissement, {seconds}s restantes',
 				trimEnabledLabel: 'Activer le rognage automatique',
 				trimEnabledHelp:
 					'Interrupteur principal de la couche de rognage de contexte.',
@@ -2995,6 +3035,11 @@ window.__ModuleLoader__.load({
 					'Quando comprimere la cronologia in riepiloghi a riposo: off = mai, advisory = il modello comprime da solo (il motore aggiunge un promemoria una tantum al system prompt), auto = riduzione automatica.',
 				trimCriticalReliefLabel: 'Soccorso critico meccanico',
 				trimCriticalReliefHelp: 'Attivo (predefinito): in modalità advisory, al raggiungimento della linea critica (trimAdvisoryCriticalPercent), il motore esegue una piegatura meccanica da sé (cooldown di 90 s).',
+		trimDockLabel: 'ripiega {pressure}% (linea {line}%)',
+		trimDockTipDomain: 'Dominio del motore di ripiegamento: ultimo prompt pagato (max di view/wire) sulla finestra effettiva (limite incluso) — non la proiezione del misuratore di contesto; i due rispondono a domande diverse e non sono fatti per convergere.',
+		trimDockTipMass: 'pagato {mass} / finestra {window} token',
+		trimDockTipMode: 'modalità: {mode} (advisory = il modello ripiega da solo; auto = ripiega il motore)',
+		trimDockTipCooldown: 'sollievo critico in raffreddamento, {seconds}s rimanenti',
 				trimEnabledLabel: 'Attiva riduzione automatica',
 				trimEnabledHelp:
 					'Interruttore principale del livello di riduzione del contesto.',
@@ -3243,6 +3288,11 @@ window.__ModuleLoader__.load({
 					'Quando dobrar o histórico em resumos na ociosidade: off = nunca, advisory = o modelo dobra por si (o motor acrescenta um aviso pontual ao system prompt), auto = dobra automática.',
 				trimCriticalReliefLabel: 'Alívio crítico mecânico',
 				trimCriticalReliefHelp: 'Ligado (padrão): no modo advisory, ao atingir a linha crítica (trimAdvisoryCriticalPercent), o motor dobra mecanicamente uma vez por si (arrefecimento de 90 s).',
+		trimDockLabel: 'dobrar {pressure}% (linha {line}%)',
+		trimDockTipDomain: 'Domínio do motor de dobra: último prompt pago (máx de view/wire) sobre a janela efetiva (limite incluído) — não a projeção do medidor de contexto; ambos respondem perguntas diferentes e não estão feitos para convergir.',
+		trimDockTipMass: 'pago {mass} / janela {window} tokens',
+		trimDockTipMode: 'modo: {mode} (advisory = o modelo dobra; auto = o motor dobra)',
+		trimDockTipCooldown: 'alívio crítico em arrefecimento, faltam {seconds}s',
 				trimEnabledLabel: 'Ativar corte automático',
 				trimEnabledHelp:
 					'Interruptor principal da camada de corte de contexto.',
@@ -3491,6 +3541,11 @@ window.__ModuleLoader__.load({
 					'Когда сворачивать историю в сводки в простое: off = никогда, advisory = модель сворачивает сама (движок добавляет разовое напоминание в системный промпт), auto = автоматически.',
 				trimCriticalReliefLabel: 'Критическое авто-сворачивание',
 				trimCriticalReliefHelp: 'Включено (по умолчанию): в режиме advisory при достижении критической линии (trimAdvisoryCriticalPercent) движок сам один раз сворачивает механически (куладдаун 90 с).',
+		trimDockLabel: 'свернуть {pressure}% (линия {line}%)',
+		trimDockTipDomain: 'Область движка сворачивания: последний оплаченный prompt (max от view/wire) делённый на эффективное окно (с лимитом) — не прогноз счётчика контекста; эти числа отвечают на разные вопросы и не должны сходиться.',
+		trimDockTipMass: 'оплачено {mass} / окно {window} токенов',
+		trimDockTipMode: 'режим: {mode} (advisory = модель сворачивает сама; auto = сворачивает движок)',
+		trimDockTipCooldown: 'критическое relief на кулдауне, осталось {seconds}с',
 				trimEnabledLabel: 'Включить автообрезку',
 				trimEnabledHelp: 'Главный выключатель слоя обрезки контекста.',
 				trimGrowthLabel: 'Порог роста (токенов)',
@@ -4091,6 +4146,123 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+		/** Composer dock chip for trim pressure (conversation.input.dock,
+		 * order 88 — one slot below the intent chip's 89): shows the fold
+		 * engine's own pressure figure — the LAST PAID prompt (max of view/
+		 * wire) over the effective window (cap included) — next to the
+		 * composer. This is the number the trim nudges and tiers act on, and
+		 * it is deliberately NOT the composer context meter's projection:
+		 * different numerator (paid vs projected) and denominator (effective
+		 * window vs model window), so the two figures answer different
+		 * questions and legitimately diverge (the tooltip spells this out).
+		 * Polls the Host trim-pressure route every 15s; disabled trim, an
+		 * unknown window, or any fetch failure renders null (fail-silent).
+		 * Pure display — no interactive controls. */
+		function TrimDockEntry({ t, sessionId }) {
+			const [snap, setSnap] = React.useState(null);
+			React.useEffect(() => {
+				let stopped = false;
+				let timer = null;
+				const query =
+					typeof sessionId === 'string' && sessionId !== ''
+						? `?session=${encodeURIComponent(sessionId)}`
+						: '';
+				const tick = async () => {
+					let next = null;
+					try {
+						const reply = await api.get(`trim-pressure${query}`);
+						const value = reply?.ok ? reply.value : null;
+						if (
+							value &&
+							typeof value === 'object' &&
+							value.available === true &&
+							typeof value.pressure === 'number' &&
+							typeof value.window === 'number' &&
+							value.window > 0
+						)
+							next = {
+								mode: value.mode === 'advisory' || value.mode === 'auto' ? value.mode : null,
+								pressure: Math.round(value.pressure),
+								mass: typeof value.mass === 'number' ? value.mass : null,
+								window: value.window,
+								advisoryLine:
+									typeof value.advisoryLine === 'number' ? value.advisoryLine : null,
+								criticalLine:
+									typeof value.criticalLine === 'number' ? value.criticalLine : null,
+								reliefCooldown:
+									typeof value.reliefCooldownRemaining === 'number'
+										? Math.max(0, Math.round(value.reliefCooldownRemaining / 1000))
+										: null,
+							};
+					} catch {
+						next = null;
+					}
+					if (stopped) return;
+					setSnap(next);
+					timer = setTimeout(tick, 15_000);
+				};
+				void tick();
+				return () => {
+					stopped = true;
+					if (timer !== null) clearTimeout(timer);
+				};
+			}, [sessionId]);
+			if (snap === null) return null;
+			// Same dock-column formula as the sibling chips: keep the chip's
+			// left edge tracking the centered composer card.
+			const tipLines = [
+				t('trimDockTipDomain'),
+				snap.mass !== null
+					? t('trimDockTipMass', { mass: snap.mass, window: snap.window })
+					: null,
+				snap.mode !== null ? t('trimDockTipMode', { mode: snap.mode }) : null,
+				 snap.reliefCooldown !== null && snap.reliefCooldown > 0
+					? t('trimDockTipCooldown', { seconds: snap.reliefCooldown })
+					: null,
+			].filter((line) => line !== null);
+			const nearCritical =
+				snap.criticalLine !== null && snap.pressure >= snap.criticalLine;
+			const nearLine =
+				!nearCritical &&
+				snap.advisoryLine !== null &&
+				snap.pressure >= snap.advisoryLine;
+			return h(
+				'div',
+				{
+					'data-dsh-switchman': 'trim-dock-column',
+					style: {
+						boxSizing: 'border-box',
+						width: 'calc(100% - var(--dsh-composer-side-clearance, 16px) - var(--dsh-composer-side-clearance, 16px))',
+						maxWidth: 'var(--dsh-composer-card-max-width, 780px)',
+						margin: '0 auto',
+						flex: 'none',
+						display: 'flex',
+						flexDirection: 'column',
+						gap: 'var(--dsh-composer-stack-gap, 6px)',
+					},
+				},
+				h(
+					'p',
+					{
+						'data-dsh-switchman': 'trim-dock-chip',
+						title: tipLines.join(' · '),
+						style: {
+							margin: '0',
+							padding: '2px 0',
+							color: nearCritical
+								? 'var(--dsw-alias-state-error-primary, inherit)'
+								: nearLine
+								? 'var(--dsw-alias-state-business-primary, inherit)'
+								: 'var(--dsw-alias-label-tertiary, inherit)',
+							fontSize: '12px',
+							lineHeight: '1.6',
+						},
+					},
+					'⚙ ',
+					t('trimDockLabel', { pressure: snap.pressure, line: snap.advisoryLine }),
+				),
+			);
+		}
 		/** Composer dock chip for intent routing (conversation.input.dock,
 		 * order 89 — one slot above the vision entry's 90): shows where the
 		 * session's auto-selected pseudo-model currently routes AND the
@@ -7569,6 +7741,19 @@ window.__ModuleLoader__.load({
 							order: 89,
 						},
 						(kit) => h(IntentDockEntry, { ...kit, t }),
+					),
+				);				// Trim-pressure chip (same dock list, order 88 — one slot below
+				// the intent chip): the fold engine's paid-prompt pressure, the
+				// number its nudges/tiers act on. Deliberately NOT the composer
+				// context meter's projection — the tooltip explains the domains.
+				ctx.slots.inject('conversation.input.dock', () =>
+					ctx.slots.register(
+						{
+							name: 'conversation.input.dock',
+							id: 'dsh-switchman-trim',
+							order: 88,
+						},
+						(kit) => h(TrimDockEntry, { ...kit, t }),
 					),
 				);
 				// Composer model label (conversation.input.model.label): the
