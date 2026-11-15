@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 格式参照 Keep a Changelog;版本遵循语义化版本。
 
-## [Unreleased]
+## [1.11.7] — 2026-11-15
 
 ### Security
 
@@ -279,7 +279,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **兼容下限**：`engines.dsh` 提升至 `>=0.2.2-rc.1`（原 `>=0.2.1-rc.1`）。`cordis.patch.yml` 的四个预设覆盖与 0.2.2-rc.1 出厂预设逐字段一致：`tool-fs` `applyPatch: false`、`tool-fs-search` `sampleOverCapGlobResults: false`、subagent spawn 行 `modelSelection` + `modelDiscovery`、`profileContext` disabled 表达式守卫、无 `list-agents` 行。
 
-[Unreleased]: https://github.com/mrzturn/dsh-switchman/compare/v1.11.5...HEAD
+[Unreleased]: https://github.com/mrzturn/dsh-switchman/compare/v1.11.7...HEAD
+[1.11.7]: https://github.com/mrzturn/dsh-switchman/compare/v1.11.6...v1.11.7
+[1.11.6]: https://github.com/mrzturn/dsh-switchman/compare/v1.11.5...v1.11.6
 [1.11.5]: https://github.com/mrzturn/dsh-switchman/compare/v1.11.4...v1.11.5
 [1.11.4]: https://github.com/mrzturn/dsh-switchman/compare/v1.11.3...v1.11.4
 [1.11.3]: https://github.com/mrzturn/dsh-switchman/compare/v1.11.2...v1.11.3
