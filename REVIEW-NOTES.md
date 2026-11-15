@@ -325,3 +325,21 @@ F7 只想改默认值 3000→3500，但编辑顺带删掉了相邻的守卫行�
   分母前身，两分支均有定义），附三行注释说明实录来源。
 - 验证：node --check 过 + 281/281 测试过。与 F1-F21 一样落盘待重启生效。
 
+## Post-restart verification（2026-11-15 16:23-16:35 +08，HANDOVER §5 清单）
+- 环境事实：host 旧 pid 25562 → 新 pid 84306（app 本地 16:19 启动）；desktop node_modules 符号链接仍直指本 checkout（HEAD=ebc940b，工作区干净）。关键交叉核对：b=1794730238625 恰等于 index.js mtimeMs（1794730238.625 = 本地 16:10:38，index.js:57 MODULE_BUILD_STAMP=statSync(import.meta.url).mtimeMs）→ stamp 即文件 mtime，新代码确已装载。
+- 日志共享写入方有两个进程（重要，防误判）：desktop host（pid 84306，行带 b= 戳）+ web profile 的 npm 安装副本（profiles/web/node_modules/dsh-switchman，1.11.6 但早于 926d925，pid 11766 自周六启动未重启，行无 b= 戳）。`session-107a09e8` 的无戳 window=150000 行、2026-11-14 的 llm-attached pid=20380/20306 行均来自该 web 副本；同 2ms 内 window-resolved=1000000（模型原始窗口）与决策行 window=150000（effectiveWindowTokens=cap 钳制）并不矛盾（前者同样无戳=web 副本所写）。**非缺陷，F24 空缺**；web 副本若也要新修复需另行重装/换链接。
+- ① build stamp：重启后 18 行中 8 行带新戳 b=1794730238625，旧戳 b=1794715434101 出现 0 次 → 新代码装载 ✓
+- ② F5 闭环：`2026-11-15T08:19:32.234Z llm-attached hasOn=function hasOff=false hasDisposer=function hasEffect=function pid=84306` 出现；llm-attach-failed 与 `cannot get property "off" without inject` 均 0 行 → ✓（hasOff=false 与装机 cordis events mixin 无 off 的结论一致；hasDisposer=function 证明 disposer Map 路径工作）
+- ③ F16a 探针：`accounting failed` 计数 = 0 ✓
+- ④ F23 探针：`advisory-nudge-failed` / `windowTokens` 字样 0 行 ✓
+- ⑤ F22 芯片即时刷新：服务端快照本就每请求实时重算，剩浏览器端确认（用户需硬刷新加载新 client.js）；待用户反馈。
+- ⑥ F6-F9/F12/F13 设置页往返：重启后日志零 fail/error/warn 行（18 行全净），config 写入路径无异常信号；浏览器端保存往返待用户确认。
+- ⑦ 回归基线：新会话 session-08f84fce view-applied/side-dispatch 链路正常（view 479→42346 随轮次正常爬升，wire/proj 数值合理）；期间压力全程低于阈值，无 nudge/fold 属预期。
+- 小结：日志侧可判定的 4 项（①②③④）全部通过；⑤⑥ 待用户网页端确认；重启后未出现任何新缺陷签名，无需开 F24。
+
+## Post-restart verification round 2（16:45-16:48 +08，用户重启 web+desktop 两个实例）
+- 第二轮重启实录：desktop host 84306 → 94383（16:45:14 启动），web 实例 11766 → 94936（16:46:19 启动）。
+- desktop 侧全部探针复验通过：启动即 `llm-attached hasOn=function hasOff=false hasDisposer=function hasEffect=function pid=94383`；此后所有行带新戳 b=1794730238625、旧戳 0 次、fail/error/warn 计数 0。本会话自身（session-08f84fce，16:23Z 起）全程在新代码上运行。
+- **web profile 未获得修复（重要环境事实）**：web profile 的 dsh-switchman 是 npm 安装的文件拷贝（发布版 1.11.6，今晨 08:05 本地落盘，index.js mtime 戳 = 1794701140187），关键 4 文件与 checkout 全部 DIFF——926d925 的 19 个修复不在其中，重启只能重新装载磁盘上的旧副本。上一轮的无戳行由此定性：周六启动的旧 web 进程（11766）装载的是更早的 pre-1.11.6 快照（无 stamp 代码），故行无 b= 戳；window=150000 是该 profile 自己的 trimWindowTokens 配置（effectiveWindowTokens=cap 钳制），非缺陷。web 重启后的新行预期带旧戳 b=1794701140187。
+- 结论：修复装载验证在 desktop profile 完整成立；web profile 若需要同批修复，须另行同步副本（换 symlink 或重装），纯重启无效。
+
