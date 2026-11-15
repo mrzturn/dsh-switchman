@@ -650,9 +650,9 @@
         langScope: project
         dispatchEnforce: advice
         wmSoftTokens: 80000
-        wmHardTokens: 95000
-        wmForceTokens: 150000
-        wmReadBudgetTokens: 3000
+        wmHardTokens: 100000
+        wmForceTokens: 200000
+        wmReadBudgetTokens: 3500
         wmDenyMode: cap
         wmAutoHandover: true
         wmSubagentCap: true
@@ -661,15 +661,15 @@
         teamsMode: true
         syncWhitelist: true
         trimEnabled: true
-        trimMode: auto
+        trimMode: advisory
         trimGrowthTokens: 22500
-        trimIncrementTokens: 25000
-        trimPressurePercent: 65
-        trimEmergencyPercent: 95
-        trimAdvisoryPercent: 65
-        trimAdvisoryCriticalPercent: 95
+        trimIncrementTokens: 45000
+        trimPressurePercent: 45
+        trimEmergencyPercent: 90
+        trimAdvisoryPercent: 50
+        trimAdvisoryCriticalPercent: 80
         trimWindowTokens: 0
-        trimProtectedTail: 10
+        trimProtectedTail: 6
         trimMaxFoldsPerHour: 30
         trimLadderEnabled: true
         trimProtectTaskIntent: true
