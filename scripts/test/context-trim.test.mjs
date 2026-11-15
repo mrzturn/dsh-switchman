@@ -671,6 +671,9 @@ describe("model visibility", () => {
 		assert.match(TRIM_PROTOCOL_TEXT, /\[SWITCHMAN:TRIM\]/u);
 		assert.doesNotMatch(TRIM_PROTOCOL_TEXT, /\d/u);
 		assert.match(TRIM_PROTOCOL_TEXT, /never reports sizes, percentages, or progress/u);
+		// Program-transport (PTC) discoverability: the head names the in-program SDK form.
+		assert.match(TRIM_PROTOCOL_TEXT, /run_code is your only directly callable tool/u);
+		assert.match(TRIM_PROTOCOL_TEXT, /tools\.ctx_trim_fold\(\{ firstId, lastId, count, summary \}\)/u);
 	});
 	test("window cap composes as min(resolved, cap)", () => {
 		assert.equal(effectiveWindowTokens(512_000, 150_000), 150_000);

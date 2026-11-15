@@ -352,6 +352,7 @@ export const TRIM_PROTOCOL_TEXT = [
 	"- Old message ranges may be replaced by ONE synthetic [SWITCHMAN:TRIM] summary message; treat those summaries as faithful compressions, and message refs inside them as historical anchors.",
 	"- NEVER contradict or re-derive content a summary already settled; build on it.",
 	"- You may fold a contiguous range yourself with the ctx_trim_fold tool (give firstId/lastId message refs and a summary following the compression rules); ctx_trim_status lists the compressible ranges with their true sizes.",
+	"- When run_code is your only directly callable tool (program-transport mode), invoke these from inside a run_code program: await tools.ctx_trim_status({}) to list ranges, await tools.ctx_trim_fold({ firstId, lastId, count, summary }) to fold.",
 	"- Tool-call pairs (an assistant tool call and its results) must always be folded together or not at all.",
 ].join("\n");
 
@@ -392,7 +393,7 @@ export function advisoryNudgeText(pressurePercent, critical, foldLine = ADVISORY
 	return [
 		'[SWITCHMAN:TRIM] Advisory nudge — pinned to the session tail until pressure falls below the fold line.',
 		`Live context pressure on this session has reached the fold line. ${action}`,
-		"Act now: call ctx_trim_status to list compressible ranges, pick one contiguous range, and fold it with ctx_trim_fold (tool-call pairs fold together or not at all; existing summaries stay). Do not wait for a routine moment.",
+		"Act now: call ctx_trim_status to list compressible ranges, pick one contiguous range, and fold it with ctx_trim_fold (tool-call pairs fold together or not at all; existing summaries stay). If run_code is your only directly callable tool, run both inside a program: await tools.ctx_trim_status({}) then await tools.ctx_trim_fold({ firstId, lastId, count, summary }). Do not wait for a routine moment.",
 	].join("\n");
 }
 

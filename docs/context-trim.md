@@ -286,6 +286,11 @@ registered protocol head stays byte-stable. The speak is a pure suffix; a later 
 current pressure and fold line ("At 83% (fold line 50%)") and asks for a
 same-turn `ctx_trim_fold`. Rules:
 
+- In program-transport mode (`run_code` as the only directly callable tool), both tools are
+  still reachable: the SDK declares them as `tools.ctx_trim_status` / `tools.ctx_trim_fold`
+  bindings, so a program folds with `await tools.ctx_trim_fold({ firstId, lastId, count, summary })`.
+  The protocol head and the nudge text name this form explicitly, so a PTC-mode model never
+  concludes the fold tool is absent.
 - Same-band throttle: one nudge per band (`high`/`critical`) per 10 minutes
   (`ADVISORY_NUDGE_REPEAT_MS`, `index.js:286`); any band change re-speaks
   immediately, including escalation to critical (`trimAdvisoryCriticalPercent`,
