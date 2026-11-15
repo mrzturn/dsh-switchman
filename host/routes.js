@@ -125,6 +125,7 @@ const TRIM_NUMBER_FIELDS = [
 	{ field: "trimEmergencyPercent", min: 5, max: 100, def: 90 },
 	{ field: "trimAdvisoryPercent", min: 5, max: 100, def: 50 },
 	{ field: "trimAdvisoryCriticalPercent", min: 5, max: 100, def: 80 },
+	{ field: "trimAdvisoryRepeatMs", min: 5000, max: 3600000, def: 120000 },
 	{ field: "trimWindowTokens", min: 0, max: Number.POSITIVE_INFINITY, def: 0 },
 	{ field: "trimProtectedTail", min: 0, max: 100, def: 6 },
 	{ field: "trimLadderT2Tokens", min: 1000, max: Number.POSITIVE_INFINITY, def: 8000 },

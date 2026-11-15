@@ -1522,6 +1522,19 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		assert.match(high, /FOLD FIRST/u);
 		assert.match(high, /waits until pressure is back under the fold line/u);
 		assert.match(critical, /FOLD FIRST/u);
+		const target = '[m5]..[m12] (8 messages, ~1900 tokens) — pass firstId="m5", lastId="m12", count=8';
+		const targeted = advisoryNudgeText(70, false, 50, 80, target, 0);
+		assert.match(targeted, /ONE ctx_trim_fold call is enough/u, "a known target turns the nudge one-step");
+		assert.match(targeted, /firstId="m5"/u);
+		assert.doesNotMatch(targeted, /ctx_trim_status/u, "the two-step status round trip disappears when a target is known");
+		assert.match(advisoryNudgeText(70, false, 50, 80, null, 0), /ctx_trim_status/u);
+		assert.doesNotMatch(advisoryNudgeText(70, false, 50, 80, null, 0), /ONE ctx_trim_fold call is enough/u);
+		const terse = advisoryNudgeText(70, false, 50, 80, target, 2);
+		assert.match(terse, /repeat #3/u);
+		assert.match(terse, /Recommended: /u);
+		assert.equal(terse.includes("\n"), false, "the terse repeat renders as a single line");
+		assert.doesNotMatch(advisoryNudgeText(70, false, 50, 80, target, 0), /repeat #/u);
+		assert.match(advisoryNudgeText(97, true, 50, 80, target, 0), /ONE ctx_trim_fold call is enough/u, "critical keeps the one-step target too");
 	});
 
 
@@ -1550,9 +1563,9 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		handle2.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
 		const sid2 = "sess-verbose-on";
 		try {
-			await dispatch(listener2, sid2, 70_000); // wire lands delayed-once: first dispatch only primes it
-			await dispatch(listener2, sid2, 71_000); // now mass=70% ≥ 50% → speak (prior set)
-			await dispatch(listener2, sid2, 72_000); // same band → the throttle gate, debug-visible when ON
+			await dispatch(listener2, sid2, 55_000); // wire lands delayed-once: first dispatch only primes it
+			await dispatch(listener2, sid2, 56_000); // now mass=55% ≥ 50% → speak in the HIGH band (prior set)
+			await dispatch(listener2, sid2, 57_000); // same high band inside the repeat window → the throttle gate, debug-visible when ON
 			const rows = readFileSync(join(cfgOn2.trimStateDir, "decisions.log"), "utf8").split("\n").filter((line) => line.includes(sid2));
 			assert.ok(rows.some((line) => line.includes(" debug ") && line.includes("nudge throttle")), "verbose mode logs the nudge throttle gate as a debug row");
 			assert.ok(rows.some((line) => line.includes("advisory-nudge pressure=")), "the key nudge row still lands");
@@ -1594,20 +1607,21 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
 		const sid = "sess-nudge-high";
 		try {
-			const request1 = await dispatch(listener, sid, 90_000);
+			const request1 = await dispatch(listener, sid, 70_000);
 			const session = sessions.get(sid);
 			assert.equal(liveNudges(session).length, 0, "first dispatch only primes wire usage");
 			assert.equal(request1.messages[0].content[0].text, HEAD_TEXT);
-			const request2 = await dispatch(listener, sid, 90_000);
+			const request2 = await dispatch(listener, sid, 70_000);
 			const nudges = liveNudges(session);
 			assert.equal(nudges.length, 1, "one surface-tail nudge is live");
-			assert.match(liveNudgeTexts(session)[0], /At 90% \(fold line 65%\)/u);
+			assert.match(liveNudgeTexts(session)[0], /At 70% \(fold line 65%\)/u);
+			assert.match(liveNudgeTexts(session)[0], /ONE ctx_trim_fold call is enough/u, "the one-step fold target rides the nudge");
 			assert.match(nudges[0].data.id, /^trim_nudge_/u);
 			assert.deepEqual(nudges[0].data.source, { kind: "user" });
 			assert.equal(request2.messages[0].content[0].text, HEAD_TEXT, "the dispatch head remains untouched");
-			assert.match(nudgeRows(cfg).join("\n"), /session=sess-nudge-high advisory-nudge pressure=90% mass=90000 window=100000 level=high/u);
+			assert.match(nudgeRows(cfg).join("\n"), /session=sess-nudge-high advisory-nudge pressure=70% mass=70000 window=100000 level=high repeats=1 seq=/u);
 			const nodeCount = session.surface.nodes.length;
-			await dispatch(listener, sid, 91_000);
+			await dispatch(listener, sid, 70_000);
 			assert.equal(liveNudges(session).length, 1, "same-band repeats inside the window stay quiet");
 			assert.equal(session.surface.nodes.length, nodeCount, "a quiet dispatch appends no surface node");
 			assert.equal(nudgeRows(cfg).length, 1);
@@ -1625,29 +1639,32 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
 		const sid = "sess-nudge-escalate";
 		try {
-			await dispatch(listener, sid, 85_000);
+			await dispatch(listener, sid, 68_000); // prime: the first speak must land in the HIGH band (68 < 75)
 			const session = sessions.get(sid);
-			await dispatch(listener, sid, 90_000);
+			await dispatch(listener, sid, 78_000); // eval sees 68% ≥ 65 < 75 → high speak #1
 			assert.equal(liveNudges(session).length, 1);
 			const highSeq = liveNudges(session)[0].seq;
 			const highId = liveNudges(session)[0].data.id;
-			await dispatch(listener, sid, 96_000);
-			const r4 = await dispatch(listener, sid, 30_000);
+			await dispatch(listener, sid, 96_000); // eval sees 78% ≥ 75 → escal band change re-pins immediately
 			assert.equal(liveNudges(session).length, 1, "upgrade replaces rather than duplicates the prior nudge");
-			assert.match(liveNudgeTexts(session)[0], /CRITICAL/u);
-			assert.match(liveNudgeTexts(session)[0], /96% ≥ 95%/u);
+			assert.match(liveNudgeTexts(session)[0], /At 78% \(fold line 65%\)/u);
+			assert.doesNotMatch(liveNudgeTexts(session)[0], /CRITICAL/u);
 			assert.notEqual(liveNudges(session)[0].data.id, highId, "each speak carries a unique nudge id");
 			assert.deepEqual(pruneEvents(session)[0].data.shadowedSeqs, [highSeq]);
+			const r4 = await dispatch(listener, sid, 30_000); // eval sees 96% ≥ 95 → critical re-pin
+			assert.equal(liveNudges(session).length, 1);
+			assert.match(liveNudgeTexts(session)[0], /CRITICAL/u);
+			assert.match(liveNudgeTexts(session)[0], /96% ≥ 95%/u);
+			assert.equal(r4.messages[0].content[0].text, HEAD_TEXT);
 			await dispatch(listener, sid, 10_000);
 			assert.equal(liveNudges(session).length, 0, "below-line pressure prunes the pinned nudge");
-			assert.equal(pruneEvents(session).length, 2, "upgrade and clear each append a prune event");
-			const r6 = await dispatch(listener, sid, 85_000);
+			assert.equal(pruneEvents(session).length, 3, "the escal and critical upgrades plus the below-line clear each append a prune event");
+			const r6 = await dispatch(listener, sid, 67_000);
 			assert.equal(r6.messages[0].content[0].text, HEAD_TEXT);
 			await dispatch(listener, sid, 1_000);
 			assert.equal(liveNudges(session).length, 1, "a new crossing after clear starts a fresh episode");
-			const levels = nudgeRows(cfg).map((line) => (line.includes("level=critical") ? "C" : "H"));
-			assert.deepEqual(levels, ["H", "C", "H"]);
-			assert.equal(r4.messages[0].content[0].text, HEAD_TEXT);
+			const levels = nudgeRows(cfg).map((line) => (line.includes("level=critical") ? "C" : line.includes("level=escal") ? "E" : "H"));
+			assert.deepEqual(levels, ["H", "E", "C", "H"]);
 		} finally {
 			rmSync(cfg.trimStateDir, { recursive: true, force: true });
 		}
@@ -1804,6 +1821,92 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		}
 	});
 
+	test("high band re-pins the tail nudge after trimAdvisoryRepeatMs", async () => {
+		const { ctx, hooks, sessions } = nudgeCtx();
+		const cfg = { ...nudgeConfig(), trimAdvisoryPercent: 50, trimAdvisoryCriticalPercent: 80, trimAdvisoryRepeatMs: 5000 };
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const sid = "sess-nudge-repin-high";
+		try {
+			await dispatch(listener, sid, 55_000); // prime the above-line wire
+			const session = sessions.get(sid);
+			await dispatch(listener, sid, 55_000); // first high-band speak (repeats=1)
+			assert.equal(liveNudges(session).length, 1);
+			const firstId = liveNudges(session)[0].data.id;
+			await new Promise((resolve) => setTimeout(resolve, 5100)); // step past the 5 s repeat window
+			await dispatch(listener, sid, 55_000); // same band, window elapsed: re-pin
+			assert.equal(liveNudges(session).length, 1, "the re-pin replaces, never duplicates");
+			assert.notEqual(liveNudges(session)[0].data.id, firstId, "a re-pinned nudge carries a fresh id");
+			assert.match(liveNudgeTexts(session)[0], /ONE ctx_trim_fold call is enough/u);
+			assert.match(nudgeRows(cfg).join("\n"), /level=high repeats=2/u);
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
+	test("escal band re-pins on every dispatch regardless of trimAdvisoryRepeatMs", async () => {
+		const { ctx, hooks, sessions } = nudgeCtx();
+		const cfg = { ...nudgeConfig(), trimAdvisoryPercent: 50, trimAdvisoryCriticalPercent: 80, trimAdvisoryRepeatMs: 600_000, trimCriticalRelief: false };
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const sid = "sess-nudge-repin-escal";
+		try {
+			await dispatch(listener, sid, 55_000); // prime
+			const session = sessions.get(sid);
+			await dispatch(listener, sid, 55_000); // high-band speak
+			const idHigh = liveNudges(session)[0].data.id;
+			await dispatch(listener, sid, 70_000); // eval still sees 55%: high band, throttled quiet
+			await dispatch(listener, sid, 70_000); // escal upgrade re-pins immediately
+			const idE1 = liveNudges(session)[0].data.id;
+			await dispatch(listener, sid, 70_000); // escal repeat #2 despite the 10-minute repeatMs
+			const idE2 = liveNudges(session)[0].data.id;
+			await dispatch(listener, sid, 70_000); // escal repeat #3 turns terse
+			const idE3 = liveNudges(session)[0].data.id;
+			assert.equal(liveNudges(session).length, 1, "each re-pin replaces the previous tail nudge");
+			assert.notEqual(idE1, idHigh);
+			assert.notEqual(idE2, idE1);
+			assert.notEqual(idE3, idE2);
+			assert.match(liveNudgeTexts(session)[0], /repeat #3/u, "the third escal speak turns terse");
+			const reps = nudgeRows(cfg).map((line) => (line.match(/repeats=(\d+)/) || [])[1]);
+			assert.deepEqual(reps, ["1", "1", "2", "3"], "the counter resets to 1 on a band change");
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
+	test("an ignored escal episode folds mechanically after three ignored speaks", async () => {
+		const { ctx, hooks, sessions } = nudgeCtx();
+		const cfg = { ...nudgeConfig(), trimAdvisoryPercent: 50, trimAdvisoryCriticalPercent: 80, trimAdvisoryRepeatMs: 600_000, trimCriticalRelief: true };
+		const handle = applyContextTrim(ctx, cfg);
+		const listener = hooks["llm/stream"];
+		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
+		const sid = "sess-nudge-relief-escal";
+		try {
+			await dispatch(listener, sid, 55_000); // prime
+			await dispatch(listener, sid, 55_000); // high-band speak, ignored
+			const session = sessions.get(sid);
+			await dispatch(listener, sid, 70_000); // eval still sees 55%: high band, throttled quiet
+			await dispatch(listener, sid, 70_000); // escal upgrade (repeats=1), ignored
+			await dispatch(listener, sid, 70_000); // escal repeat #2, ignored
+			assert.equal(handle.store.ledgerOf(sid).blocks.length, 0, "three ignored speaks never fold");
+			await dispatch(listener, sid, 70_000); // escal repeat #3, ignored
+			await dispatch(listener, sid, 70_000); // three ignored escal speaks: the relief path fires
+			await pollUntil(() => handle.store.ledgerOf(sid).blocks.length === 1);
+			const ledger = handle.store.ledgerOf(sid);
+			assert.equal(ledger.blocks.length, 1, "the ignored escal episode folds mechanically");
+			assert.equal(ledger.blocks[0].kind, "mechanical");
+			const folded = reliefRows(cfg).filter((line) => line.includes("outcome=folded:emergency:"));
+			assert.equal(folded.length, 1);
+			assert.match(folded[0], /trigger=escal/u, "the relief row names the escal band as its trigger");
+			assert.match(liveNudgeTexts(session).join("\n"), /repeat #4/u, "the nudge still speaks (terse) alongside the relief");
+			await dispatch(listener, sid, 70_000); // still escal, but cooling
+			await new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
+			assert.equal(handle.store.ledgerOf(sid).blocks.length, 1, "no second fold inside the cooldown");
+			assert.match(readFileSync(join(cfg.trimStateDir, "decisions.log"), "utf8"), /advisory-relief skip why=cooldown/u);
+		} finally {
+			rmSync(cfg.trimStateDir, { recursive: true, force: true });
+		}
+	});
 	test("trim-pressure snapshot: the client badge reads the fold-engine domain", async () => {
 		const { ctx, hooks, sessions } = nudgeCtx();
 		const cfg = { ...nudgeConfig(), trimAdvisoryPercent: 50, trimAdvisoryCriticalPercent: 80, trimCriticalRelief: true };
@@ -1940,9 +2043,9 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
 		const sid = "sess-nudge-prune-retry";
 		try {
-			await dispatch(listener, sid, 90_000);
+			await dispatch(listener, sid, 70_000);
 			const session = sessions.get(sid);
-			await dispatch(listener, sid, 90_000);
+			await dispatch(listener, sid, 70_000);
 			const append = session.append.bind(session);
 			let fail = true;
 			session.append = function (type, data, opts) {
@@ -2039,9 +2142,9 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
 		const sid = "sess-nudge-orphan-below";
 		try {
-			await dispatch(listener, sid, 90_000);
+			await dispatch(listener, sid, 70_000);
 			const session = sessions.get(sid);
-			await dispatch(listener, sid, 90_000);
+			await dispatch(listener, sid, 70_000);
 			assert.equal(liveNudges(session).length, 1);
 			await dispatch(listener, sid, 10_000); // pressure lags one dispatch: wire is still above the line
 			handle.advisoryNudgeBySession.clear(); // simulate an LRU eviction / process restart
@@ -2061,9 +2164,9 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
 		const sid = "sess-nudge-out-of-window";
 		try {
-			await dispatch(listener, sid, 90_000);
+			await dispatch(listener, sid, 70_000);
 			const session = sessions.get(sid);
-			await dispatch(listener, sid, 90_000);
+			await dispatch(listener, sid, 70_000);
 			for (let i = 0; i < 60; i++) session.append("user/message", { role: "user", content: [{ type: "text", text: "filler " + i }], source: { kind: "user" } });
 			assert.equal(liveNudges(session).length, 1, "the nudge is live but outside the 50-node tail window");
 			await dispatch(listener, sid, 10_000); // above-line wire: in-band quiet
@@ -2082,9 +2185,9 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
 		const sid = "sess-nudge-consumed";
 		try {
-			await dispatch(listener, sid, 90_000);
+			await dispatch(listener, sid, 70_000);
 			const session = sessions.get(sid);
-			await dispatch(listener, sid, 90_000);
+			await dispatch(listener, sid, 70_000);
 			const nudgeSeq = liveNudges(session)[0].seq;
 			session.surface.nodes = session.surface.nodes.filter((seq) => seq !== nudgeSeq); // a fold consumed the nudge
 			await dispatch(listener, sid, 96_000); // prime the critical-band wire (pressure lags one dispatch)
@@ -2108,8 +2211,8 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
 		const sid = "sess-nudge-retire";
 		try {
-			await dispatch(listener, sid, 90_000); // prime the above-line wire (pressure lags one dispatch)
-			await dispatch(listener, sid, 90_000); // the nudge speaks
+			await dispatch(listener, sid, 70_000); // prime the above-line wire (pressure lags one dispatch)
+			await dispatch(listener, sid, 70_000); // the nudge speaks
 			const session = sessions.get(sid);
 			assert.equal(liveNudges(session).length, 1);
 			await dispatch(listener, sid, 10_000); // pressure lags one dispatch: still above-line in-band
@@ -2139,9 +2242,9 @@ describe("assembly: advisory nudge (advisory-mode pressure speak)", () => {
 		handle.windowCache.set("p/m", { windowTokens: 100_000, at: Date.now() });
 		const sid = "sess-nudge-multi";
 		try {
-			await dispatch(listener, sid, 90_000);
+			await dispatch(listener, sid, 70_000); // high band: the second dispatch stays throttled
 			const session = sessions.get(sid);
-			await dispatch(listener, sid, 90_000);
+			await dispatch(listener, sid, 70_000);
 			session.append("user/message", { id: "trim_nudge_manual", role: "user", content: [{ type: "text", text: "[SWITCHMAN:TRIM] Advisory nudge — stale duplicate" }], source: { kind: "user" } });
 			assert.equal(liveNudges(session).length, 2);
 			await dispatch(listener, sid, 10_000); // above-line wire: in-band quiet

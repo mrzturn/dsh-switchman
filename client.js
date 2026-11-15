@@ -282,6 +282,7 @@ window.__ModuleLoader__.load({
 			{ field: 'trimEmergencyPercent', min: 5, max: 100, def: 90 },
 			{ field: 'trimAdvisoryPercent', min: 5, max: 100, def: 50 },
 			{ field: 'trimAdvisoryCriticalPercent', min: 5, max: 100, def: 80 },
+			{ field: 'trimAdvisoryRepeatMs', min: 5000, max: 3600000, def: 120000 },
 			{ field: 'trimWindowTokens', min: 0, def: 0 },
 			{ field: 'trimProtectedTail', min: 0, max: 100, def: 6 },
 			{ field: 'trimMaxFoldsPerHour', min: 1, max: 60, def: 30 },
@@ -313,6 +314,10 @@ window.__ModuleLoader__.load({
 			trimAdvisoryCriticalPercent: {
 				label: 'trimAdvisoryCriticalLabel',
 				help: 'trimAdvisoryCriticalHelp',
+			},
+			trimAdvisoryRepeatMs: {
+				label: 'trimAdvisoryRepeatLabel',
+				help: 'trimAdvisoryRepeatHelp',
 			},
 			trimWindowTokens: {
 				label: 'trimWindowLabel',
@@ -986,6 +991,8 @@ window.__ModuleLoader__.load({
 				trimAdvisoryHelp: '仅 advisory 模式：压力达到窗口的这一百分比时，提醒模型自行折叠。',
 				trimAdvisoryCriticalLabel: 'Advisory 升级线（%）',
 				trimAdvisoryCriticalHelp: '仅 advisory 模式：达到这一百分比时，提醒升级为本轮必须折叠的指令。',
+				trimAdvisoryRepeatLabel: 'Advisory 重贴间隔（ms）',
+				trimAdvisoryRepeatHelp: '仅 advisory 模式：提醒贴在会话尾部后，每隔该毫秒数在新尾部重贴一次（临界档取其一半，下限 45 秒）；默认 120000。',
 				trimModeOff: '关闭',
 				trimWindowLabel: '窗口上限（token）',
 				trimWindowHelp: '压力与紧急档按 min(模型窗口, 上限) 计算；0 = 跟随强制水位（wmForceTokens）。',
@@ -1280,6 +1287,8 @@ window.__ModuleLoader__.load({
 				trimAdvisoryHelp: 'Advisory mode only: the model is nudged to fold itself at this percent of the window.',
 				trimAdvisoryCriticalLabel: 'Advisory critical line (%)',
 				trimAdvisoryCriticalHelp: 'Advisory mode only: at this percent the nudge escalates to a fold-down-this-turn order.',
+				trimAdvisoryRepeatLabel: 'Advisory re-pin interval (ms)',
+				trimAdvisoryRepeatHelp: 'Advisory mode only: after a nudge is pinned to the session tail, it re-pins at the new tail every this many ms (critical band halves it, 45 s floor). Default 120000.',
 				trimWindowLabel: 'Window cap (tokens)',
 				trimWindowHelp: 'Pressure and emergency tiers use min(model window, cap); 0 = follow wmForceTokens.',
 				trimModeOff: 'Off',

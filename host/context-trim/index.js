@@ -366,7 +366,16 @@ export const TRIM_PROTOCOL_TEXT = [
 // lines are config-tunable via trimAdvisoryPercent / trimAdvisoryCriticalPercent.
 export const ADVISORY_NUDGE_PERCENT = 50;
 export const ADVISORY_NUDGE_CRITICAL_PERCENT = 80;
-export const ADVISORY_NUDGE_REPEAT_MS = 600_000;
+/** Repeat cadence of the live tail nudge, per band. The nudge REPLACES
+ *  itself at the new surface tail (prune old seq, append fresh) — the old
+ *  10-minute single repeat let a spoken nudge slide under ~50 messages of
+ *  new turn output and become background noise (2026-11-15 turn observation:
+ *  the model folded only after the throttle window expired). Critical
+ *  escalates faster than high; relief (>= 80%) owns the mechanical path
+ *  independently of this cadence. Config-tunable via trimAdvisoryRepeatMs,
+ *  falling back to the defaults when absent or out of range. */
+export const ADVISORY_NUDGE_REPEAT_MS = 120_000;
+export const ADVISORY_NUDGE_REPEAT_CRITICAL_MS = 45_000;
 
 /** Effective advisory lines for one dispatch: config-tunable, falling back to
  * the configured defaults (50/80) when absent, inverted, or out of range —
@@ -379,6 +388,17 @@ function advisoryNudgeLines(config) {
 	return { line, critical };
 }
 
+/** Effective nudge repeat cadence for one dispatch: config-tunable
+ *  (trimAdvisoryRepeatMs), falling back to the built-in per-band defaults
+ *  when absent, negative, or above one hour — a broken value never pins
+ *  the nudge to the old 10-minute cadence nor spams every dispatch. */
+function advisoryRepeatLines(config) {
+	const highMs = readNumber(config, "trimAdvisoryRepeatMs", ADVISORY_NUDGE_REPEAT_MS);
+	const saneMs = (v) => Number.isFinite(v) && v >= 5_000 && v <= 3_600_000;
+	if (!saneMs(highMs)) return { highMs: ADVISORY_NUDGE_REPEAT_MS, criticalMs: ADVISORY_NUDGE_REPEAT_CRITICAL_MS };
+	return { highMs, criticalMs: Math.min(highMs, ADVISORY_NUDGE_REPEAT_CRITICAL_MS) };
+}
+
 /** Advisory-mode nudge text. Deliberate, bounded exception to the
  * digit-free disclosure policy of TRIM_PROTOCOL_TEXT above: advisory mode
  * never folds on a schedule (the modeNow gate); besides the model's own
@@ -386,15 +406,24 @@ function advisoryNudgeLines(config) {
  * fold (trimCriticalRelief, cooldown-gated). At threshold, the live-number
  * instruction is appended to the session surface tail, not injected into
  * the registered system section. */
-export function advisoryNudgeText(pressurePercent, critical, foldLine = ADVISORY_NUDGE_PERCENT, criticalLine = ADVISORY_NUDGE_CRITICAL_PERCENT) {
+export function advisoryNudgeText(pressurePercent, critical, foldLine = ADVISORY_NUDGE_PERCENT, criticalLine = ADVISORY_NUDGE_CRITICAL_PERCENT, target = null, nth = 0) {
 	const action = critical
 		? `Pressure is CRITICAL (${pressurePercent}% ≥ ${criticalLine}%): fold down to under ~50% of the context IN THIS TURN.`
 		: `At ${pressurePercent}% (fold line ${foldLine}%): ${foldLine}–${foldLine + 9}% → fold roughly half of the older history now; ≥${foldLine + 10}% → fold down to under ~50%.`;
+	if (nth >= 2) {
+		const targetLine = target !== null ? ` Recommended: ${target}` : " Get ranges with ctx_trim_status."; // eslint-disable-line no-template-curly-in-string
+		return [
+			`[SWITCHMAN:TRIM] Advisory nudge (repeat #${nth + 1}) — still above the fold line. ${action} Fold FIRST, resume afterwards.${targetLine}`
+		].join("\n");
+	}
+	const actNow = target !== null
+		? `Act now: ONE ctx_trim_fold call is enough — fold the recommended range. Recommended: ${target}. (tool-call pairs fold together or not at all; existing summaries stay.) If run_code is your only directly callable tool, run: await tools.ctx_trim_fold({ firstId: "<firstRef>", lastId: "<lastRef>", count: <count>, summary: <your summary> }). Do not wait for a routine moment.`
+		: "Act now: call ctx_trim_status to list compressible ranges, pick one contiguous range, and fold it with ctx_trim_fold (tool-call pairs fold together or not at all; existing summaries stay). If run_code is your only directly callable tool, run both inside a program: await tools.ctx_trim_status({}) then await tools.ctx_trim_fold({ firstId, lastId, count, summary }). Do not wait for a routine moment.";
 	return [
 		'[SWITCHMAN:TRIM] Advisory nudge — pinned to the session tail until pressure falls below the fold line.',
 		`Live context pressure on this session has reached the fold line. ${action}`,
 		"FOLD FIRST: treat this nudge as a preemption, not background advice. Finish the current tool call if (and only if) aborting it mid-flight would leave broken state; otherwise interrupt the task queue and fold before continuing. Every queued step, plan item and pending subtask waits until pressure is back under the fold line. The only valid excuse to defer is a task that genuinely cannot be resumed after an interruption — and even then, fold at the first safe pause rather than at task end.",
-		"Act now: call ctx_trim_status to list compressible ranges, pick one contiguous range, and fold it with ctx_trim_fold (tool-call pairs fold together or not at all; existing summaries stay). If run_code is your only directly callable tool, run both inside a program: await tools.ctx_trim_status({}) then await tools.ctx_trim_fold({ firstId, lastId, count, summary }). Do not wait for a routine moment.",
+		actNow
 	].join("\n");
 }
 
@@ -502,6 +531,32 @@ export function applyContextTrim(ctx, config) {
 		});
 	}
 
+	/** One-step fold target for the nudge text: the SAME recommendation the
+	 *  ctx_trim_status tool prints (first/last message refs + count of the raw
+	 *  compressible range). null when no capture exists yet or nothing is
+	 *  foldable — the nudge then keeps the two-step status-first wording.
+	 *  Read-only over the live capture: no host access, no throw. */
+	function recommendedFoldTargetOf(sessionId) {
+		try {
+			const capture = captures.get(sessionId);
+			if (capture === undefined || !Array.isArray(capture.messages) || capture.messages.length === 0) return null;
+			const ledger = store.ledgerOf(sessionId);
+			const { protectedTail, protectTaskIntent } = thresholdsNow();
+			const foldable = computeFoldableRange(capture.messages, ledger, protectedTail, { protectTaskIntent });
+			if (foldable === null) return null;
+			const firstRef = refOf(capture.messages[foldable.startIdx], foldable.startIdx);
+			const lastRef = refOf(capture.messages[foldable.endIdx], foldable.endIdx);
+			return {
+				firstId: "m" + firstRef,
+				lastId: "m" + lastRef,
+				count: foldable.endIdx - foldable.startIdx + 1,
+				tokens: estimateTokensOf(capture.messages, foldable.startIdx, foldable.endIdx),
+			};
+		} catch {
+			return null;
+		}
+	}
+
 	/** Advisory-mode pressure nudge (text: advisoryNudgeText). Appends the live
 	 * instruction to the session surface tail once pressure crosses the fold
 	 * line. Pressure reuses the meter-duality bridge (wire preferred, view
@@ -587,7 +642,27 @@ export function applyContextTrim(ctx, config) {
 			}
 			return; // fresh episode on the next crossing
 		}
-		const critical = pressurePercent >= nudgeLines.critical;
+	const critical = pressurePercent >= nudgeLines.critical;
+	// One-step fold target (2026-11-15 advisory rework, item 2): the status
+	// tool's exact recommendation inlined into the nudge, so the model can
+	// comply with a single ctx_trim_fold call instead of a status round trip.
+	// The relief cycle below reuses the same target.
+	const foldTarget = recommendedFoldTargetOf(sessionId);
+	const targetText = foldTarget === null ? null
+		: `[m${foldTarget.firstId}]..[m${foldTarget.lastId}] (${foldTarget.count} messages, ~${Math.round(foldTarget.tokens)} tokens) — pass firstId="${foldTarget.firstId}", lastId="${foldTarget.lastId}", count=${foldTarget.count}`;
+	// Three-band advisory ladder (2026-11-15 rework, item 3): high = at the
+	// speak line (re-pin every trimAdvisoryRepeatMs); escal = ten points
+	// above it (re-pin EVERY dispatch — a reminder that keeps sliding under
+	// the turn tail must sit at the tail); critical = the escalation line
+	// (fastest re-pin + the mechanical relief path below).
+	const escal = !critical && pressurePercent >= nudgeLines.line + 10;
+	const band = critical ? "critical" : escal ? "escal" : "high";
+	// Relief extension (item 4): critical is not the only engine fold
+	// trigger — three consecutive same-band speaks with no fold commit
+	// (prior.repeats >= 3) put an escal-band session on the SAME mechanical
+	// relief path, cooldown-gated like critical. Nudge-only purity survives
+	// for genuinely attended sessions: repeats < 3 never folds.
+	const reliefDue = critical || (escal && (prior?.repeats ?? 0) >= 3);
 		const now = Date.now();
 		// Critical relief ([2026-11-15]-[advisory critical relief fold]-[nudges
 		// alone let a session burn from the speak line to host compaction —
@@ -597,7 +672,7 @@ export function applyContextTrim(ctx, config) {
 		// Runs ahead of the same-band nudge throttle: the relief cadence is owned
 		// by reliefBySession + inFlight alone. `trimCriticalRelief: false`
 		// restores nudge-only advisory mode.
-		if (critical && reliefEnabledNow() && !inFlight.has(sessionId) && captures.has(sessionId)
+		if (reliefDue && reliefEnabledNow() && !inFlight.has(sessionId) && captures.has(sessionId)
 			&& now - (reliefBySession.get(sessionId) ?? 0) >= EMERGENCY_COOLDOWN_MS) {
 			// Cooldown armed BEFORE the cycle (same pre-set semantics as the
 			// emergency tier): every attempt, folded or rejected, cools down.
@@ -609,7 +684,7 @@ export function applyContextTrim(ctx, config) {
 			void (async () => {
 				try {
 					if (disposedSince(now)) {
-						decisionLog(`session=${sessionId} advisory-relief outcome=reload-aborted tier=emergency pressure=${Math.round(pressurePercent)}%`);
+						decisionLog(`session=${sessionId} advisory-relief outcome=reload-aborted tier=emergency pressure=${Math.round(pressurePercent)}% trigger=${band}`);
 						return;
 					}
 					const { protectedTail, protectTaskIntent, ...reliefThresholds } = thresholdsNow();
@@ -629,11 +704,11 @@ export function applyContextTrim(ctx, config) {
 						ladderRuns: { t2: [], t3: [] }, // relief is mechanical-only; no ladder cut-in
 					});
 					if (decision.action !== "emergency") {
-						decisionLog(`session=${sessionId} advisory-relief outcome=none reason=${decision.reason || "-"} pressure=${Math.round(pressurePercent)}%`);
+						decisionLog(`session=${sessionId} advisory-relief outcome=none reason=${decision.reason || "-"} pressure=${Math.round(pressurePercent)}% trigger=${band}`);
 						return;
 					}
 					const outcome = await runFoldCycle(sessionId, decision, now, cycleToken);
-					decisionLog(`session=${sessionId} advisory-relief outcome=${outcome} tier=emergency pressure=${Math.round(pressurePercent)}%`);
+					decisionLog(`session=${sessionId} advisory-relief outcome=${outcome} tier=emergency pressure=${Math.round(pressurePercent)}% trigger=${band}`);
 					if (outcome.startsWith("folded:") || outcome === "summary-unavailable" || outcome.startsWith("commit-rejected:")) {
 						warn(`[context-trim] ${sessionId}: advisory relief ${outcome} at ${Math.round(pressurePercent)}%`);
 					}
@@ -645,7 +720,7 @@ export function applyContextTrim(ctx, config) {
 					if (inFlight.get(sessionId) === cycleToken) inFlight.delete(sessionId);
 				}
 			})();
-		} else if (critical) {
+		} else if (reliefDue) {
 			debug(`relief gate held pressure=${Math.round(pressurePercent)}% session=${sessionId}`);
 			// Audible silence ([2026-11-15]-[relief skip diagnostics]): the turn-25
 			// incident hid here — a session sat at 81-125% critical while the gate
@@ -665,8 +740,19 @@ export function applyContextTrim(ctx, config) {
 		}
 		// Any band CHANGE re-speaks immediately: escalation high->critical, and
 		// intentionally also a downgrade back into high after a partial fold.
-		if (prior !== undefined && prior.critical === critical && now - prior.at < ADVISORY_NUDGE_REPEAT_MS) {
-			debug(`nudge throttle band=${critical ? "critical" : "high"} age=${now - prior.at}ms session=${sessionId}`);
+		// [2026-11-15]-[per-band tail re-pin]-[a spoken nudge slides under the
+		// growing turn tail and becomes background noise; the single 10-minute
+		// repeat let 2.5 minutes of throttled silence precede the only fold
+		// (decisions.log 10:19→10:22). The nudge now REPLACES itself at the new
+		// tail every trimAdvisoryRepeatMs (high band) / min(that, 45 s)
+		// (critical): prune old seq, append fresh. Counts same-band repeats for
+		// the terse repeat wording.]
+		const repeatLines = advisoryRepeatLines(config);
+		const repeatMs = band === "high" ? repeatLines.highMs
+			: band === "escal" ? 0 // every dispatch: the reminder must own the tail
+			: Math.min(repeatLines.highMs, repeatLines.criticalMs);
+		if (prior !== undefined && prior.band === band && now - prior.at < repeatMs) {
+			debug(`nudge throttle band=${band} age=${now - prior.at}ms repeats=${prior.repeats ?? 0} session=${sessionId}`);
 			return;
 		}
 		if (!surfacePass.nudgeSupported(sessionId)) {
@@ -693,7 +779,15 @@ export function applyContextTrim(ctx, config) {
 				decisionLog("advisory-nudge orphan-pruned seqs=" + orphans.length + " pressure=" + Math.round(pressurePercent) + "%");
 			}
 		}
-		const nudge = advisoryNudgeText(Math.round(pressurePercent), critical, nudgeLines.line, nudgeLines.critical);
+		// One-step targeting for the model (2026-11-15 advisory rework): the nudge
+		// carries the status tool's exact recommendation, so compliance is a
+		// single ctx_trim_fold call; without a foldable range it stays two-step.
+		const nextRepeats = prior !== undefined && prior.band === band ? (prior.repeats ?? 0) + 1 : 1;
+		const nudge = advisoryNudgeText(
+			Math.round(pressurePercent), critical, nudgeLines.line, nudgeLines.critical,
+			targetText,
+			nextRepeats - 1,
+		);
 		const appended = surfacePass.nudgeAppend(sessionId, nudge);
 		if (appended.error !== null || !Number.isFinite(appended.seq)) {
 			advisoryNudgeBySession.delete(sessionId); // a pruned prior must not throttle the retry
@@ -702,10 +796,10 @@ export function applyContextTrim(ctx, config) {
 		}
 		const seq = appended.seq;
 		advisoryNudgeBySession.delete(sessionId); // re-insert: refresh recency so eviction drops the least recently nudged
-		advisoryNudgeBySession.set(sessionId, { at: now, critical, seq });
-		debug(`nudge prepared seq=${seq} level=${critical ? "critical" : "high"} pressure=${Math.round(pressurePercent)}% session=${sessionId}`);
+		advisoryNudgeBySession.set(sessionId, { at: now, band, seq, repeats: nextRepeats });
+		debug(`nudge prepared seq=${seq} level=${band} pressure=${Math.round(pressurePercent)}% session=${sessionId}`);
 		if (advisoryNudgeBySession.size > 200) advisoryNudgeBySession.delete(advisoryNudgeBySession.keys().next().value);
-		decisionLog("session=" + sessionId + " advisory-nudge pressure=" + Math.round(pressurePercent) + "% mass=" + Math.round(mass) + " window=" + windowTokens + " level=" + (critical ? "critical" : "high") + " seq=" + seq);
+		decisionLog("session=" + sessionId + " advisory-nudge pressure=" + Math.round(pressurePercent) + "% mass=" + Math.round(mass) + " window=" + windowTokens + " level=" + band + " repeats=" + nextRepeats + " seq=" + seq);
 	}
 
 	const captures = new Map(); // sessionId -> { messages, refs, viewTokens, model, at }

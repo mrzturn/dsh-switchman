@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 水位令牌预算写入带上限（schema min + 10,000,000 上限，围栏与设置页同界）；设置页支持小数输入（此前子代理窗口比例无法填写）；越界提示同时显示上下界。
 
 
+### Added
+
+- Advisory nudge ladder rework: the tail nudge now re-pins itself at the new session tail every `trimAdvisoryRepeatMs` (new setting, default 120 s; critical band caps it at 45 s) instead of repeating only once per 10 minutes, so a reminder that slides under the growing turn tail keeps owning the tail. A mid band (10 points above the fold line) re-pins on EVERY dispatch, and the nudge carries a one-step fold target — the exact range `ctx_trim_status` would recommend — so a single `ctx_trim_fold` call complies. When the advisory mode is ignored anyway (three consecutive same-band mid-band nudges with no fold commit), the session lands on the same cooldown-gated mechanical critical-relief path as the critical line. The decisions.log nudge rows now carry `level=<high|escal|critical>` and a same-band `repeats=<n>` counter.
+- 建议提示阶梯重构：尾部提示现在每 `trimAdvisoryRepeatMs`（新设置，默认 120 秒；critical 档钳制为 45 秒）在新会话尾部重新贴附，而不是 10 分钟才重复一次——滑入回合尾部之下的提醒会持续占据尾部。中档（折线上方 10 个点）每次派发都重贴，且提示携带一步式折叠目标（`ctx_trim_status` 会推荐的精确区间），单次 `ctx_trim_fold` 调用即可合规。当 advisory 模式被持续无视（中档连续三次同档提示且无折叠提交）时，会话走上与 critical 线相同的冷却门控机械救援路径。decisions.log 提示行现在带 `level=<high|escal|critical>` 与同档 `repeats=<n>` 计数。
+
 ### Fixed
 
 - The bundle's own preset row no longer carries pre-tune values: `cordis.patch.yml` now mirrors the tuned live profile (advisory mode, increment 45000, pressure 45, emergency 90, advisory 50/80, tail 6, watermark 100000/200000/3500), so a fresh install behaves exactly as documented.

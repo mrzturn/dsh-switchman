@@ -60,6 +60,7 @@ function fullValues(overrides = {}) {
 		trimEmergencyPercent: 95,
 		trimAdvisoryPercent: 80,
 		trimAdvisoryCriticalPercent: 95,
+		trimAdvisoryRepeatMs: 120000,
 		trimWindowTokens: 0,
 		trimProtectedTail: 6,
 		trimMaxFoldsPerHour: 6,
@@ -114,6 +115,7 @@ test("coerceValues round-trips every trim field the client page sends", () => {
 	assert.equal(coerced.trimEmergencyPercent, 95);
 	assert.equal(coerced.trimAdvisoryPercent, 80);
 	assert.equal(coerced.trimAdvisoryCriticalPercent, 95);
+	assert.equal(coerced.trimAdvisoryRepeatMs, 120000);
 	assert.equal(coerced.trimWindowTokens, 0);
 	assert.equal(coerced.trimProtectedTail, 6);
 	assert.equal(coerced.trimMaxFoldsPerHour, 6);

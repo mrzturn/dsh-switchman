@@ -286,6 +286,13 @@ export const Config = z.object({
 	 *  burned the window down to host compaction. Off restores nudge-only
 	 *  advisory mode.] */
 	trimCriticalRelief: z.boolean().default(true).volatile(),
+	/** [2026-11-15]-[per-band nudge repeat]-[a spoken advisory nudge slides
+   *  under the growing turn tail and becomes background noise; the repeat
+   *  now re-pins the nudge at the new tail this many ms after the last
+   *  speak (critical band halves it, floor 45 s). Old behavior: one
+   *  repeat per 10 minutes. 5000..3600000 sane; out-of-range falls back
+   *  to 120000.] */
+	trimAdvisoryRepeatMs: z.number().min(5000).max(3600000).default(120000).volatile(),
 	/** [2026-11-15]-[verbose debug log]-[the turn-25 + window-unknown
 	 *  incidents both hid inside silent gates that outcomes-only logging
 	 *  cannot see. On, every engine step, gate evaluation and decision path

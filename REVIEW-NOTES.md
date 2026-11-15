@@ -343,3 +343,14 @@ F7 只想改默认值 3000→3500，但编辑顺带删掉了相邻的守卫行�
 - **web profile 未获得修复（重要环境事实）**：web profile 的 dsh-switchman 是 npm 安装的文件拷贝（发布版 1.11.6，今晨 08:05 本地落盘，index.js mtime 戳 = 1794701140187），关键 4 文件与 checkout 全部 DIFF——926d925 的 19 个修复不在其中，重启只能重新装载磁盘上的旧副本。上一轮的无戳行由此定性：周六启动的旧 web 进程（11766）装载的是更早的 pre-1.11.6 快照（无 stamp 代码），故行无 b= 戳；window=150000 是该 profile 自己的 trimWindowTokens 配置（effectiveWindowTokens=cap 钳制），非缺陷。web 重启后的新行预期带旧戳 b=1794701140187。
 - 结论：修复装载验证在 desktop profile 完整成立；web profile 若需要同批修复，须另行同步副本（换 symlink 或重装），纯重启无效。
 
+
+## Advisory nudge ladder rework（19:00-19:55 +08，用户任务：被无视的折线提醒如何夺回注意力）
+- 用户观察到越过折叠线后提示容易被忽略（本会话亲历：nudge 被回合尾部淹没后连续无反应）。实现四项：① 重贴频率 10 分钟 → `trimAdvisoryRepeatMs` 默认 120s（critical 钳 45s，sane 5s-3600s，三层接线 config/routes/client）；② 一步式折叠目标——`recommendedFoldTargetOf` 镜像 `ctx_trim_status` 的推荐区间内联进提示文案，模型单次 `ctx_trim_fold` 即合规；③ 三档阶梯 high（line..line+9，按 repeatMs 重贴）/ escal（≥line+10，**每次派发重贴**）/ critical（≥critical 线，45s 重贴 + 机械救援），换档立即重贴；④ 被无视的救援——`reliefDue = critical || (escal && repeats>=3)`，复用 emergency `evaluateTrigger`（emergencyPercent 强制 1），冷却同 90s，日志行带 `trigger=<band>`。
+- 实现期间自查修掉三处一致性问题（均由新测试逼出）：E7 首次同档发声存储 `repeats=1`（原 0 导致日志序数 1,1,2,3、terse 文案晚一拍、救援晚一轮）；完整版文案的 `target` 参数只切换措辞**从未内联区间**（terse 分支反而有 `Recommended: ${target}`）——一步式目标等于没给；换档后存储 resets 至 1 但日志/terse 仍按 `prior.repeats+1` 计算（日志报 2、terse 提前）——统一为一次算好的 `nextRepeats`，存储/文案/日志三处同源。
+- 测试：context-trim 套件 98→101（新增 high 5s 重贴、escal 每派发重贴 + repeats 序列 [1,1,2,3]、三连无视触发机械救援 + cooldown skip 行三例）；大量旧测试 90k 派发值落入新 escal 档（每次派发重贴破坏节流/单 prune 断言），retoken 至 70k（high 档语义不变）。注意**压力滞后一拍**：派发 N 的 eval 看到派发 N-1 采样值，escal 序列类测试必须多派发一次。全量 283 pass / 0 fail；validate.mjs OK；ladder-config 的 `fullValues()` 补 `trimAdvisoryRepeatMs: 120000`。
+- 生效条件：重启 desktop app（无 HMR）。工作树未提交。交接：.dsh-switchman/handover/2026-11-15T19-02-advisory-ladder-rework-WIP.md
+
+## F24（20:52 +08，用户报告）：client.js 补丁丢一行闭合 `},`，client 半整体装载失败
+- 症状：第二次重启后设置页 trim 卡片的折叠/折线百分比消失。根因：给 TRIM_ROW_KEYS 插 `trimAdvisoryRepeatMs` 条目时锚点替换吃掉了该条目的闭合 `},`，`client.js:349` 报 Unexpected token——client 半（整个 client.js）解析失败即整体不装载，所有 client 侧 UI（trim 芯片、设置页）一起消失，而非只有新行。
+- **防线的空白（最重要教训）**：client.js 损坏期间 `scripts/validate.mjs` 全 OK、全量测试 283 pass——两者都只 exercise host 半，client.js 只有 app 运行时才解析。对 client.js 的任何补丁必须紧跟 `node --check client.js`（本项目用 ELECTRON_RUN_AS_NODE harness --check）。考虑后续在 validate.mjs 增加对 client.js 的纯语法检查。
+- 修复：补回闭合 `}`；--check 过；全量 283 pass；生效需第三次重启。
