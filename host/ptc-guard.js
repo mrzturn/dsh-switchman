@@ -43,6 +43,8 @@
 /** Reserved transport-tool name the PTC executor declares as its only direct call. */
 const RUN_CODE_NAME = "run_code";
 
+import { renderPtcLedgerClause, sessionKeyOf } from "./ptc-bindings.js";
+
 /** Final-say section position: after context-watch (10500), the last existing section. */
 const PTC_GUARD_ORDER = 10510;
 
@@ -109,7 +111,13 @@ function applyPtcGuard(ctx) {
 		interpolate: false,
 		text: (context) => {
 			try {
-				return isPtcScope(ctx, context?.scope) ? renderPtcGuard() : "";
+				if (!isPtcScope(ctx, context?.scope)) return "";
+				// Automatic binding ledger (host/ptc-bindings.js): when this
+				// session has recorded top-level declarations, append the
+				// no-redeclare list as the last word. No agent on the assemble
+				// context (fake scopes, diagnostics) renders the guard alone.
+				const clause = renderPtcLedgerClause(sessionKeyOf(context?.agent));
+				return clause === "" ? renderPtcGuard() : renderPtcGuard() + "\n\n" + clause;
 			} catch {
 				return "";
 			}

@@ -80,6 +80,7 @@ import { applyDispatch } from "./host/dispatch.js";
 import { applyTeams } from "./host/teams.js";
 // PTC direct-call guard (final-say transport rule for PTC-executor scopes).
 import { applyPtcGuard } from "./host/ptc-guard.js";
+import { applyPtcBindings } from "./host/ptc-bindings.js";
 // Subagent model-visibility layer (post-execute `model:` annotation).
 import { applySubagentModel } from "./host/subagent-model.js";
 
@@ -226,6 +227,7 @@ function apply(ctx, config) {
 	applyDispatch(ctx, config);
 	applyTeams(ctx, config);
 	applyPtcGuard(ctx);
+	applyPtcBindings(ctx);
 	applyContextWatch(ctx, config);
 	applyContextTrim(ctx, config);
 	applyVision(ctx, config);
