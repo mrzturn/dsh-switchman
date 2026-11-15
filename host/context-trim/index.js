@@ -1570,8 +1570,26 @@ export function applyContextTrim(ctx, config) {
 				const capture = captures.get(sessionId);
 				if (capture === undefined) return "No captured history yet — fold is unavailable until the next model call.";
 				const positions = refPositions(capture.messages);
-				const firstList = positions.get(String(args?.firstId ?? ""));
-				const lastList = positions.get(String(args?.lastId ?? ""));
+				// Ref normalization ([2026-11-15]-[m-prefix fold refs]): ctx_trim_status
+				// displays anchors in the protocol's [m...] form — "m" prepended to
+				// refOf's raw id/hash — and its description tells the model to pass
+				// exactly that form. The lookup map is keyed by the RAW ref, so an
+				// m-prefixed argument (the only form the model can copy) never matched:
+				// every model-driven fold failed with "Refs not found" (found live in
+				// the PTC runtime — status listed a 234-message range and the fold
+				// rejected it four times in a row). Resolve both forms: try the
+				// argument as given, then with one leading "m" stripped.
+				const resolveKey = (raw) => {
+					const given = String(raw ?? "");
+					if (positions.has(given)) return given;
+					if (given.startsWith("m") && positions.has(given.slice(1))) return given.slice(1);
+					return given;
+				};
+				const resolveRef = (raw) => positions.get(resolveKey(raw));
+
+				const firstList = resolveRef(args?.firstId);
+				const lastList = resolveRef(args?.lastId);
+
 				if (firstList === undefined || lastList === undefined) return "Refs not found in the current history — re-check with ctx_trim_status.";
 				// Count-anchored resolution: duplicate refs (identical content)
 				// make the first/last occurrence lists ambiguous — anchor on the
@@ -1602,7 +1620,12 @@ export function applyContextTrim(ctx, config) {
 				const result = store.commitFold(
 					sessionId,
 					{
-						refRange: { firstId: String(args.firstId), lastId: String(args.lastId) },
+						// Resolved refs: strip the display "m" prefix so commitFold's raw-key
+						// posMap lookup matches (same normalization as resolveRef above).
+						refRange: {
+							firstId: resolveKey(args.firstId),
+							lastId: resolveKey(args.lastId),
+						},
 						count,
 						approxTokens: estimateTokensOf(capture.messages, firstIdx, lastIdx),
 						summary: String(args.summary ?? ""),

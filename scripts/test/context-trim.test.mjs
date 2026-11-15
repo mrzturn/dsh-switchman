@@ -1182,6 +1182,36 @@ describe("assembly: applyContextTrim with a mock ctx", () => {
 		assert.equal(buildView(cap, ledger, { protectedTail: 0 }).applied, 0);
 	});
 
+	test("ctx_trim_fold accepts the m-prefixed refs ctx_trim_status displays (model contract)", async () => {
+		let listener = null;
+		const fiber = { on: (event, fn) => { listener = fn; }, off: () => {}, effect: () => {} };
+		const { ctx, registeredTools, setSessionId } = mockCtx({ llmFiber: fiber });
+		const stateDir = mkdtempSync(join(tmpdir(), "trim-asm-mprefix-"));
+		try {
+			const handle = applyContextTrim(ctx, { ...config, trimStateDir: stateDir });
+			setSessionId("sess-mprefix");
+			const messages = [
+				{ role: "user", content: "task" },
+				{ role: "assistant", content: "a" },
+			];
+			for (let i = 0; i < 14; i++) messages.push({ role: "user", content: `filler ${i}` });
+			listener({ sessionId: "sess-mprefix", messages, provider: "p", model: "m" }, () => null);
+			const foldTool = registeredTools.find((t) => t.name === "ctx_trim_fold");
+			const cap = handle.captures.get("sess-mprefix").messages;
+			// ctx_trim_status prints "[m" + refOf(...) and tells the model to pass that form; the
+			// lookup map is keyed by the raw ref, so only the m-prefixed form the model can copy
+			// must resolve (2026-11-15 live PTC finding: every model fold failed with "Refs not found").
+			const folded = await foldTool.execute({ firstId: "m" + refOf(cap[0], 0), lastId: "m" + refOf(cap[3], 3), count: 4, summary: "m-prefix fold" });
+			assert.match(folded, /Folded 4 messages/u, "the m-prefixed display form must resolve");
+			assert.equal(handle.store.ledgerOf("sess-mprefix").blocks.length, 1);
+			// Raw (unprefixed) refs keep working — the mechanical paths pass them directly.
+			// Same capture, next range: cap[4..7] stays inside the tail bound (16 msgs, tail 6).
+			const again = await foldTool.execute({ firstId: refOf(cap[4], 4), lastId: refOf(cap[7], 7), count: 4, summary: "raw form still works" });
+			assert.match(again, /Folded 4 messages/u, "raw refs keep resolving (mechanical paths pass them directly)");
+		} finally {
+			rmSync(stateDir, { recursive: true, force: true });
+		}
+	});
 	test("ctx_trim_fold rejects a range covering a previous fold summary (acp_summary_*)", async () => {
 		let listener = null;
 		const fiber = { on: (event, fn) => { listener = fn; }, off: () => {}, effect: () => {} };
