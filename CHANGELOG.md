@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 格式参照 Keep a Changelog;版本遵循语义化版本。
 
+## [Unreleased]
+
+### Changed
+
+- The default trim mode (`trimMode`) is now `auto`: idle-boundary automatic folds (growth gate / pressure / emergency) are on out of the box, alongside the advisory nudge ladder. The preset patch (`cordis.patch.yml`) and all README defaults follow. Existing profiles keep their durable value until changed in Settings or the bundle is reinstalled.
+- 默认裁剪模式（`trimMode`）改为 `auto`：开箱即启用空闲边界自动折叠（增长闸门 / 压力 / 紧急），与建议提示阶梯并存；预设补丁（`cordis.patch.yml`）与各语言 README 的默认值同步。已安装 profile 的持久化取值不变，需在设置页切换或重装 bundle 后生效。
+
 ## [1.11.7] — 2026-11-15
 
 ### Security

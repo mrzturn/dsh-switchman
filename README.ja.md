@@ -99,7 +99,7 @@ bash <インストールディレクトリ>/skills/db-query/scripts/setup.sh
 
 **意図認識**（既定では利用不可。分類器＋候補最低1つ＋マスタートグルのオンが必要）：`intentEnabled` = オフ（オフの間は Auto エントリが隠れ、Auto を選んでいたセッションはフォールバックチェーンへ流れる）。分類器ルートは未設定。分類器タイプは `chat`。候補リストは空（プリセット分類はモデルを埋めないとルーティングに参加しない）。キャッシュウィンドウ `300` 秒 / 切替信頼度 `80` / 分類タイムアウト `60000` ms。履歴 `6` 件 / `2400` 文字。`intentContextWindow` = `250000`。
 
-**コンテキストトリム**：`trimEnabled` = オン；`trimMode` = `advisory`（通知＋fold ツールでモデルが自ら折り畳む。完全自動は `auto`）；成長ゲート `22500` + インクリメント `45000` トークン；圧力 `45%` / 緊急 `90%`；advisory 通知 `50%` / `80%`；保護テール `6` 件；fold ペース上限は毎時 `30` 回；サイドモデルは未設定（セッションモデルを継承）——詳細は下の「自動コンテキストトリム」節で。
+**コンテキストトリム**：`trimEnabled` = オン；`trimMode` = `auto`（通知＋fold ツール＋アイドル境界での自動 fold：成長ゲート / 圧力 / 緊急）；成長ゲート `22500` + インクリメント `45000` トークン；圧力 `45%` / 緊急 `90%`；advisory 通知 `50%` / `80%`；保護テール `6` 件；fold ペース上限は毎時 `30` 回；サイドモデルは未設定（セッションモデルを継承）——詳細は下の「自動コンテキストトリム」節で。
 
 **初期状態のポイント**：① 意図認識が既定で使えないのは意図的な設計で、有効化は3ステップ（分類器、候補、トグル）。② Auto の実効ウィンドウは既定で 250000——ガードレールにより 0.8×ウィンドウ ≥ force 段（200000）が保証され、コア圧縮線（200000）はスムーズ引き継ぎ線（200000）上に位置する。③ 既定でいちばん体感できるのは水位の3点セット：80k で委譲を促し、100k で読み取りを収束させ、200k で自動引き継ぎ（文書作成＋圧縮）。設定は一切不要。
 
@@ -110,15 +110,15 @@ bash <インストールディレクトリ>/skills/db-query/scripts/setup.sh
 自動化レベル（`trimMode`）：
 
 - **`off`**——計測のみ：使用量とキャッシュヒットのサンプリングは動作；バナーなし、fold なし。
-- **`advisory`**（既定）——セッションモデルが自ら fold する：`ctx_trim_fold` と `ctx_trim_status` のツールとプロトコルヘッドを公開。セッション圧力が実効ウィンドウの `trimAdvisoryPercent` に達すると、エンジンは一度限りの固定 fold 催促を `user/message` サフィックスとしてライブの session surface の末尾に追加し（dispatch の system ヘッドは変更しません）、critical へのエスカレーションで即再通知し、圧力が線を下回ると prune します。圧力が臨界線に達すると、エンジン自身が機械的な救済 fold を 1 回実行します（90 秒クールダウン、`trimCriticalRelief` = オン）。
-- **`auto`**——advisory のすべてに加え、アイドル境界での自動 fold が3段階で動く：成長ゲート（前回の折り返し後の低点から測定した成長 > `trimGrowthTokens`——高位で折り返してもゲートが有効であり続けるためのアンカー——かつ連続圧縮可能インクリメントが `trimIncrementTokens` 以上）、圧力段（コンテキストウィンドウの `trimPressurePercent`）、緊急段（`trimEmergencyPercent`——独自クールダウン付きの機械 fold）。
+- **`advisory`**——セッションモデルが自ら fold する：`ctx_trim_fold` と `ctx_trim_status` のツールとプロトコルヘッドを公開。セッション圧力が実効ウィンドウの `trimAdvisoryPercent` に達すると、エンジンは一度限りの固定 fold 催促を `user/message` サフィックスとしてライブの session surface の末尾に追加し（dispatch の system ヘッドは変更しません）、critical へのエスカレーションで即再通知し、圧力が線を下回ると prune します。圧力が臨界線に達すると、エンジン自身が機械的な救済 fold を 1 回実行します（90 秒クールダウン、`trimCriticalRelief` = オン）。
+- **`auto`**（既定）——advisory のすべてに加え、アイドル境界での自動 fold が3段階で動く：成長ゲート（前回の折り返し後の低点から測定した成長 > `trimGrowthTokens`——高位で折り返してもゲートが有効であり続けるためのアンカー——かつ連続圧縮可能インクリメントが `trimIncrementTokens` 以上）、圧力段（コンテキストウィンドウの `trimPressurePercent`）、緊急段（`trimEmergencyPercent`——独自クールダウン付きの機械 fold）。
 
 すべてのキーは「設定 → dsh-switchman」にあり、既定値は `host/config.js` 由来：
 
 | キー | 既定値 | 意味 |
 | --- | --- | --- |
 | `trimEnabled` | `true` | マスタースイッチ。OFF で fold とメトリクスを完全停止（リスナーは純パススルーに退化）。 |
-| `trimMode` | `advisory` | `off` 計測のみ / `advisory` モデル駆動 fold / `auto` システム駆動 fold。 |
+| `trimMode` | `auto` | `off` 計測のみ / `advisory` モデル駆動 fold / `auto` システム駆動 fold。 |
 | `trimGrowthTokens` | `22500` | 成長ゲート：前回の fold 以降にアウトバウンド view がこれだけ増えたら fold。 |
 | `trimIncrementTokens` | `45000` | ゲートの同伴条件：連続圧縮可能インクリメントもこの規模に達する必要あり。 |
 | `trimPressurePercent` | `45` | 圧力段：view 使用量がコンテキストウィンドウのこの割合に達したら fold。 |

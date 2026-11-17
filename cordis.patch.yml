@@ -661,7 +661,7 @@
         teamsMode: true
         syncWhitelist: true
         trimEnabled: true
-        trimMode: advisory
+        trimMode: auto
         trimGrowthTokens: 22500
         trimIncrementTokens: 45000
         trimPressurePercent: 45

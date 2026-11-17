@@ -258,7 +258,7 @@ export const Config = z.object({
 	 *  "advisory" = expose ctx_trim_fold/ctx_trim_status + the protocol head
 	 *  so the session model can fold itself, "auto" = everything plus
 	 *  idle-boundary automatic folds (growth gate / pressure / emergency). */
-	trimMode: z.union(["off", "advisory", "auto"]).default("advisory").volatile(),
+	trimMode: z.union(["off", "advisory", "auto"]).default("auto").volatile(),
 	/** Growth gate (tier a): fold when the outbound-view estimate grew this
 	 *  much since the last fold. */
 	trimGrowthTokens: z.number().min(1000).default(22500).volatile(),

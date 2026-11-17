@@ -99,7 +99,7 @@ bash <安裝目錄>/skills/db-query/scripts/setup.sh
 
 **意圖識別**（預設不可用，需設定分類器 + 至少一個候選 + 打開主開關）：`intentEnabled` = 關（關閉時 Auto 入口隱藏，已選 Auto 的對話走備援鏈）；分類器路由未設定；分類器類型 `chat`；候選清單空（預置分類需填模型才參與路由）；快取視窗 `300` 秒 / 切換信心閾值 `80` / 分類逾時 `60000` ms；歷史 `6` 則 / `2400` 字元；`intentContextWindow` = `250000`。
 
-**上下文裁剪**：`trimEnabled` = 開；`trimMode` = `advisory`（提醒＋摺疊工具，模型自行摺疊；全自動需切回 `auto`）；增長閘門 `22500` token + 增量 `45000` token；壓力 `45%` / 緊急 `90%`；advisory 提醒 `50%` / `80%`；保護尾部 `6` 則；折疊節奏上限每小時 `30` 次；side model 未設定（繼承對話模型）——詳見下文「自動上下文裁剪」一節。
+**上下文裁剪**：`trimEnabled` = 開；`trimMode` = `auto`（提醒＋摺疊工具＋閒置邊界自動摺疊：增長閘門 / 壓力 / 緊急）；增長閘門 `22500` token + 增量 `45000` token；壓力 `45%` / 緊急 `90%`；advisory 提醒 `50%` / `80%`；保護尾部 `6` 則；折疊節奏上限每小時 `30` 次；side model 未設定（繼承對話模型）——詳見下文「自動上下文裁剪」一節。
 
 **開箱要點**：① 意圖識別開箱不可用是有意設計，三步開啟（分類器、候選、開關）；② Auto 有效視窗開箱即為 250000——護欄保證 0.8×視窗 ≥ force 級（200000），核心壓縮線（200000）恰好落在平滑交接線（200000）上；③ 開箱最有感的是水位三件套：80k 提醒委派 / 100k 收斂讀取 / 200k 自動交接（寫文件+壓縮），無須任何設定。
 
@@ -110,15 +110,15 @@ bash <安裝目錄>/skills/db-query/scripts/setup.sh
 自動化層級（`trimMode`）：
 
 - **`off`**——只測量：用量與快取命中取樣照常執行；無橫幅、無折疊。
-- **`advisory`**（預設）——對話模型自己折疊：向其暴露 `ctx_trim_fold` 與 `ctx_trim_status` 工具和協定頭。對話壓力達到有效視窗的 `trimAdvisoryPercent` 時，引擎將一次性固定摺疊提醒作為 `user/message` 後綴追加到即時對話 surface 尾端（不修改本次派發的 system 頭）——升級到 critical 立即重發，壓力回落到線下後清除。壓力到達臨界線時，引擎自身會執行一次機械救援摺疊（90 秒冷卻，`trimCriticalRelief` = 開）。
-- **`auto`**——以上全部，外加閒置邊界上的自動折疊，分三級：增長閘門（自上次折疊後的低谷起算的增長 > `trimGrowthTokens`——該錨點保證高位折疊後閘門依然有效——且連續可壓縮增量 ≥ `trimIncrementTokens`）、壓力級（上下文視窗的 `trimPressurePercent`）、緊急級（`trimEmergencyPercent`——帶獨立冷卻的機械折疊）。
+- **`advisory`**——對話模型自己折疊：向其暴露 `ctx_trim_fold` 與 `ctx_trim_status` 工具和協定頭。對話壓力達到有效視窗的 `trimAdvisoryPercent` 時，引擎將一次性固定摺疊提醒作為 `user/message` 後綴追加到即時對話 surface 尾端（不修改本次派發的 system 頭）——升級到 critical 立即重發，壓力回落到線下後清除。壓力到達臨界線時，引擎自身會執行一次機械救援摺疊（90 秒冷卻，`trimCriticalRelief` = 開）。
+- **`auto`**（預設）——以上全部，外加閒置邊界上的自動折疊，分三級：增長閘門（自上次折疊後的低谷起算的增長 > `trimGrowthTokens`——該錨點保證高位折疊後閘門依然有效——且連續可壓縮增量 ≥ `trimIncrementTokens`）、壓力級（上下文視窗的 `trimPressurePercent`）、緊急級（`trimEmergencyPercent`——帶獨立冷卻的機械折疊）。
 
 所有鍵位於 設定 → dsh-switchman；預設值出自 `host/config.js`：
 
 | 鍵 | 預設值 | 含義 |
 | --- | --- | --- |
 | `trimEnabled` | `true` | 總開關。關閉後折疊與度量全部停用（監聽器退化為純透傳）。 |
-| `trimMode` | `advisory` | `off` 只測量 / `advisory` 模型自折 / `auto` 系統自動折。 |
+| `trimMode` | `auto` | `off` 只測量 / `advisory` 模型自折 / `auto` 系統自動折。 |
 | `trimGrowthTokens` | `22500` | 增長閘門：出站 view 自上次 fold 以來增長到該值即觸發折疊。 |
 | `trimIncrementTokens` | `45000` | 閘門搭檔：連續可壓縮增量也須達到該規模。 |
 | `trimPressurePercent` | `45` | 壓力級：view 用量達到上下文視窗該百分比即折疊。 |

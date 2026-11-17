@@ -99,7 +99,7 @@ bash <安装目录>/skills/db-query/scripts/setup.sh
 
 **意图识别**（默认不可用，需配置分类器 + 至少一个候选 + 打开主开关）：`intentEnabled` = 关（关闭时 Auto 入口隐藏，已选 Auto 的会话走兜底链）；分类器路由未设置；分类器类型 `chat`；候选列表空（预置分类需填模型才参与路由）；缓存窗口 `300` 秒 / 切换置信度 `80` / 分类超时 `60000` ms；历史 `6` 条 / `2400` 字符；`intentContextWindow` = `250000`。
 
-**上下文裁剪**：`trimEnabled` = 开；`trimMode` = `advisory`（提醒＋折叠工具，模型自行折叠；全自动需切回 `auto`）；增长闸门 `22500` token + 增量 `45000` token；压力 `45%` / 紧急 `90%`；advisory 提醒 `50%` / `80%`；保护尾部 `6` 条；折叠节奏上限每小时 `30` 次；side model 未设置（继承会话模型）——详见下文「自动上下文裁剪」一节。
+**上下文裁剪**：`trimEnabled` = 开；`trimMode` = `auto`（提醒＋折叠工具＋空闲边界自动折叠：增长闸门 / 压力 / 紧急）；增长闸门 `22500` token + 增量 `45000` token；压力 `45%` / 紧急 `90%`；advisory 提醒 `50%` / `80%`；保护尾部 `6` 条；折叠节奏上限每小时 `30` 次；side model 未设置（继承会话模型）——详见下文「自动上下文裁剪」一节。
 
 **开箱要点**：① 意图识别开箱不可用是有意设计，三步开启（分类器、候选、开关）；② Auto 有效窗口开箱即为 250000——护栏保证 0.8×窗口 ≥ force 档（200000），核心压缩线（200000）恰好落在平滑交接线（200000）上；③ 开箱最有感的是水位三件套：80k 提醒委派 / 100k 收敛读取 / 200k 自动交接（写文档+压缩），无需任何设置。
 
@@ -110,15 +110,15 @@ bash <安装目录>/skills/db-query/scripts/setup.sh
 自动化层级（`trimMode`）：
 
 - **`off`**——只测量：用量与缓存命中采样照常运行；无横幅、无折叠。
-- **`advisory`**（默认）——会话模型自己折叠：向其暴露 `ctx_trim_fold` 与 `ctx_trim_status` 工具和协议头。会话压力达到有效窗口的 `trimAdvisoryPercent` 时，引擎将一次性固定折叠提醒作为 `user/message` 后缀追加到实时会话 surface 尾部（不修改本次派发的 system 头）——升级到 critical 立即重发，压力回落到线下后清除。压力到达临界线时引擎自身会执行一次机械救援折叠（90 秒冷却，`trimCriticalRelief` = 开）。
-- **`auto`**——以上全部，外加空闲边界上的自动折叠，分三档：增长闸门（自上次折叠后的低谷起算的增长 > `trimGrowthTokens`——该锚点保证高位折叠后闸门依然有效——且连续可压缩增量 ≥ `trimIncrementTokens`）、压力档（上下文窗口的 `trimPressurePercent`）、紧急档（`trimEmergencyPercent`——带独立冷却的机械折叠）。
+- **`advisory`**——会话模型自己折叠：向其暴露 `ctx_trim_fold` 与 `ctx_trim_status` 工具和协议头。会话压力达到有效窗口的 `trimAdvisoryPercent` 时，引擎将一次性固定折叠提醒作为 `user/message` 后缀追加到实时会话 surface 尾部（不修改本次派发的 system 头）——升级到 critical 立即重发，压力回落到线下后清除。压力到达临界线时引擎自身会执行一次机械救援折叠（90 秒冷却，`trimCriticalRelief` = 开）。
+- **`auto`**（默认）——以上全部，外加空闲边界上的自动折叠，分三档：增长闸门（自上次折叠后的低谷起算的增长 > `trimGrowthTokens`——该锚点保证高位折叠后闸门依然有效——且连续可压缩增量 ≥ `trimIncrementTokens`）、压力档（上下文窗口的 `trimPressurePercent`）、紧急档（`trimEmergencyPercent`——带独立冷却的机械折叠）。
 
 所有键位于 设置 → dsh-switchman；默认值出自 `host/config.js`：
 
 | 键 | 默认值 | 含义 |
 | --- | --- | --- |
 | `trimEnabled` | `true` | 总开关。关闭后折叠与度量全部停用（监听器退化为纯透传）。 |
-| `trimMode` | `advisory` | `off` 只测量 / `advisory` 模型自折 / `auto` 系统自动折。 |
+| `trimMode` | `auto` | `off` 只测量 / `advisory` 模型自折 / `auto` 系统自动折。 |
 | `trimGrowthTokens` | `22500` | 增长闸门：出站 view 自上次 fold 以来增长到该值即触发折叠。 |
 | `trimIncrementTokens` | `45000` | 闸门搭档：连续可压缩增量也须达到该规模。 |
 | `trimPressurePercent` | `45` | 压力档：view 用量达到上下文窗口该百分比即折叠。 |
