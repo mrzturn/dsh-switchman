@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The default trim mode (`trimMode`) is now `auto`: idle-boundary automatic folds (growth gate / pressure / emergency) are on out of the box, alongside the advisory nudge ladder. The preset patch (`cordis.patch.yml`) and all README defaults follow. Existing profiles keep their durable value until changed in Settings or the bundle is reinstalled.
 - 默认裁剪模式（`trimMode`）改为 `auto`：开箱即启用空闲边界自动折叠（增长闸门 / 压力 / 紧急），与建议提示阶梯并存；预设补丁（`cordis.patch.yml`）与各语言 README 的默认值同步。已安装 profile 的持久化取值不变，需在设置页切换或重装 bundle 后生效。
+- The preset-patch doctrine suffix gains a hash-anchor edit discipline section, distilled from a dsh-better-edit error forensic: batch only mutually independent edits (every edit is prevalidated against the pre-batch snapshot, so a dependent batch aborts with zero writes), chain anchors only from the previous successful edit's returned diff, re-read after any bash/git/formatter write before editing, and treat `E_STALE_ANCHOR` / `E_STALE_RANGE` / `E_BATCH_ABORT` as "re-read for fresh anchors, split the batch if needed" instead of blind retries.
+- 预设补丁规程 suffix 新增「哈希锚点编辑纪律」一节（源自 dsh-better-edit 报错取证）：批量 edit 仅限相互独立的编辑（逐条对照批前快照预检，批内依赖整批零写入中止）；链式编辑只从上一次成功 edit 返回的 diff 取新 anchor；经 bash/git/格式化器改写过文件先重读再编辑；`E_STALE_ANCHOR` / `E_STALE_RANGE` / `E_BATCH_ABORT` 一律重读拿新 anchor、必要时拆批，不盲改重试。
 
 ## [1.11.7] — 2026-11-15
 
