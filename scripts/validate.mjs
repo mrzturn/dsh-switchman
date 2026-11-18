@@ -400,6 +400,22 @@ for (const asset of [
 	assert.ok(existsSync(join(SKILLS_DIR, asset)), `skills/${asset} is missing`);
 }
 
+// Shipped scripts with a shebang must keep the exec bit: SKILL.md documents them
+// as `./scripts/<name>`, and npm pack keeps the on-disk mode (= git 100755) as-is.
+for (const skillName of skillDirs) {
+	const scriptsDir = join(SKILLS_DIR, skillName, "scripts");
+	if (!existsSync(scriptsDir)) continue;
+	for (const entry of readdirSync(scriptsDir, { withFileTypes: true })) {
+		if (!entry.isFile()) continue;
+		const path = join(scriptsDir, entry.name);
+		if (readFileSync(path).subarray(0, 2).toString("latin1") !== "#!") continue;
+		assert.ok(
+			(statSync(path).mode & 0o111) !== 0,
+			`skills/${skillName}/scripts/${entry.name} has a shebang but no exec bit (git mode must be 100755)`,
+		);
+	}
+}
+
 // ---- KV-cache stability guard (watermark head/tail split) -------------------
 // The watermark's static protocol lives in systemPrompt.section (byte-stable
 // request head); the live tier + bucketed used reading lives ONLY in the
