@@ -89,6 +89,7 @@ function fullValues(overrides = {}) {
 		intentEnabled: false,
 		constraintsEnabled: false,
 		poolFeedbackEnabled: false,
+		dispatchStatsEnabled: false,
 		trimEnabled: true,
 		trimLadderEnabled: true,
 		trimProtectTaskIntent: true,
@@ -108,6 +109,10 @@ test("coerceValues round-trips every trim field the client page sends", () => {
 	assert.equal(coerced.trimLadderEnabled, true);
 	assert.equal(coerced.trimProtectTaskIntent, true);
 	assert.equal(coerced.trimCriticalRelief, true);
+	// Named pins for the newer observation switches (structural round-trip
+	// alone would not catch a field dropped from fullValues).
+	assert.equal(coerced.wmCacheAdaptive, false);
+	assert.equal(coerced.dispatchStatsEnabled, false);
 	const coercedReliefOff = coerceValues({ ...fullValues(), trimCriticalRelief: false });
 	assert.notEqual(coercedReliefOff, null, "explicit false must coerce");
 	assert.equal(coercedReliefOff.trimCriticalRelief, false);

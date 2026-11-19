@@ -97,6 +97,10 @@ import { applyConstraints, annotateSkillCandidates } from "./host/constraints.js
 // onto pool_hint lanes as advisory tier-label feedback rows beside the
 // pools table; OFF (default) renders "" (zero prompt diff).
 import { applyPoolFeedback } from "./host/pool-feedback.js";
+// Dispatch-result observability (guide §4.5/§4.3, P2 pack B0): per-run
+// pool×model×skill counters for the host logger + getters; OFF (default)
+// captures nothing. No injection surface (MODEL-VISIBILITY).
+import { applyDispatchStats } from "./host/dispatch-stats.js";
 // Open skill registry + skill-load observability (guide §5.2.1/§5.2.2):
 // workspace `<cwd>/.dsh-switchman/skills/` scanning (source "local"),
 // name-conflict merging, and the bounded skill_loaded stats.
@@ -249,6 +253,9 @@ function apply(ctx, config) {
 	// Same closure (resolved per assembly inside each section, never stored:
 	// review F6), so feedback tiers track the exact annotations the table prints.
 	applyPoolFeedback(ctx, config, annotatedSkills);
+	// Dispatch telemetry listeners (host-only data layer; gated OFF by
+	// default, zero capture while disabled).
+	applyDispatchStats(ctx, config);
 	applyVision(ctx, config);
 	applyIntent(ctx, config);
 	applySubagentModel(ctx);

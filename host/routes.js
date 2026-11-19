@@ -163,6 +163,8 @@ const BOOLEAN_FIELDS = [
 	"constraintsEnabled",
 	// Pool feedback loop (mirrors host/config.js poolFeedbackEnabled).
 	"poolFeedbackEnabled",
+	// Dispatch-result observability (mirrors host/config.js dispatchStatsEnabled).
+	"dispatchStatsEnabled",
 	// Context trim switches (mirrors the trim group in host/config.js).
 	"trimEnabled",
 	"trimLadderEnabled",

@@ -307,6 +307,17 @@ export const Config = z.object({
 	 *  diff. Fail-open: missing stats never block the main
 	 *  [SWITCHMAN:POOLS] table. */
 	poolFeedbackEnabled: z.boolean().default(false).volatile(),
+	// --- Dispatch-result observability (guide §4.5/§4.3, P2 pack B0) -------
+	/** Master switch for the pool×model×skill dispatch telemetry. ON = host
+	 *  listeners record one bounded record per settled subagent run (success
+	 *  vs failure, wall-clock latency, rework repeats) and expose them via
+	 *  getDispatchStats() for pack B (differentiation). Counts reach ONLY the
+	 *  host logger and the getter — never a model-injection surface
+	 *  (MODEL-VISIBILITY). OFF (default, same opt-in direction as the other
+	 *  observability switches: constraintsEnabled, poolFeedbackEnabled) =
+	 *  listeners early-return before any capture: zero reads, zero writes,
+	 *  zero pending state. */
+	dispatchStatsEnabled: z.boolean().default(false).volatile(),
 	// --- Context trim: fully-automatic conversation compression ------------
 	/** Master switch for the context-trim layer (design:
 	 *  .dsh-switchman/analysis/context-trim-port-design.md). OFF disables
