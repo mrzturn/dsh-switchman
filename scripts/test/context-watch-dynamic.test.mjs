@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import {
 	combineTier,
 	dynamicVerdictOf,
+	noteCacheWindow,
 	recordSample,
 	rootTierOf,
 } from "../../host/context-watch.js";
@@ -124,4 +125,48 @@ test("fail-open: hostile state degrades to the fixed ladder", () => {
 	const state = fakeState();
 	state.samples = new Proxy(new Map(), { get() { throw new Error("boom"); } });
 	assert.deepEqual(rootTierOf(state, fakeConfig(), "s", 90000, TH, false), { level: "soft", reason: null });
+});
+
+// ---- P2 ③ adaptive cache window observability (host logger only) ----------
+
+test("noteCacheWindow: logs TTL/P90 basis on change, dedupes, gates on both switches", () => {
+	const lines = [];
+	const ctx = { logger: { info: (m) => lines.push(m) } };
+	const config = fakeConfig({ wmCacheAdaptive: true });
+	const state = fakeState();
+	state.cacheWindow = new Map();
+	// 10 gaps: eight 30s + two 180s → P90 180s (adaptive, unclamped).
+	const samples = [{ t: 1_000_000, tokens: 1000 }];
+	{
+		let t = 1_000_000;
+		for (const g of [30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 180_000, 180_000]) {
+			t += g;
+			samples.push({ t, tokens: 1000 });
+		}
+	}
+	state.samples.set("s1", samples);
+	noteCacheWindow(ctx, config, state, "s1");
+	assert.equal(lines.length, 1);
+	assert.match(lines[0], /ttl=180000ms p90=180000ms cadence-samples=10 source=adaptive/u);
+	// Same window again → no duplicate log (change-only logging).
+	noteCacheWindow(ctx, config, state, "s1");
+	assert.equal(lines.length, 1);
+	// Adaptive switch off (default) → silent, nothing logged, nothing cached.
+	const off = fakeState();
+	off.cacheWindow = new Map();
+	off.samples.set("s1", samples);
+	noteCacheWindow(ctx, fakeConfig(), off, "s1");
+	assert.equal(lines.length, 1);
+	assert.equal(off.cacheWindow.size, 0);
+	// Dynamic layer off → the window has no consumer; silent too.
+	const dynOff = fakeState();
+	dynOff.cacheWindow = new Map();
+	dynOff.samples.set("s1", samples);
+	noteCacheWindow(ctx, fakeConfig({ wmDynamicEnabled: false, wmCacheAdaptive: true }), dynOff, "s1");
+	assert.equal(lines.length, 1);
+	assert.equal(dynOff.cacheWindow.size, 0);
+	// Missing logger / hostile state never throw into the render path.
+	noteCacheWindow({}, config, state, "s1");
+	noteCacheWindow(ctx, config, {}, "s1");
+	assert.equal(lines.length, 1);
 });

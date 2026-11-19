@@ -37,7 +37,22 @@ const OUTPUT_TOKENS_PER_TURN = 600; // blended per-turn model output estimate
 const SUMMARY_OUTPUT_TOKENS = 1500; // handover document/summary output cost
 const COMPRESS_RATIO = 0.5; // post-handoff waterline ≈ current × ratio
 const MIN_GROWTH_SAMPLES = 2; // fewer samples → growth signal unavailable
-const CACHE_TTL_MS = 300_000; // provider cache window (~5 min)
+export const CACHE_TTL_MS = 300_000; // provider cache window (~5 min); fixed fallback when no P90 basis
+// P2 ③ cache-window adaptive (guide §5): the vendor safety envelope the
+// adaptive window is clamped to. The guide names no numbers, so the bounds
+// are derived from observability + vendor behavior: the floor equals the
+// sampler's minimum spacing (context-watch.js SAMPLE_MIN_INTERVAL_MS = 60s —
+// closer gaps are never recorded, so anything shorter is unobservable); the
+// ceiling is 2× the nominal ~5 min provider TTL (refresh-on-hit window,
+// DeepSeek/Anthropic class) — past 10 min the miss-probability term would
+// stay silent for every realistic idle gap and protect nothing.
+export const CACHE_WINDOW_MIN_MS = 60_000;
+export const CACHE_WINDOW_MAX_MS = 600_000;
+// Nearest-rank P90 over fewer than this many usable gaps is always the
+// maximum — a single long idle would decide the whole window — so below it
+// the estimate carries no real P90 basis and the window falls back to
+// CACHE_TTL_MS.
+const CACHE_P90_MIN_SAMPLES = 5;
 const TURNS_EXPECTED_FLOOR = 5;
 const TURNS_EXPECTED_CEIL = 100;
 const DEFAULT_TURNS_EXPECTED = 25; // fallback when cadence is unknowable
@@ -79,10 +94,12 @@ export function estimateGrowthRate(samples, lookback = 6) {
 /** Expected remaining turns for the cost horizon. An explicit configured
  *  value (> 0) always wins. Otherwise estimate from the recent turn cadence:
  *  roughly how many more turns could still land inside one cache window at
- *  the current pace (ceil(TTL / median interval)), clamped to
+ *  the current pace (ceil(ttlMs / median interval); ttlMs defaults to the
+ *  fixed CACHE_TTL_MS and is the adaptive P90 window when cacheAdaptive is
+ *  on, see estimateCacheWindow), clamped to
  *  [TURNS_EXPECTED_FLOOR, TURNS_EXPECTED_CEIL]. No usable cadence →
  *  DEFAULT_TURNS_EXPECTED. */
-export function estimateTurnsExpected(samples, configured = 0) {
+export function estimateTurnsExpected(samples, configured = 0, ttlMs = CACHE_TTL_MS) {
 	const cfg = Number(configured);
 	if (Number.isFinite(cfg) && cfg > 0) return Math.floor(cfg);
 	try {
@@ -97,7 +114,7 @@ export function estimateTurnsExpected(samples, configured = 0) {
 		if (gaps.length === 0) return DEFAULT_TURNS_EXPECTED;
 		gaps.sort((a, b) => a - b);
 		const median = gaps[Math.floor(gaps.length / 2)];
-		const est = Math.ceil(CACHE_TTL_MS / median);
+		const est = Math.ceil(ttlMs / median);
 		return Math.min(TURNS_EXPECTED_CEIL, Math.max(TURNS_EXPECTED_FLOOR, est));
 	} catch {
 		return DEFAULT_TURNS_EXPECTED;
@@ -125,6 +142,40 @@ export function estimateMissProbability(samples, ttlMs = CACHE_TTL_MS) {
 		return Math.min(1, cold / gaps);
 	} catch {
 		return 0;
+	}
+}
+
+/** Adaptive cache window (guide §5 P2 ③ "缓存窗口自适应"): the effective TTL
+ *  is the P90 (nearest-rank) of the recent usable cadence gaps, clamped to
+ *  the vendor safety envelope [CACHE_WINDOW_MIN_MS, CACHE_WINDOW_MAX_MS].
+ *  Fails closed to the fixed CACHE_TTL_MS with fewer than
+ *  CACHE_P90_MIN_SAMPLES usable gaps or any degenerate input — exactly the
+ *  bytes the fixed path produces. Returns { ttlMs, p90Ms, samples, source }:
+ *  ttlMs is the clamped effective window, p90Ms the RAW percentile (null on
+ *  fallback) so the log can show whether the clamp fired, `samples` the
+ *  usable cadence gap count (each inter-step interval is one sample), and
+ *  source "adaptive" or "fallback". Pure; the caller decides what to log
+ *  (host logger only — never model-injected). */
+export function estimateCacheWindow(samples) {
+	try {
+		if (!Array.isArray(samples)) return { ttlMs: CACHE_TTL_MS, p90Ms: null, samples: 0, source: "fallback" };
+		const points = samples.filter((s) => s && Number.isFinite(s.t)).sort((a, b) => a.t - b.t);
+		const gaps = [];
+		for (let i = 1; i < points.length; i++) {
+			const gap = points[i].t - points[i - 1].t;
+			if (Number.isFinite(gap) && gap > 0) gaps.push(gap);
+		}
+		if (gaps.length < CACHE_P90_MIN_SAMPLES) return { ttlMs: CACHE_TTL_MS, p90Ms: null, samples: gaps.length, source: "fallback" };
+		gaps.sort((a, b) => a - b);
+		const p90 = gaps[Math.min(gaps.length - 1, Math.max(0, Math.ceil(gaps.length * 0.9) - 1))];
+		return {
+			ttlMs: Math.min(CACHE_WINDOW_MAX_MS, Math.max(CACHE_WINDOW_MIN_MS, p90)),
+			p90Ms: p90,
+			samples: gaps.length,
+			source: "adaptive",
+		};
+	} catch {
+		return { ttlMs: CACHE_TTL_MS, p90Ms: null, samples: 0, source: "fallback" };
 	}
 }
 
@@ -160,10 +211,14 @@ export function turnsToThreshold(used, growthRate, threshold) {
  *  samples: per-turn [{ t, tokens }] series (see estimateGrowthRate);
  *  used: current measured tokens; thresholds: { soft, hard, force };
  *  dynamic: resolved config { lookback, turnsExpected, amortization,
- *  hitPerM, missPerM, outPerM } (prices per million tokens).
+ *  hitPerM, missPerM, outPerM } (prices per million tokens); the optional
+ *  boolean cacheAdaptive switches on the P2 ③ adaptive cache window.
  *  Returns { advance: "none"|"soft"|"hard"|"force", reason, growthRate,
  *  turnsExpected, samplesUsed, turnsTo: { hard, force }, cost } — cost is
- *  null when the signal is unavailable or was evaluated but not positive. */
+ *  null when the signal is unavailable or was evaluated but not positive.
+ *  cacheWindow (present ONLY with dynamic.cacheAdaptive on) snapshots the
+ *  adaptive window { ttlMs, p90Ms, samples, source } — host-logged, never
+ *  model-injected. */
 export function evaluateDynamicWatermark({ samples, used, thresholds, dynamic }) {
 	const out = {
 		advance: "none",
@@ -177,10 +232,20 @@ export function evaluateDynamicWatermark({ samples, used, thresholds, dynamic })
 	try {
 		if (!Number.isFinite(used) || !thresholds || !dynamic) return out;
 		const cfg = dynamic;
+		// P2 ③ cache-window adaptive: when enabled, the TTL feeding both cadence
+		// consumers (turnsExpected horizon, miss probability) is the clamped P90
+		// of the recent gaps; OFF keeps the fixed CACHE_TTL_MS and leaves the
+		// result shape untouched (no cacheWindow key).
+		let cacheTtlMs = CACHE_TTL_MS;
+		if (cfg.cacheAdaptive === true) {
+			const cacheWindow = estimateCacheWindow(samples);
+			out.cacheWindow = cacheWindow;
+			cacheTtlMs = cacheWindow.ttlMs;
+		}
 		const { growthRate, samplesUsed } = estimateGrowthRate(samples, cfg.lookback);
 		out.growthRate = growthRate;
 		out.samplesUsed = samplesUsed;
-		const nExpected = estimateTurnsExpected(samples, cfg.turnsExpected);
+		const nExpected = estimateTurnsExpected(samples, cfg.turnsExpected, cacheTtlMs);
 		out.turnsExpected = nExpected;
 
 		// Primary: growth extrapolation. Advance into hard/force early when the
@@ -206,7 +271,7 @@ export function evaluateDynamicWatermark({ samples, used, thresholds, dynamic })
 		const outputCostPerTurn = OUTPUT_TOKENS_PER_TURN * outPrice;
 		const growth = growthRate ?? 0;
 		const amortization = Number(cfg.amortization) > 1 ? Number(cfg.amortization) : DEFAULT_AMORTIZATION;
-		const missProbability = estimateMissProbability(samples);
+		const missProbability = estimateMissProbability(samples, cacheTtlMs);
 		const stay =
 			costStay({ used, growthRate: growth, turns: nExpected, hitPrice, outputCostPerTurn }) +
 			missProbability * used * missPrice;

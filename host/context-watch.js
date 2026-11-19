@@ -55,7 +55,7 @@ import { clearHandover, handoverOf, recordHandover } from "./handover-state.js";
 import { enumerateLiveSubagents, sessionRecordPath, sessionRecordsDir } from "./subagents.js";
 import { handoverFillInstruction, taskStateLines } from "./handoff-doc.js";
 import { recentTrimModelOf, recentTrimPromptTokensOf } from "./context-trim/index.js";
-import { DEFAULT_AMORTIZATION, evaluateDynamicWatermark, maxTier } from "./watermark-estimate.js";
+import { DEFAULT_AMORTIZATION, estimateCacheWindow, evaluateDynamicWatermark, maxTier } from "./watermark-estimate.js";
 /** Tools whose result text is accounted against the per-turn read budget. */
 const ACCOUNT_TOOLS = new Set(["read", "glob", "grep", "bash"]);
 
@@ -170,6 +170,7 @@ function readDynamicConfig(config) {
 		turnsExpected: readNumber(config.wmDynamicTurnsExpected, 3),
 		amortization: readNumber(config.wmDynamicAmortization, DEFAULT_AMORTIZATION),
 		outPerM: readNumber(config.wmDynamicOutPerM, DEFAULT_OUT_PER_M),
+		cacheAdaptive: readBool(config.wmCacheAdaptive, false),
 		hitPerM: GUIDE_HIT_PER_M,
 		missPerM: GUIDE_MISS_PER_M,
 	};
@@ -198,6 +199,32 @@ function dynamicVerdictOf({ samples, used, th, dynamic }) {
 		return verdict && verdict.advance !== "none" ? verdict : null;
 	} catch {
 		return null;
+	}
+}
+
+/** P2 ③ cache-window adaptive observability: log the effective cache window
+ *  (TTL, raw P90, cadence-sample count, source) to the HOST log whenever it
+ *  changes. MODEL-VISIBILITY policy forbids numbers on any model-facing
+ *  surface, so this never feeds the watermark lines or the runtime-context
+ *  snapshot. Only runs when both the dynamic layer and the adaptive switch
+ *  are on (otherwise the window has no consumer and the fixed 300 s bytes
+ *  are exactly what OFF must preserve). Best-effort: never throws into the
+ *  render path. Exported for tests. */
+function noteCacheWindow(ctx, config, state, sessionId) {
+	try {
+		if (typeof sessionId !== "string" || sessionId === "") return;
+		if (readBool(config.wmDynamicEnabled, false) !== true) return;
+		if (readBool(config.wmCacheAdaptive, false) !== true) return;
+		if (!(state.cacheWindow instanceof Map)) return;
+		const win = estimateCacheWindow(state.samples.get(sessionId));
+		const last = state.cacheWindow.get(sessionId);
+		if (last !== undefined && last.ttlMs === win.ttlMs && last.p90Ms === win.p90Ms && last.samples === win.samples) return;
+		state.cacheWindow.set(sessionId, win);
+		ctx.logger?.info?.(
+			`dsh-switchman: adaptive cache window: ttl=${win.ttlMs}ms p90=${win.p90Ms === null ? "n/a" : `${win.p90Ms}ms`} cadence-samples=${win.samples} source=${win.source}`,
+		);
+	} catch {
+		/* best-effort logging only */
 	}
 }
 
@@ -442,6 +469,9 @@ function renderWatermarkContext(ctx, config, state, agent) {
 			return renderSubWatermark(levelOf(used, subTh));
 		}
 		const { level, reason } = rootTierOf(state, config, sessionId, used, th);
+		// P2 ③ observability: log the adaptive cache window when it changes.
+		// Host logger only — never model-injected (MODEL-VISIBILITY policy).
+		noteCacheWindow(ctx, config, state, sessionId);
 		if (level === "ok") return "";
 		if (state.paused.has(sessionId)) return PAUSED_LINE;
 		const live = handoverOf(sessionId);
@@ -518,6 +548,7 @@ function applyContextWatch(ctx, config) {
 		lastHandover: new Map(),
 		readUsed: new Map(),
 		samples: new Map(), // sessionId -> rolling [{ t, tokens }] growth samples (dynamic watermark)
+		cacheWindow: new Map(), // sessionId -> last logged adaptive cache window (P2 ③ observability)
 		subWindow: new Map(), // "provider/model" -> { value: number|null, at } — resolved subagent model windows (see subagentWindowTokens)
 	};
 	const warn = (message) => ctx.logger?.warn?.(`dsh-switchman: ${message}`);
@@ -1106,6 +1137,7 @@ function applyContextWatch(ctx, config) {
 			if (id === null) return;
 			state.samples.delete(id);
 			state.readUsed.delete(id);
+			state.cacheWindow.delete(id); // P2 ③ adaptive-window log cache
 			state.lastHandover.delete(id);
 			state.paused.delete(id);
 		} catch {
@@ -1218,6 +1250,7 @@ export {
 	renderSubWatermark,
 	recordSample,
 	readDynamicConfig,
+	noteCacheWindow,
 	dynamicVerdictOf,
 	combineTier,
 	rootTierOf,

@@ -182,6 +182,11 @@ export const Config = z.object({
 	wmDynamicLookback: z.number().min(2).max(50).default(6).volatile(),
 	wmDynamicOutPerM: z.number().min(0.1).max(10000).default(4).volatile(),
 	wmDynamicAmortization: z.number().min(1).max(100).default(1.75).volatile(),
+	// P2 ③ cache-window adaptive (guide §5): when on, the cache TTL feeding the
+	// dynamic cost signal is the clamped P90 of the recent cadence gaps
+	// (60s–600s envelope, fixed-300s fallback without a P90 basis). Requires
+	// wmDynamicEnabled; results go to the host log only, never to the model.
+	wmCacheAdaptive: z.boolean().default(false).volatile(),
 	// --- Teams mode: doctrine injection + whitelist sync -------------------
 	/** Agent Teams master switch (refactor guide §4.4: P0 tightened the
 	 *  default from ON to OFF — teams are the exception path, not the

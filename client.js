@@ -386,6 +386,7 @@ window.__ModuleLoader__.load({
 			'wmAutoHandover',
 			'wmSubagentCap',
 			'wmDynamicEnabled',
+			'wmCacheAdaptive',
 			// Context trim (design: context-trim-port-design.md).
 			'trimMode',
 			'trimEnabled',
@@ -571,6 +572,7 @@ window.__ModuleLoader__.load({
 				wmAutoHandover: bool('wmAutoHandover', true),
 				wmSubagentCap: bool('wmSubagentCap', true),
 				wmDynamicEnabled: bool('wmDynamicEnabled', false),
+				wmCacheAdaptive: bool('wmCacheAdaptive', false),
 				// Context trim (design: context-trim-port-design.md).
 				trimMode: TRIM_MODES.includes(value?.trimMode)
 					? value.trimMode
@@ -670,6 +672,7 @@ window.__ModuleLoader__.load({
 				wmAutoHandover: values.wmAutoHandover,
 				wmSubagentCap: values.wmSubagentCap,
 				wmDynamicEnabled: values.wmDynamicEnabled,
+				wmCacheAdaptive: values.wmCacheAdaptive,
 				trimMode: values.trimMode,
 				trimEnabled: values.trimEnabled,
 				trimLadderEnabled: values.trimLadderEnabled,
@@ -974,6 +977,9 @@ window.__ModuleLoader__.load({
 				wmSubagentFollowForce: '跟随 force 档（0）',
 				wmDynamicEnabledLabel: '动态水位',
 				wmDynamicEnabledHelp: '开启后按最近样本动态前移水位线干预；关闭则只用上方静态三档。',
+				wmCacheAdaptiveLabel: '缓存窗口自适应（P90）',
+				wmCacheAdaptiveHelp:
+					'开启后（需先开动态水位）按最近轮距间隔的 P90 自适应缓存窗口，夹在 60s–600s 厂商安全边界内，样本不足时回退 300s；结果只写入宿主日志，不进入模型注入。',
 				// Constraint recognition (guide §4.1/§4.2).
 				constraintsSectionTitle: '约束识别与技能注解',
 				constraintsSectionDescription:
@@ -1285,6 +1291,9 @@ window.__ModuleLoader__.load({
 				wmSubagentFollowForce: 'Follow the force tier (0)',
 				wmDynamicEnabledLabel: 'Dynamic watermark',
 				wmDynamicEnabledHelp: 'Advance watermark interventions from recent samples; off = the static tiers only.',
+				wmCacheAdaptiveLabel: 'Adaptive cache window (P90)',
+				wmCacheAdaptiveHelp:
+					'When on (requires the dynamic watermark above), the cache TTL feeding the cost signal becomes the P90 of recent turn gaps, clamped to a 60s–600s vendor-safety envelope, falling back to the fixed 300s without enough samples; results go to the host log only, never into model injection.',
 				// Constraint recognition (guide §4.1/§4.2).
 				constraintsSectionTitle: 'Constraint recognition & skill annotations',
 				constraintsSectionDescription:
@@ -5898,6 +5907,7 @@ window.__ModuleLoader__.load({
 				wmAutoHandover: values.wmAutoHandover,
 				wmSubagentCap: values.wmSubagentCap,
 				wmDynamicEnabled: values.wmDynamicEnabled,
+				wmCacheAdaptive: values.wmCacheAdaptive,
 				trimMode: values.trimMode,
 				trimEnabled: values.trimEnabled,
 				trimLadderEnabled: values.trimLadderEnabled,
@@ -7469,6 +7479,23 @@ window.__ModuleLoader__.load({
 								checked: values.wmDynamicEnabled,
 								onChange: () => {
 									edit('wmDynamicEnabled', !values.wmDynamicEnabled);
+								},
+								disabled: !editable,
+								style: STYLE.checkbox,
+							}),
+							lines: [],
+						}),
+						h(SettingsRow, {
+							key: 'wmCacheAdaptive',
+							id: `${wmId}-cachewin`,
+							label: t('wmCacheAdaptiveLabel'),
+							help: t('wmCacheAdaptiveHelp'),
+							control: h('input', {
+								type: 'checkbox',
+								id: `${wmId}-cachewin`,
+								checked: values.wmCacheAdaptive,
+								onChange: () => {
+									edit('wmCacheAdaptive', !values.wmCacheAdaptive);
 								},
 								disabled: !editable,
 								style: STYLE.checkbox,

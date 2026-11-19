@@ -144,6 +144,8 @@ const BOOLEAN_FIELDS = [
 	"wmAutoHandover",
 	"wmSubagentCap",
 	"wmDynamicEnabled",
+	// P2 ③ cache-window adaptive (mirrors host/config.js wmCacheAdaptive).
+	"wmCacheAdaptive",
 	// The following six mirror the pool*Manual switches in host/config.js
 	"poolEconomyManual",
 	"poolMechanicalManual",

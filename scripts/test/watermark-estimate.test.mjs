@@ -10,12 +10,16 @@ import { test } from "node:test";
 import {
 	costStay,
 	costSwitch,
+	estimateCacheWindow,
 	estimateGrowthRate,
 	estimateMissProbability,
 	estimateTurnsExpected,
 	evaluateDynamicWatermark,
 	maxTier,
 	turnsToThreshold,
+	CACHE_TTL_MS,
+	CACHE_WINDOW_MAX_MS,
+	CACHE_WINDOW_MIN_MS,
 } from "../../host/watermark-estimate.js";
 
 function series(tokens, stepMs = 60_000) {
@@ -180,4 +184,105 @@ test("evaluateDynamicWatermark: degenerate inputs stay harmless", () => {
 	assert.equal(empty.turnsExpected, 25);
 	const broken = evaluateDynamicWatermark({ samples: undefined, used: NaN, thresholds: null, dynamic: null });
 	assert.equal(broken.advance, "none");
+});
+
+// ---- P2 ③ cache-window adaptive (guide §5) --------------------------------
+
+test("estimateCacheWindow: P90 basis, fallback below 5 gaps, degenerate inputs", () => {
+	const gaps = (values) => {
+		const out = [];
+		let t = 1_000_000;
+		out.push({ t, tokens: 1000 });
+		for (const g of values) {
+			t += g;
+			out.push({ t, tokens: 1000 });
+		}
+		return out;
+	};
+	// 10 gaps: eight 30s + two 180s → nearest-rank P90 (index 8 of the sorted
+	// gaps) = 180s, inside the envelope → adaptive, unclamped.
+	const win = estimateCacheWindow(gaps([30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 180_000, 180_000]));
+	assert.deepEqual(win, { ttlMs: 180_000, p90Ms: 180_000, samples: 10, source: "adaptive" });
+	// Exactly CACHE_P90_MIN_SAMPLES gaps still qualify (n=5 → rank index 4 = max).
+	const five = estimateCacheWindow(gaps([120_000, 120_000, 120_000, 120_000, 120_000]));
+	assert.deepEqual(five, { ttlMs: 120_000, p90Ms: 120_000, samples: 5, source: "adaptive" });
+	// Four gaps → no P90 basis: fixed window, raw percentile nulled.
+	const four = estimateCacheWindow(gaps([120_000, 120_000, 120_000, 120_000]));
+	assert.deepEqual(four, { ttlMs: CACHE_TTL_MS, p90Ms: null, samples: 4, source: "fallback" });
+	// Degenerate inputs all fail closed to the fixed window.
+	assert.deepEqual(estimateCacheWindow(null), { ttlMs: CACHE_TTL_MS, p90Ms: null, samples: 0, source: "fallback" });
+	assert.deepEqual(estimateCacheWindow([]), { ttlMs: CACHE_TTL_MS, p90Ms: null, samples: 0, source: "fallback" });
+	assert.deepEqual(estimateCacheWindow([{ t: 1, tokens: 1 }, { t: 1, tokens: 1 }]), {
+		ttlMs: CACHE_TTL_MS,
+		p90Ms: null,
+		samples: 0,
+		source: "fallback",
+	});
+});
+
+test("estimateCacheWindow: clamps to the 60s–600s vendor envelope, raw p90 preserved", () => {
+	const gaps = (value, n = 10) => {
+		const out = [];
+		let t = 1_000_000;
+		out.push({ t, tokens: 1000 });
+		for (let i = 0; i < n; i++) {
+			t += value;
+			out.push({ t, tokens: 1000 });
+		}
+		return out;
+	};
+	const low = estimateCacheWindow(gaps(10_000));
+	assert.equal(low.source, "adaptive");
+	assert.equal(low.p90Ms, 10_000); // raw percentile shows the clamp fired
+	assert.equal(low.ttlMs, CACHE_WINDOW_MIN_MS);
+	const high = estimateCacheWindow(gaps(700_000));
+	assert.equal(high.source, "adaptive");
+	assert.equal(high.p90Ms, 700_000);
+	assert.equal(high.ttlMs, CACHE_WINDOW_MAX_MS);
+});
+
+test("cacheAdaptive OFF keeps the pre-P2 verdict bytes: no cacheWindow key, fixed-300s consumers", () => {
+	// 30s cadence, no growth — turnsExpected is the only moving part.
+	const flat = [
+		{ t: 1_000_000, tokens: 60_000 },
+		{ t: 1_030_000, tokens: 60_000 },
+		{ t: 1_060_000, tokens: 60_000 },
+		{ t: 1_090_000, tokens: 60_000 },
+		{ t: 1_120_000, tokens: 60_000 },
+		{ t: 1_150_000, tokens: 60_000 },
+		{ t: 1_180_000, tokens: 60_000 },
+	];
+	const base = { hitPerM: 0.02, missPerM: 1, outPerM: 4, amortization: 1.75, turnsExpected: 0, lookback: 6 };
+	const off = evaluateDynamicWatermark({ samples: flat, used: 60_000, thresholds: TH, dynamic: { ...base, cacheAdaptive: false } });
+	const absent = evaluateDynamicWatermark({ samples: flat, used: 60_000, thresholds: TH, dynamic: { ...base } });
+	// Shape byte-identity with the pre-P2-③ result: no cacheWindow key on either.
+	assert.equal("cacheWindow" in off, false);
+	assert.equal("cacheWindow" in absent, false);
+	assert.deepEqual(off, absent); // absent switch === explicit false (default OFF)
+	// Consumers still fed by the FIXED window: 300s / 30s cadence → 10 turns.
+	assert.equal(off.turnsExpected, estimateTurnsExpected(flat, 0, CACHE_TTL_MS));
+	assert.equal(off.turnsExpected, 10);
+});
+
+test("cacheAdaptive ON feeds the clamped P90 window to the cadence consumers", () => {
+	const cadence = (values) => {
+		const out = [];
+		let t = 1_000_000;
+		out.push({ t, tokens: 60_000 });
+		for (const g of values) {
+			t += g;
+			out.push({ t, tokens: 60_000 });
+		}
+		return out;
+	};
+	// Eight 30s + two 180s gaps → P90 180s; median 30s. ON horizon =
+	// ceil(180/30) = 6, OFF horizon = ceil(300/30) = 10 — the adaptive
+	// window visibly shortens the expected-turns horizon.
+	const samples = cadence([30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 180_000, 180_000]);
+	const dynamic = { hitPerM: 0.02, missPerM: 1, outPerM: 4, amortization: 1.75, turnsExpected: 0, lookback: 6 };
+	const on = evaluateDynamicWatermark({ samples, used: 60_000, thresholds: TH, dynamic: { ...dynamic, cacheAdaptive: true } });
+	const off = evaluateDynamicWatermark({ samples, used: 60_000, thresholds: TH, dynamic: { ...dynamic } });
+	assert.deepEqual(on.cacheWindow, { ttlMs: 180_000, p90Ms: 180_000, samples: 10, source: "adaptive" });
+	assert.equal(on.turnsExpected, 6);
+	assert.equal(off.turnsExpected, 10);
 });

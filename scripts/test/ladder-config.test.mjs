@@ -56,6 +56,7 @@ function fullValues(overrides = {}) {
 		wmSubagentForceTokens: 0,
 		wmSubagentWindowRatio: 0.75,
 		wmDynamicEnabled: false,
+		wmCacheAdaptive: false,
 		wmDynamicTurnsExpected: 3,
 		wmDynamicLookback: 6,
 		wmDynamicOutPerM: 4,
@@ -132,6 +133,7 @@ test("coerceValues round-trips every trim field the client page sends", () => {
 	assert.equal(coerced.trimLadderT3Tokens, 6000);
 	assert.equal(coerced.trimLadderT3MinBlocks, 2);
 	assert.equal(coerced.wmSubagentWindowRatio, 0.75);
+	assert.equal(coerced.wmCacheAdaptive, false);
 	// Trim side routes keep their effort pin through coercion; intent routes
 	// never gain one (cleanIntentRoute strips it).
 	assert.deepEqual(
