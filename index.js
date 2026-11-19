@@ -93,6 +93,10 @@ import { applyContextWatch } from "./host/context-watch.js";
 // per-turn advisory tag line near the pools table + annotated-skills table;
 // advice only, off by default (constraintsEnabled).
 import { applyConstraints, annotateSkillCandidates } from "./host/constraints.js";
+// Pool-feedback loop (guide §4.5, P1 item 3): maps the skill_loaded stats
+// onto pool_hint lanes as advisory tier-label feedback rows beside the
+// pools table; OFF (default) renders "" (zero prompt diff).
+import { applyPoolFeedback } from "./host/pool-feedback.js";
 // Open skill registry + skill-load observability (guide §5.2.1/§5.2.2):
 // workspace `<cwd>/.dsh-switchman/skills/` scanning (source "local"),
 // name-conflict merging, and the bounded skill_loaded stats.
@@ -232,11 +236,19 @@ function apply(ctx, config) {
 	// discovered per session cwd — get the same parse+measure path as the
 	// bundled ones; OFF returns [] without touching the filesystem (review
 	// F1 short-circuit).
-	applyConstraints(ctx, config, (agent) => {
+	// One per-assembly annotation view shared by BOTH consumers: the
+	// [SWITCHMAN:SKILLS] table (§4.2) and the pool-feedback rows (§4.5).
+	// Plain arrays stay supported for tests; OFF returns [] without touching
+	// the filesystem (review F1 short-circuit).
+	const annotatedSkills = (agent) => {
 		if (config?.constraintsEnabled?.get() !== true) return [];
 		const cwd = agent?.session?.header?.cwd;
 		return annotateSkillCandidates(candidatesWithRegistry(candidates, typeof cwd === "string" ? cwd : "", config, warn));
-	});
+	};
+	applyConstraints(ctx, config, annotatedSkills);
+	// Same closure (resolved per assembly inside each section, never stored:
+	// review F6), so feedback tiers track the exact annotations the table prints.
+	applyPoolFeedback(ctx, config, annotatedSkills);
 	applyVision(ctx, config);
 	applyIntent(ctx, config);
 	applySubagentModel(ctx);

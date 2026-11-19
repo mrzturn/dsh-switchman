@@ -159,6 +159,8 @@ const BOOLEAN_FIELDS = [
 	// Constraint recognition + skill annotations (mirrors the constraints
 	// group in host/config.js).
 	"constraintsEnabled",
+	// Pool feedback loop (mirrors host/config.js poolFeedbackEnabled).
+	"poolFeedbackEnabled",
 	// Context trim switches (mirrors the trim group in host/config.js).
 	"trimEnabled",
 	"trimLadderEnabled",

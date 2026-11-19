@@ -203,6 +203,12 @@ test("bundled skills carry the intended annotations and measured sizes", () => {
 	assert.deepEqual(byName("db-query").tags, ["verification_required", "permission_boundary"]);
 	assert.deepEqual(byName("git-commit-message").tags, ["parallelizable"]);
 	assert.deepEqual(byName("requirement-docs").tags, ["verification_required"]);
+	// Pin the real frontmatter pool_hint values: the pool-feedback rows group
+	// by these, so a typo in a SKILL.md must fail here, not silently drop the
+	// lane grouping (review: fixture/real-frontmatter drift guard).
+	assert.equal(byName("db-query").poolHint, "mechanical");
+	assert.equal(byName("git-commit-message").poolHint, "mechanical");
+	assert.equal(byName("requirement-docs").poolHint, "main");
 	function byName(name) {
 		const entry = annotated.find((skill) => skill.name === name);
 		assert.ok(entry !== undefined, `missing annotation for ${name}`);

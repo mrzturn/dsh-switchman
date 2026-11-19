@@ -87,6 +87,7 @@ function fullValues(overrides = {}) {
 		syncWhitelist: false,
 		intentEnabled: false,
 		constraintsEnabled: false,
+		poolFeedbackEnabled: false,
 		trimEnabled: true,
 		trimLadderEnabled: true,
 		trimProtectTaskIntent: true,

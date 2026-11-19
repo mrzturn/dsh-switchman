@@ -413,6 +413,7 @@ window.__ModuleLoader__.load({
 			// Constraint recognition (guide §4.1/§4.2).
 			'constraintsEnabled',
 			'skillRegistryDir',
+			'poolFeedbackEnabled',
 		];
 
 		/** Stable identity of one provider/model route. */
@@ -619,6 +620,7 @@ window.__ModuleLoader__.load({
 				// Constraint recognition (guide §4.1/§4.2).
 				constraintsEnabled: bool('constraintsEnabled', false),
 				skillRegistryDir: string('skillRegistryDir'),
+				poolFeedbackEnabled: bool('poolFeedbackEnabled', false),
 			};
 		}
 
@@ -704,6 +706,7 @@ window.__ModuleLoader__.load({
 				intentFallbackRoute: `${routeKey(values.intentFallbackRoute)}\0${values.intentFallbackRoute.effort ?? ''}`,
 				constraintsEnabled: values.constraintsEnabled,
 				skillRegistryDir: values.skillRegistryDir,
+				poolFeedbackEnabled: values.poolFeedbackEnabled,
 			});
 		}
 
@@ -981,6 +984,9 @@ window.__ModuleLoader__.load({
 				skillRegistryDirLabel: '技能注册目录',
 				skillRegistryDirHelp:
 					'开放技能注册（§5.2.2）：此目录下每个子目录一个本地技能（SKILL.md）；相对路径基于会话工作目录，留空 = <cwd>/.dsh-switchman/skills/。',
+				poolFeedbackEnabledLabel: '池反馈闭环',
+				poolFeedbackEnabledHelp:
+					'开启后在池表旁注入 [SWITCHMAN:POOLS-FEEDBACK] 反馈行：按 pool_hint 泳道汇总技能加载档位（never / few / often，不含具体计数）；数据依赖约束注入的加载统计，关闭约束注入时无数据。关闭本开关 = 注入点渲染为空（零 diff）。',
 				wmDynamicTurnsExpectedLabel: '期望轮数',
 				wmDynamicTurnsExpectedHelp: '预计多少轮达到水位线，用于动态提前量。',
 				wmDynamicLookbackLabel: '回看样本',
@@ -1289,6 +1295,9 @@ window.__ModuleLoader__.load({
 				skillRegistryDirLabel: 'Skill registry directory',
 				skillRegistryDirHelp:
 					'Open skill registry (§5.2.2): one subdirectory per local skill (SKILL.md) under this path; relative paths resolve against the session working directory, empty = <cwd>/.dsh-switchman/skills/.',
+				poolFeedbackEnabledLabel: 'Pool feedback loop',
+				poolFeedbackEnabledHelp:
+					'When on, a [SWITCHMAN:POOLS-FEEDBACK] block may render beside the pools table: per-lane skill-load tiers from pool_hint annotations (never / few / often, no absolute counts); data requires constraint injection on. Off = the injection point renders empty (zero diff).',
 				wmDynamicTurnsExpectedLabel: 'Expected turns',
 				wmDynamicTurnsExpectedHelp: 'Turns expected to reach the watermark; drives the dynamic lead-in.',
 				wmDynamicLookbackLabel: 'Lookback samples',
@@ -5944,6 +5953,7 @@ window.__ModuleLoader__.load({
 				},
 				constraintsEnabled: values.constraintsEnabled,
 				skillRegistryDir: values.skillRegistryDir,
+				poolFeedbackEnabled: values.poolFeedbackEnabled,
 			};
 			if (sameValues(current, desired)) {
 				// Whitespace-only differences: nothing to write, close the draft.
@@ -7362,6 +7372,23 @@ window.__ModuleLoader__.load({
 								disabled: !editable,
 								'aria-label': t('skillRegistryDirLabel'),
 								style: STYLE.control,
+							}),
+							lines: [],
+						}),
+						h(SettingsRow, {
+							key: 'poolFeedbackEnabled',
+							id: `${constraintsId}-pool-feedback`,
+							label: t('poolFeedbackEnabledLabel'),
+							help: t('poolFeedbackEnabledHelp'),
+							control: h('input', {
+								type: 'checkbox',
+								id: `${constraintsId}-pool-feedback`,
+								checked: values.poolFeedbackEnabled,
+								onChange: () => {
+									edit('poolFeedbackEnabled', !values.poolFeedbackEnabled);
+								},
+								disabled: !editable,
+								style: STYLE.checkbox,
 							}),
 							lines: [],
 						}),

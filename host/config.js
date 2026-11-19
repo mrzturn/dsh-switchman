@@ -290,6 +290,18 @@ export const Config = z.object({
 	 *  Relative paths resolve against the session working directory;
 	 *  empty = the bundled default `<cwd>/.dsh-switchman/skills/`. */
 	skillRegistryDir: z.string().default("").volatile(),
+	// --- Pool feedback loop (guide §4.5, P1 item 3) ------------------------
+	/** Master switch for the pool-feedback loop. ON = one
+	 *  [SWITCHMAN:POOLS-FEEDBACK] section (order 10406) may render beside
+	 *  the pools table: per-lane skill-load tiers (`never` / `few` /
+	 *  `often` — MODEL-VISIBILITY policy, no absolute counts) computed from
+	 *  the skill_loaded stats of pool_hint-annotated skills. The DATA
+	 *  requires constraintsEnabled (load recording and the annotations are
+	 *  gated behind it), so an on/off mismatch simply renders "". OFF
+	 *  (default) = the section renders "" on every assembly — zero prompt
+	 *  diff. Fail-open: missing stats never block the main
+	 *  [SWITCHMAN:POOLS] table. */
+	poolFeedbackEnabled: z.boolean().default(false).volatile(),
 	// --- Context trim: fully-automatic conversation compression ------------
 	/** Master switch for the context-trim layer (design:
 	 *  .dsh-switchman/analysis/context-trim-port-design.md). OFF disables

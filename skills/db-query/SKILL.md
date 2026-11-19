@@ -2,8 +2,10 @@
 name: db-query
 description: Read-only MySQL/Redis queries via built-in scripts — verify table records, cache keys/fields/TTL, and cross-store consistency. Trigger when the user asks to check or verify database data, including "run this SQL", "check the table", or any MySQL/Redis look-up. If the access address or credentials are unknown, stop and ask the user first; never search for them yourself. Refuse all writes, deletes, DDL, or TTL changes.
 compatibility: Node.js 18+, npm, MySQL 5.7.8+/8.0, Redis 5+; dedicated read-only account required for shared/production environments
-# dsh-switchman annotation layer (guide §4.2): dispatch-relevant constraints
+# dsh-switchman annotation layer (guide §4.2): dispatch-relevant constraints + lane hint
 constraints: permission_boundary, verification_required
+# Lane hint (§4.5 feedback loop): read-only data verification = procedural
+pool_hint: mechanical
 ---
 
 <!-- [2026-09-05]-[full English rewrite; top rule: unknown DB access info → stop and ask, never hunt/guess]-[blocks blind or self-sourced connections] -->
