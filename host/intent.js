@@ -39,6 +39,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { effectiveIntentCandidates, mergeIntentCandidates } from "./intent-presets.js";
 import { sessionModelSelectionOf } from "./subagent-model.js";
+import { cleanClassifierConstraints, recordClassifierConstraints } from "./constraints.js";
 
 /** Pseudo provider id (must match client.js and the design contract). */
 export const AUTO_PROVIDER = "dsh-switchman-auto";
@@ -211,15 +212,20 @@ function numberOr(value) {
 
 /** Validate one parsed verdict object against the candidate count: an
  *  in-range integer `best` (0-based) with a clamped 0-100 confidence
- *  (missing confidence = decisive pick, 100); null otherwise. */
+ *  (missing confidence = decisive pick, 100); null otherwise. The optional
+ *  `constraints` payload (constraint-recognition layer, guide §4.1) is
+ *  extracted and attached when present and well-formed; legacy verdicts
+ *  without the field parse exactly as before (backward compatible). */
 function verdictFromValue(value, candidateCount) {
 	if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
 	const best = numberOr(value.best);
 	if (best === null || !Number.isInteger(best) || best < 0 || best >= candidateCount) return null;
 	const confidence = numberOr(value.confidence);
+	const constraints = cleanClassifierConstraints(value.constraints);
 	return {
 		best,
 		confidence: confidence === null ? 100 : Math.min(100, Math.max(0, Math.round(confidence))),
+		...(constraints === null ? {} : { constraints }),
 	};
 }
 
@@ -378,9 +384,16 @@ export function clearSessionState(sessionId) {
 // ---------------------------------------------------------------------------
 
 /** System prompt for the chat-channel classifier (design §3: strict JSON;
- *  tolerant parsing still accepts legacy bare-integer replies). */
-function classifierSystemPrompt() {
-	return 'You route this conversation to one candidate model. Reply with STRICT JSON only: {"best": <candidate number>, "confidence": <0-100>}. No prose, no markdown fence.';
+ *  tolerant parsing still accepts legacy bare-integer replies). When the
+ *  constraint layer is ON, one optional-output clause extends the schema:
+ *  the classifier may add a `constraints` array (weak signals, guide §4.1).
+ *  Flag off → the EXACT pre-constraints string (byte-stable; zero-diff
+ *  guarantee for the off state). */
+const CLASSIFIER_CONSTRAINTS_CLAUSE =
+	' You may add an optional "constraints" field: an array of at most 3 objects {"tag": <string>, "confidence": <0-1>} where tag is one of: context_pressure, verification_required, capability_gap, parallelizable, permission_boundary, skill_match — describing what this conversation needs from routing. Omit the field when unsure.';
+export function classifierSystemPrompt(constraintsEnabled = false) {
+	const base = 'You route this conversation to one candidate model. Reply with STRICT JSON only: {"best": <candidate number>, "confidence": <0-100>}. No prose, no markdown fence.';
+	return constraintsEnabled === true ? base + CLASSIFIER_CONSTRAINTS_CLAUSE : base;
 }
 
 /** Candidate list lines: `#N provider/model — note`, the currently routed
@@ -718,11 +731,18 @@ async function routeAutoRequest(ctx, config, payload, warn) {
 				// model and URL are hand-configured, no provider involved.
 				parsed = await classifySystemone(ctx, config, candidates, current, excerpt, payload?.signal);
 			} else {
-				const system = classifierSystemPrompt();
+				const system = classifierSystemPrompt(readBool(config.constraintsEnabled));
 				const input = classifierInput(config, candidates, current, excerpt);
 				const text = await classifyOnce(ctx, config, classifier, system, input, payload?.signal);
 				parsed = parseClassifierVerdict(text, candidates.length);
-				if (parsed === null) warn("intent: classifier output unparseable; using the fallback chain");
+				if (parsed === null) {
+					warn("intent: classifier output unparseable; using the fallback chain");
+				} else if (parsed.constraints !== undefined) {
+					// Constraint layer bookkeeping (guide §4.1): store the weak
+					// signals for the turn this verdict pins. Fire-and-forget —
+					// routing never depends on the store.
+					recordClassifierConstraints(sessionId, turnKey, parsed.constraints);
+				}
 			}
 		} catch (error) {
 			warn(`intent: classification failed (${error?.message ?? error}); using the fallback chain`);

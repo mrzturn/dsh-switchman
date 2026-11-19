@@ -155,6 +155,9 @@ const BOOLEAN_FIELDS = [
 	"syncWhitelist",
 	// Intent recognition (mirrors the intent* group in host/config.js).
 	"intentEnabled",
+	// Constraint recognition + skill annotations (mirrors the constraints
+	// group in host/config.js).
+	"constraintsEnabled",
 	// Context trim switches (mirrors the trim group in host/config.js).
 	"trimEnabled",
 	"trimLadderEnabled",

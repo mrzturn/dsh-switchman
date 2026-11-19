@@ -256,6 +256,19 @@ export const Config = z.object({
 	 *  overrides the fallback model's default. */
 	intentFallbackRoute: IntentRouteSchema.default({ provider: "", model: "" }).volatile(),
 
+	// --- Constraint recognition + skill annotations (guide §4.1/§4.2) ------
+	/** Master switch for the P0 advisory layer (refactor guide §5, phase 1).
+	 *  ON = the host may inject ONE `[SWITCHMAN:CONSTRAINTS]` tag line (per
+	 *  recognized constraint, source-labeled) plus a `[SWITCHMAN:SKILLS]`
+	 *  table of annotated skills near the pools table; the intent
+	 *  classifier may additionally return an optional weak-signal
+	 *  `constraints` array. OFF (default) = every injection point renders
+	 *  "" and the classifier prompt is byte-identical to the pre-feature
+	 *  text — dispatch behavior does not change either way (advice only).
+	 *  One combined switch by design: both halves ship as a single
+	 *  advisory capability; splitting adds settings surface with no
+	 *  user-visible benefit until P1 dispatch gating exists. */
+	constraintsEnabled: z.boolean().default(false).volatile(),
 	// --- Context trim: fully-automatic conversation compression ------------
 	/** Master switch for the context-trim layer (design:
 	 *  .dsh-switchman/analysis/context-trim-port-design.md). OFF disables

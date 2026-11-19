@@ -1,6 +1,8 @@
 ---
 name: git-commit-message
 description: Generate convention-compliant Git commit messages. Trigger whenever the intent is to produce commit text (commit message/description), including "generate the commit description/message" after a batch of changes — even without the word "commit". Text only; never commits or pushes.
+# dsh-switchman annotation layer (guide §4.2): dispatch-relevant constraints
+constraints: parallelizable
 ---
 
 <!-- [2026-09-05]-[default output to English unless project rules/user explicitly request Chinese; generic examples]-[generated messages follow this default] -->

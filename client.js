@@ -410,6 +410,8 @@ window.__ModuleLoader__.load({
 			'intentCandidates',
 			...INTENT_NUMBER_FIELDS.map(({ field }) => field),
 			'intentFallbackRoute',
+			// Constraint recognition (guide §4.1/§4.2).
+			'constraintsEnabled',
 		];
 
 		/** Stable identity of one provider/model route. */
@@ -613,6 +615,8 @@ window.__ModuleLoader__.load({
 				intentFallbackRoute:
 					sanitizeRoute(value?.intentFallbackRoute, true) ??
 					({ provider: '', model: '' }),
+				// Constraint recognition (guide §4.1/§4.2).
+				constraintsEnabled: bool('constraintsEnabled', false),
 			};
 		}
 
@@ -696,6 +700,7 @@ window.__ModuleLoader__.load({
 					INTENT_NUMBER_FIELDS.map(({ field }) => [field, values[field]]),
 				),
 				intentFallbackRoute: `${routeKey(values.intentFallbackRoute)}\0${values.intentFallbackRoute.effort ?? ''}`,
+				constraintsEnabled: values.constraintsEnabled,
 			});
 		}
 
@@ -963,6 +968,13 @@ window.__ModuleLoader__.load({
 				wmSubagentFollowForce: '跟随 force 档（0）',
 				wmDynamicEnabledLabel: '动态水位',
 				wmDynamicEnabledHelp: '开启后按最近样本动态前移水位线干预；关闭则只用上方静态三档。',
+				// Constraint recognition (guide §4.1/§4.2).
+				constraintsSectionTitle: '约束识别与技能注解',
+				constraintsSectionDescription:
+					'重构指导 §4.1/§4.2 的 P0 建议层：识别上下文压力、技能匹配等约束并标注捆绑技能；只注入一行事实标签与注解表，不改变任何派发行为。',
+				constraintsEnabledLabel: '启用约束注入',
+				constraintsEnabledHelp:
+					'开启后按当前轮次注入 [SWITCHMAN:CONSTRAINTS] 标签行与带注解技能表；关闭时所有注入点渲染为空（零字节，无 diff）。',
 				wmDynamicTurnsExpectedLabel: '期望轮数',
 				wmDynamicTurnsExpectedHelp: '预计多少轮达到水位线，用于动态提前量。',
 				wmDynamicLookbackLabel: '回看样本',
@@ -1261,6 +1273,13 @@ window.__ModuleLoader__.load({
 				wmSubagentFollowForce: 'Follow the force tier (0)',
 				wmDynamicEnabledLabel: 'Dynamic watermark',
 				wmDynamicEnabledHelp: 'Advance watermark interventions from recent samples; off = the static tiers only.',
+				// Constraint recognition (guide §4.1/§4.2).
+				constraintsSectionTitle: 'Constraint recognition & skill annotations',
+				constraintsSectionDescription:
+					'P0 advisory layer (refactor guide §4.1/§4.2): recognizes constraints such as context pressure or skill match and annotates bundled skills; injects one factual tag line and an annotation table only — dispatch behavior is unchanged.',
+				constraintsEnabledLabel: 'Enable constraint injection',
+				constraintsEnabledHelp:
+					'When on, a per-turn [SWITCHMAN:CONSTRAINTS] tag line and the annotated-skills table may be injected; off = every injection point renders empty (zero bytes, no diff).',
 				wmDynamicTurnsExpectedLabel: 'Expected turns',
 				wmDynamicTurnsExpectedHelp: 'Turns expected to reach the watermark; drives the dynamic lead-in.',
 				wmDynamicLookbackLabel: 'Lookback samples',
@@ -5914,6 +5933,7 @@ window.__ModuleLoader__.load({
 					model: values.intentFallbackRoute.model,
 					...(values.intentFallbackRoute.effort ? { effort: values.intentFallbackRoute.effort } : {}),
 				},
+				constraintsEnabled: values.constraintsEnabled,
 			};
 			if (sameValues(current, desired)) {
 				// Whitespace-only differences: nothing to write, close the draft.
@@ -6130,6 +6150,8 @@ window.__ModuleLoader__.load({
 			const teamsId = `${headingId}-teams`;
 			// ---- intent section id ----
 			const intentId = `${headingId}-intent`;
+			// ---- constraints section id (guide §4.1/§4.2) ----
+			const constraintsId = `${headingId}-constraints`;
 			// ---- trim section id ----
 			const trimId = `${headingId}-trim`;
 
@@ -7283,6 +7305,40 @@ window.__ModuleLoader__.load({
 								lines: intentNumberLines(spec),
 							}),
 						),
+					),
+				),
+				h(
+					'section',
+					{
+						'aria-labelledby': constraintsId,
+						style: { ...STYLE.section, ...STYLE.sectionDivider },
+					},
+					h(
+						'h3',
+						{ id: constraintsId, style: STYLE.heading },
+						t('constraintsSectionTitle'),
+					),
+					h('p', { style: STYLE.description }, t('constraintsSectionDescription')),
+					h(
+						'div',
+						{ style: STYLE.rows },
+						h(SettingsRow, {
+							key: 'constraintsEnabled',
+							id: `${constraintsId}-enabled`,
+							label: t('constraintsEnabledLabel'),
+							help: t('constraintsEnabledHelp'),
+							control: h('input', {
+								type: 'checkbox',
+								id: `${constraintsId}-enabled`,
+								checked: values.constraintsEnabled,
+								onChange: () => {
+									edit('constraintsEnabled', !values.constraintsEnabled);
+								},
+								disabled: !editable,
+								style: STYLE.checkbox,
+							}),
+							lines: [],
+						}),
 					),
 				),
 				h(

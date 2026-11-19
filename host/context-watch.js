@@ -1214,4 +1214,9 @@ export {
 	dynamicVerdictOf,
 	combineTier,
 	rootTierOf,
+	// Constraint-recognition layer (host/constraints.js): pure determinism
+	// helpers reused for the context_pressure hit — no behavior change here.
+	sessionIdOf,
+	readThresholds,
+	levelOf,
 };

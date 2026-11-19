@@ -86,6 +86,10 @@ import { applySubagentModel } from "./host/subagent-model.js";
 
 // Context-watermark layer (banner + read budget + handover + /ctx-* commands).
 import { applyContextWatch } from "./host/context-watch.js";
+// Constraint recognition + skill annotations (refactor guide §4.1/§4.2):
+// per-turn advisory tag line near the pools table + annotated-skills table;
+// advice only, off by default (constraintsEnabled).
+import { applyConstraints, annotateSkillCandidates } from "./host/constraints.js";
 // Context-trim layer (deterministic outbound-view folding + idle-boundary
 // automatic folds + ctx_trim_fold/ctx_trim_status advisory tools).
 import { applyContextTrim } from "./host/context-trim/index.js";
@@ -207,13 +211,22 @@ function loadSkillCandidates(root, warn) {
 
 /** Register the bundled dsh-switchman skill provider on `ctx.skills` and
  *  mount the language (lang), dispatch (dispatch), teams (teams), watermark
- *  (context-watch), vision (vision), intent routing (intent), subagent model
+ *  (context-watch), constraints (constraint-recognition + skill annotations),
+ *  vision (vision), intent routing (intent), subagent model
  *  visibility (subagent-model), client-bridge (routes), and the PTC
  *  direct-call guard (ptc-guard) layers. */
 function apply(ctx, config) {
 	const root = fileURLToPath(new URL("./skills/", import.meta.url));
 	const warn = (message) => ctx.logger.warn(`dsh-switchman: ${message}`);
 	const candidates = loadSkillCandidates(root, warn);
+	// §4.2 annotation layer: parse each bundled SKILL.md's `constraints`
+	// frontmatter + measure its size once at apply time; only annotated
+	// skills enter the [SWITCHMAN:SKILLS] table (fail-open, may be empty).
+	// Gated by the master switch: the disabled layer must not touch the
+	// filesystem at all (review F1 — full short-circuit, not just render).
+	const annotatedSkills = config?.constraintsEnabled?.get() === true
+		? annotateSkillCandidates(candidates)
+		: candidates;
 	const provider = {
 		name: PROVIDER_NAME,
 		list: () => Promise.resolve(candidates),
@@ -230,6 +243,7 @@ function apply(ctx, config) {
 	applyPtcBindings(ctx);
 	applyContextWatch(ctx, config);
 	applyContextTrim(ctx, config);
+	applyConstraints(ctx, config, annotatedSkills);
 	applyVision(ctx, config);
 	applyIntent(ctx, config);
 	applySubagentModel(ctx);

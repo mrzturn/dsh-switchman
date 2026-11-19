@@ -1,6 +1,8 @@
 ---
 name: requirement-docs
 description: Unified spec for technical docs — requirements analysis, PRD, design, architecture, API design, tech plan, dev plan. Trigger before drafting or reorganizing any such doc; archive to docs/requirements-and-design/ with unified naming. English by default.
+# dsh-switchman annotation layer (guide §4.2): dispatch-relevant constraints
+constraints: verification_required
 ---
 
 <!-- [2026-09-05]-[default output to English unless project rules/user explicitly request Chinese; generic examples]-[generated docs follow this default] -->
