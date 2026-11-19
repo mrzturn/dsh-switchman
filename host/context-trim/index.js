@@ -39,6 +39,7 @@ import { COMPRESS_BUDGET_RATIO_DEFAULT, budgetNudgePercent, compressBudgetTarget
 import { LADDER_SYSTEM_PROMPT, mechanicalSummary, renderLadderMaterial, renderMaterial, summarizeWithModel } from "./summarizer.js";
 import { createStore } from "./state.js";
 import { createMetrics, extractUsage, promptTokensOf, wrapStreamForMetrics } from "./metrics.js";
+import { mergeUsageTurn, recordCostTurn } from "../cost-profile.js";
 import { forkLinkOf, loadForkLinks, recordForkLink, resolveInheritance, INHERIT_WINDOW_MS } from "./fork.js";
 import { createSurfaceFoldPass } from "./surface.js";
 import { childSessionIdOf } from "../subagent-model.js";
@@ -1886,9 +1887,11 @@ export function applyContextTrim(ctx, config) {
 			if (!enabledNow()) return result;
 			wrappedSession = sessionIdOf(options);
 			if (wrappedSession === null) return result;
+			let turnUsage = null; // P2 ① cost profile: per-turn usage accumulator (null-safe merge below)
 			return wrapStreamForMetrics(result, (chunk) => {
 				const usage = extractUsage(chunk);
 				if (usage !== null) {
+					turnUsage = mergeUsageTurn(turnUsage, usage);
 					metrics.recordUsage(wrappedSession, usage);
 					if (mainDispatch) noteTrimWireTokens(wrappedSession, usage);
 					// Second proj sample point ([2026-11-15]-[proj sampling gaps]):
@@ -1903,6 +1906,22 @@ export function applyContextTrim(ctx, config) {
 					} catch {
 						/* observability must never break the stream */
 					}
+				}
+			}, () => {
+				// Guide §5 P2 ① cost attribution profile: one fold per stream at the
+				// end edge (multi-chunk usage merged above; route = this dispatch's
+				// own options). The master-switch gate lives inside recordCostTurn —
+				// OFF means zero reads and zero writes; all errors fail open.
+				if (turnUsage !== null) {
+					recordCostTurn(
+						wrappedSession,
+						{
+							route: { provider: options.provider ?? null, model: options.model ?? null },
+							usage: turnUsage,
+							at: Date.now(),
+						},
+						config,
+					);
 				}
 			});
 		} catch (error) {

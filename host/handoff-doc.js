@@ -19,7 +19,10 @@
  * Pure text builders: no fs, no clock, no host access — snapshot-testable.
  * With `split` off, every builder returns byte-identical legacy text (the
  * pre-split template verbatim), so the default-off switch carries zero
- * behavior change.
+ * behavior change. With `split` on and an empty profileLines array, the
+ * split template is likewise byte-identical — only the P2 ① cost-attribution
+ * block (host/cost-profile.js, gated by its own config switch) adds bytes,
+ * spliced under the cost-profile bullet.
  */
 
 /** Legacy (pre-split) "Task state" section, verbatim. */
@@ -56,15 +59,30 @@ const SPLIT_TASK_LINES = [
 ];
 
 /** Task-state section lines for one handover document.
- *  split=false → legacy bytes verbatim (zero diff). */
-export function taskStateLines(split) {
-	return (split ? SPLIT_TASK_LINES : LEGACY_TASK_STATE_LINES).slice();
+ *  split=false → legacy bytes verbatim (zero diff). profileLines (optional,
+ *  guide §5 P2 ① measured cost-attribution block from host/cost-profile.js)
+ *  is spliced under the handoff_full cost-profile bullet; empty/absent →
+ *  byte-identical to the pre-P2 split template. */
+export function taskStateLines(split, profileLines = []) {
+	const lines = (split ? SPLIT_TASK_LINES : LEGACY_TASK_STATE_LINES).slice();
+	if (!split || !Array.isArray(profileLines) || profileLines.length === 0) return lines;
+	const anchor = lines.findIndex((line) => line.startsWith("- cost profile"));
+	if (anchor < 0) return lines; // template drift → fail open, never restructure
+	lines.splice(anchor + 1, 0, ...profileLines);
+	return lines;
 }
 
 /** Final fill-in sentence of the continuation prompt.
- *  split=false → legacy sentence verbatim (zero diff). */
-export function handoverFillInstruction(split) {
-	return split
-		? `Using the compaction summary now in your context, fill in the handover document's handoff_min sections (goal, current status, next steps, key files & commands, background subagent ids + report paths) before continuing; its handoff_full sections (cost profile, decision history, open questions) are optional — append them only if readily available, skipping never blocks. Then continue the unfinished task — do not wait for further instructions.`
-		: `Using the compaction summary now in your context, fill in the handover document (goal, completed, in progress, next steps, files), then continue the unfinished task — do not wait for further instructions.`;
+ *  split=false → legacy sentence verbatim (zero diff). The ON branch adds the
+ *  guide §5 P2 ① resume-first-turn hint only when the measured cost profile
+ *  is actually enabled (costProfileOn) — without it the sentence stays
+ *  pre-P2 verbatim, never instructing about a block that will not exist. */
+export function handoverFillInstruction(split, costProfileOn = false) {
+	if (!split) {
+		return `Using the compaction summary now in your context, fill in the handover document (goal, completed, in progress, next steps, files), then continue the unfinished task — do not wait for further instructions.`;
+	}
+	const measured = costProfileOn
+		? ` The cost profile line may already carry dsh-switchman's measured session totals — treat them as given, do not re-derive them.`
+		: ``;
+	return `Using the compaction summary now in your context, fill in the handover document's handoff_min sections (goal, current status, next steps, key files & commands, background subagent ids + report paths) before continuing; its handoff_full sections (cost profile, decision history, open questions) are optional — append them only if readily available, skipping never blocks.${measured} Then continue the unfinished task — do not wait for further instructions.`;
 }

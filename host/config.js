@@ -161,6 +161,22 @@ export const Config = z.object({
 	 *  no routes registration): edited via the DSH native settings UI;
 	 *  settings.update merges, so client-page saves never reset it. */
 	wmHandoffSplit: z.boolean().default(false).volatile(),
+	/** Guide §5 P2 ① cost attribution profile: when ON (and wmHandoffSplit is
+	 *  ON), the handover document's handoff_full cost-profile bullet is
+	 *  pre-filled with a measured per-session aggregate folded from the usage
+	 *  samples the context-trim metrics seam already records (turns, prompt
+	 *  with cache-hit share, output, top pool/model shares of prompt,
+	 *  cache-miss spikes; ≤12 lines / ≤600 bytes, top contributors only).
+	 *  Dimensions NOT derivable at that seam (per-tool-output tokens,
+	 *  per-turn skill loads) are neither estimated nor injected — the block
+	 *  says so in one line instead. OFF (default) → handoff_full bytes
+	 *  identical to the pre-P2 template. Needs trimEnabled (the samples come
+	 *  from its stream seam — trim off = no samples = an empty block) and
+	 *  fails open: aggregation errors never block the handover document.
+	 *  Config-only (no client-page row, no routes registration), same as
+	 *  wmHandoffSplit: edited via the DSH native settings UI;
+	 *  settings.update merges, so client-page saves never reset it. */
+	costProfileEnabled: z.boolean().default(false).volatile(),
 	/** Cap subagent contexts at wmSubagentForceTokens. */
 	wmSubagentCap: z.boolean().default(true).volatile(),
 	/** Subagent hard cap; 0 = share wmForceTokens. */

@@ -54,6 +54,7 @@ import { dirname, join } from "node:path";
 import { clearHandover, handoverOf, recordHandover } from "./handover-state.js";
 import { enumerateLiveSubagents, sessionRecordPath, sessionRecordsDir } from "./subagents.js";
 import { handoverFillInstruction, taskStateLines } from "./handoff-doc.js";
+import { costProfileSection } from "./cost-profile.js";
 import { recentTrimModelOf, recentTrimPromptTokensOf } from "./context-trim/index.js";
 import { DEFAULT_AMORTIZATION, estimateCacheWindow, evaluateDynamicWatermark, maxTier } from "./watermark-estimate.js";
 /** Tools whose result text is accounted against the per-turn read budget. */
@@ -703,7 +704,10 @@ function applyContextWatch(ctx, config) {
 					// §4.6 handoff split: OFF → legacy "Task state" bytes verbatim
 					// (zero diff); ON → handoff_min (required, sync) + handoff_full
 					// (optional, skip-without-blocking) content spec.
-					...taskStateLines(handoffSplitOn()),
+					// §4.6 handoff split + §5 P2 ① cost attribution profile: OFF (either
+					// switch) → legacy/split bytes verbatim; ON → the measured profile
+					// block is spliced under the handoff_full cost-profile bullet.
+					...taskStateLines(handoffSplitOn(), costProfileSection(sessionId, config)),
 				].join("\n"),
 				"utf8",
 			);
@@ -814,7 +818,7 @@ function applyContextWatch(ctx, config) {
 			appearedSentence,
 			// §4.6: ON names the required handoff_min fields explicitly and marks
 			// handoff_full optional; OFF → the legacy sentence verbatim.
-			handoverFillInstruction(handoffSplitOn()),
+			handoverFillInstruction(handoffSplitOn(), config?.costProfileEnabled === true),
 		].join(" ");
 		try {
 			agent.followup({
