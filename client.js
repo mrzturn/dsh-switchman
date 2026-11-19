@@ -417,6 +417,8 @@ window.__ModuleLoader__.load({
 			'poolFeedbackEnabled',
 			// Dispatch-result observability (guide §4.5, P2 pack B0).
 			'dispatchStatsEnabled',
+			// Per-lane differentiation advice (guide §5 P2 ②).
+			'poolDifferentiationEnabled',
 		];
 
 		/** Stable identity of one provider/model route. */
@@ -626,6 +628,7 @@ window.__ModuleLoader__.load({
 				skillRegistryDir: string('skillRegistryDir'),
 				poolFeedbackEnabled: bool('poolFeedbackEnabled', false),
 				dispatchStatsEnabled: bool('dispatchStatsEnabled', false),
+				poolDifferentiationEnabled: bool('poolDifferentiationEnabled', false),
 			};
 		}
 
@@ -714,6 +717,7 @@ window.__ModuleLoader__.load({
 				skillRegistryDir: values.skillRegistryDir,
 				poolFeedbackEnabled: values.poolFeedbackEnabled,
 				dispatchStatsEnabled: values.dispatchStatsEnabled,
+				poolDifferentiationEnabled: values.poolDifferentiationEnabled,
 			});
 		}
 
@@ -1000,6 +1004,9 @@ window.__ModuleLoader__.load({
 				dispatchStatsEnabledLabel: '派发结果观测',
 				dispatchStatsEnabledHelp:
 					'开启后在宿主侧按 pool×model×skill 记录每次子智能体派发的结果（成功/失败、时延、返工重复信号），供池统计与后续差异化派发消费；数据只进宿主日志与查询接口，不注入任何模型提示面。关闭 = 零监听零写入。',
+				poolDifferentiationEnabledLabel: '分池差异化建议',
+				poolDifferentiationEnabledHelp:
+					'开启后在池表旁注入 [SWITCHMAN:POOLS-DIFF] 差异化建议行：按派发统计给出各泳道的思考强度方向（raise / steady）与切换置信度（low / high，仅方向标签，无具体数字）；样本不足的泳道不注入（沿用全局默认）。仅为建议层，不改动静态档位与水位参数；数据依赖派发结果观测。关闭 = 零注入且零计算。',
 				wmDynamicTurnsExpectedLabel: '期望轮数',
 				wmDynamicTurnsExpectedHelp: '预计多少轮达到水位线，用于动态提前量。',
 				wmDynamicLookbackLabel: '回看样本',
@@ -1317,6 +1324,9 @@ window.__ModuleLoader__.load({
 				dispatchStatsEnabledLabel: 'Dispatch-result observability',
 				dispatchStatsEnabledHelp:
 					'When on, the host records every settled subagent dispatch by pool×model×skill (success/failure, latency, rework repeats) for pool statistics and later differentiated dispatch; counts reach only the host logger and query APIs — never a model-injection surface. Off = zero listeners, zero writes.',
+				poolDifferentiationEnabledLabel: 'Per-lane differentiation advice',
+				poolDifferentiationEnabledHelp:
+					'When on, a [SWITCHMAN:POOLS-DIFF] block may render beside the pools table: per-lane effort direction (raise / steady) and switch-confidence (low / high) labels derived from the dispatch telemetry (direction labels only, no numbers); lanes below the sample floor are omitted (= global defaults). Advice only — static effort pins and watermark parameters stay untouched; data requires dispatch observability. Off = zero bytes AND zero computation.',
 				wmDynamicTurnsExpectedLabel: 'Expected turns',
 				wmDynamicTurnsExpectedHelp: 'Turns expected to reach the watermark; drives the dynamic lead-in.',
 				wmDynamicLookbackLabel: 'Lookback samples',
@@ -5975,6 +5985,7 @@ window.__ModuleLoader__.load({
 				skillRegistryDir: values.skillRegistryDir,
 				poolFeedbackEnabled: values.poolFeedbackEnabled,
 				dispatchStatsEnabled: values.dispatchStatsEnabled,
+				poolDifferentiationEnabled: values.poolDifferentiationEnabled,
 			};
 			if (sameValues(current, desired)) {
 				// Whitespace-only differences: nothing to write, close the draft.
@@ -7424,6 +7435,23 @@ window.__ModuleLoader__.load({
 								checked: values.dispatchStatsEnabled,
 								onChange: () => {
 									edit('dispatchStatsEnabled', !values.dispatchStatsEnabled);
+								},
+								disabled: !editable,
+								style: STYLE.checkbox,
+							}),
+							lines: [],
+						}),
+						h(SettingsRow, {
+							key: 'poolDifferentiationEnabled',
+							id: `${constraintsId}-pool-diff`,
+							label: t('poolDifferentiationEnabledLabel'),
+							help: t('poolDifferentiationEnabledHelp'),
+							control: h('input', {
+								type: 'checkbox',
+								id: `${constraintsId}-pool-diff`,
+								checked: values.poolDifferentiationEnabled,
+								onChange: () => {
+									edit('poolDifferentiationEnabled', !values.poolDifferentiationEnabled);
 								},
 								disabled: !editable,
 								style: STYLE.checkbox,

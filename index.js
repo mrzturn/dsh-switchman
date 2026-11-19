@@ -101,6 +101,10 @@ import { applyPoolFeedback } from "./host/pool-feedback.js";
 // pool×model×skill counters for the host logger + getters; OFF (default)
 // captures nothing. No injection surface (MODEL-VISIBILITY).
 import { applyDispatchStats } from "./host/dispatch-stats.js";
+// Per-lane differentiation advice (guide §5 P2 ②, "分池/分 skill 的切换置信度
+// 与思考强度差异化"): advisory [SWITCHMAN:POOLS-DIFF] rows from the pack-B0
+// telemetry; OFF (default) = zero bytes AND zero computation.
+import { applyPoolDifferentiation } from "./host/pool-differentiation.js";
 // Open skill registry + skill-load observability (guide §5.2.1/§5.2.2):
 // workspace `<cwd>/.dsh-switchman/skills/` scanning (source "local"),
 // name-conflict merging, and the bounded skill_loaded stats.
@@ -256,6 +260,8 @@ function apply(ctx, config) {
 	// Dispatch telemetry listeners (host-only data layer; gated OFF by
 	// default, zero capture while disabled).
 	applyDispatchStats(ctx, config);
+	// §5 P2 ② differentiation advice (order 10407; advice-only, off by default).
+	applyPoolDifferentiation(ctx, config);
 	applyVision(ctx, config);
 	applyIntent(ctx, config);
 	applySubagentModel(ctx);

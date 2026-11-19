@@ -318,6 +318,19 @@ export const Config = z.object({
 	 *  listeners early-return before any capture: zero reads, zero writes,
 	 *  zero pending state. */
 	dispatchStatsEnabled: z.boolean().default(false).volatile(),
+	/** Master switch for the per-lane differentiation advice (guide §5 P2 ②,
+	 *  "分池/分 skill 的切换置信度与思考强度差异化", mechanisms §4.3 + §4.5).
+	 *  ON = one [SWITCHMAN:POOLS-DIFF] section (order 10407) may render
+	 *  beside the pools table: per-lane effort direction (`raise` / `steady`)
+	 *  and switch-confidence (`low` / `high`) labels derived from the pack-B0
+	 *  dispatch telemetry (host/dispatch-stats.js). ADVICE ONLY — the static
+	 *  effort pins and the numeric amortization path stay untouched; lanes
+	 *  below the sample floor are omitted (= global defaults). MODEL-VISIBILITY:
+	 *  no counts/rates/latencies in the block. The DATA requires
+	 *  dispatchStatsEnabled (capture is gated behind it), so an on/off mismatch
+	 *  simply renders "". OFF (default) = zero bytes AND zero computation —
+	 *  the master switch is checked before any stats read. */
+	poolDifferentiationEnabled: z.boolean().default(false).volatile(),
 	// --- Context trim: fully-automatic conversation compression ------------
 	/** Master switch for the context-trim layer (design:
 	 *  .dsh-switchman/analysis/context-trim-port-design.md). OFF disables

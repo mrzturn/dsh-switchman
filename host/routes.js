@@ -165,6 +165,9 @@ const BOOLEAN_FIELDS = [
 	"poolFeedbackEnabled",
 	// Dispatch-result observability (mirrors host/config.js dispatchStatsEnabled).
 	"dispatchStatsEnabled",
+	// Per-lane differentiation advice (mirrors host/config.js
+	// poolDifferentiationEnabled).
+	"poolDifferentiationEnabled",
 	// Context trim switches (mirrors the trim group in host/config.js).
 	"trimEnabled",
 	"trimLadderEnabled",

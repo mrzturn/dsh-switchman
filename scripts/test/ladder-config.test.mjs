@@ -90,6 +90,7 @@ function fullValues(overrides = {}) {
 		constraintsEnabled: false,
 		poolFeedbackEnabled: false,
 		dispatchStatsEnabled: false,
+		poolDifferentiationEnabled: false,
 		trimEnabled: true,
 		trimLadderEnabled: true,
 		trimProtectTaskIntent: true,
@@ -113,6 +114,7 @@ test("coerceValues round-trips every trim field the client page sends", () => {
 	// alone would not catch a field dropped from fullValues).
 	assert.equal(coerced.wmCacheAdaptive, false);
 	assert.equal(coerced.dispatchStatsEnabled, false);
+	assert.equal(coerced.poolDifferentiationEnabled, false);
 	const coercedReliefOff = coerceValues({ ...fullValues(), trimCriticalRelief: false });
 	assert.notEqual(coercedReliefOff, null, "explicit false must coerce");
 	assert.equal(coercedReliefOff.trimCriticalRelief, false);
