@@ -174,14 +174,21 @@ export const Config = z.object({
 	wmDynamicOutPerM: z.number().min(0.1).max(10000).default(4).volatile(),
 	wmDynamicAmortization: z.number().min(1).max(100).default(1.75).volatile(),
 	// --- Teams mode: doctrine injection + whitelist sync -------------------
-	/** Agent Teams master switch. ON = inject the `[SWITCHMAN:TEAMS]` doctrine
-	 *  section (order 10250), keep the DSH child-model whitelist detection in
-	 *  the pools table, and asynchronously ensure the agent-team-profile
-	 *  bundle is enabled. OFF = plain subagent dispatch mode: no teams
-	 *  doctrine, no whitelist detection (the DSH factory conservative team
-	 *  policy takes over); the bundle is never disabled and the whitelist is
-	 *  never cleared. */
-	teamsMode: z.boolean().default(true).volatile(),
+	/** Agent Teams master switch (refactor guide §4.4: P0 tightened the
+	 *  default from ON to OFF — teams are the exception path, not the
+	 *  default upgrade). ON = inject the delegation doctrine (the `## 一`
+	 *  delegate-by-default block extracted from the persona suffix, order
+	 *  10250) plus the `[SWITCHMAN:TEAMS]` section, keep the DSH child-model
+	 *  whitelist detection in the pools table, and asynchronously ensure the
+	 *  agent-team-profile bundle is enabled. With the constraint layer ON the
+	 *  teams-suggestion clause is conditional (a ≥2 structural-tag hit
+	 *  suggests teams; a miss keeps stateless subagents + on-demand skills as
+	 *  the default path); with the constraint layer OFF it falls back to the
+	 *  original delegate-by-default text. OFF = plain subagent dispatch
+	 *  mode: no delegation or teams doctrine at all, no whitelist detection
+	 *  (the DSH factory conservative team policy takes over); the bundle is
+	 *  never disabled and the whitelist is never cleared. */
+	teamsMode: z.boolean().default(false).volatile(),
 	/** Replace-sync the dispatch model union (the six pools plus modelRank)
 	 *  into DSH's subagent model-selection whitelist
 	 *  (`subagent-model-selection-settings`) whenever the teams
