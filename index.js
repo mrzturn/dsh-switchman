@@ -1,11 +1,14 @@
 /** Host half of the dsh-switchman bundle.
  *
- * Mounts the bundle's bundled skills: every `skills/<name>/SKILL.md` under
- * this package is registered on `ctx.skills` through one static provider,
- * following the shipped `@deepseek-ai/dsh-skill-badge` / `dsh-skill-office`
- * pattern (source "bundled", rank BUNDLED_SKILL_RANK, directory resource
- * base so the skill tool tells the Agent where `scripts/` and `references/`
- * live). The preset overrides live in cordis.patch.yml; the Client half in
+ * Mounts the bundle's skills on `ctx.skills` through one static provider:
+ * every bundled `skills/<name>/SKILL.md` (source "bundled", rank
+ * BUNDLED_SKILL_RANK, directory resource base so the skill tool tells the
+ * Agent where `scripts/` and `references/` live) plus — while the constraint
+ * layer is ON — the open workspace registry scanned per session cwd by
+ * host/skill-registry.js (refactor guide §5.2.2; source "local", same rank,
+ * bundled names win conflicts). Every provider get() records a bounded
+ * skill_loaded stat (§5.2.1) feeding the P1 pool-feedback loop. The preset
+ * overrides live in cordis.patch.yml; the Client half in
  * client.js renders the "team autonomy" badge beside the preset chip.
  *
  * Phase 1 additionally mounts the language-preference layer (host/lang.js):
@@ -90,6 +93,16 @@ import { applyContextWatch } from "./host/context-watch.js";
 // per-turn advisory tag line near the pools table + annotated-skills table;
 // advice only, off by default (constraintsEnabled).
 import { applyConstraints, annotateSkillCandidates } from "./host/constraints.js";
+// Open skill registry + skill-load observability (guide §5.2.1/§5.2.2):
+// workspace `<cwd>/.dsh-switchman/skills/` scanning (source "local"),
+// name-conflict merging, and the bounded skill_loaded stats.
+import {
+	BUNDLED_SKILL_RANK,
+	PROVIDER_NAME,
+	candidatesWithRegistry,
+	parseSkillFile,
+	recordSkillLoad,
+} from "./host/skill-registry.js";
 // Context-trim layer (deterministic outbound-view folding + idle-boundary
 // automatic folds + ctx_trim_fold/ctx_trim_status advisory tools).
 import { applyContextTrim } from "./host/context-trim/index.js";
@@ -140,37 +153,6 @@ const name = "dsh-switchman";
  * next(), and trimming degrades to a no-op on any internal failure. */
 const inject = ["skills", "systemPrompt", "settings", "tokenMeter", "commands", "tools", "agents", "webServer", "subagents", "sessions", "pluginManager", "sessionQuery"];
 
-/** Must equal `BUNDLED_SKILL_RANK` of @deepseek-ai/dsh-skill (packaged skill
- *  providers and local bundled roots; below user entries, above none). Not
- *  imported because that package is not a dependency of this bundle. */
-const BUNDLED_SKILL_RANK = 600;
-
-/** Provider id reported by every candidate (must match `provider`). */
-const PROVIDER_NAME = "dsh-switchman";
-
-/** Parse the `---` frontmatter subset used by the bundled SKILL.md files:
- *  single-line `key: value` scalars. Unknown keys are ignored, matching the
- *  shipped filesystem provider's tolerance. */
-function parseSkillFile(raw, path) {
-	const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u.exec(raw);
-	if (frontmatter?.[1] === undefined)
-		throw new Error(`${path}: missing YAML frontmatter`);
-	const fields = {};
-	for (const line of frontmatter[1].split(/\r?\n/u)) {
-		const match = /^([A-Za-z][\w-]*):[ \t]*(.*)$/u.exec(line);
-		if (match === null) continue;
-		let value = match[2].trim();
-		if (value.length >= 2 && value.startsWith('"') && value.endsWith('"'))
-			value = value.slice(1, -1);
-		fields[match[1]] = value;
-	}
-	if (typeof fields.name !== "string" || fields.name.length === 0)
-		throw new Error(`${path}: frontmatter requires name`);
-	if (typeof fields.description !== "string" || fields.description.length === 0)
-		throw new Error(`${path}: frontmatter requires description`);
-	return { name: fields.name, description: fields.description, content: raw.slice(frontmatter[0].length).trim() };
-}
-
 /** Build one bundled-skill candidate from a skill directory. */
 function loadSkillCandidate(directory) {
 	const path = join(directory, "SKILL.md");
@@ -219,18 +201,19 @@ function apply(ctx, config) {
 	const root = fileURLToPath(new URL("./skills/", import.meta.url));
 	const warn = (message) => ctx.logger.warn(`dsh-switchman: ${message}`);
 	const candidates = loadSkillCandidates(root, warn);
-	// §4.2 annotation layer: parse each bundled SKILL.md's `constraints`
-	// frontmatter + measure its size once at apply time; only annotated
-	// skills enter the [SWITCHMAN:SKILLS] table (fail-open, may be empty).
-	// Gated by the master switch: the disabled layer must not touch the
-	// filesystem at all (review F1 — full short-circuit, not just render).
-	const annotatedSkills = config?.constraintsEnabled?.get() === true
-		? annotateSkillCandidates(candidates)
-		: candidates;
 	const provider = {
 		name: PROVIDER_NAME,
-		list: () => Promise.resolve(candidates),
+		// §5.2.2 open registry: the host passes the session cwd in the lookup
+		// options; candidatesWithRegistry returns the bundled list untouched
+		// while the constraint layer is OFF (no filesystem scan — review F1)
+		// and merges the workspace registry under it when ON (bundled names
+		// win conflicts, broken entries warn and skip).
+		list: (options) => Promise.resolve(candidatesWithRegistry(candidates, options?.cwd, config, warn)),
 		async get(candidate) {
+			// §5.2.1 observability: the triggering turn is not observable at
+			// the provider layer, so the event records the provider-level fact
+			// only (skill name + bundled/local source). OFF records nothing.
+			recordSkillLoad(candidate, config?.constraintsEnabled?.get() === true, (message) => ctx.logger?.info?.(message));
 			const { rank: _rank, locator, ...summary } = candidate;
 			return { ...summary, content: parseSkillFile(readFileSync(locator, "utf8"), locator).content };
 		},
@@ -243,7 +226,17 @@ function apply(ctx, config) {
 	applyPtcBindings(ctx);
 	applyContextWatch(ctx, config);
 	applyContextTrim(ctx, config);
-	applyConstraints(ctx, config, annotatedSkills);
+	// §4.2 annotation layer: only skills WITH constraints annotations enter
+	// the [SWITCHMAN:SKILLS] table. Passed as a per-assembly closure (plain
+	// arrays stay supported for tests) so locally registered skills —
+	// discovered per session cwd — get the same parse+measure path as the
+	// bundled ones; OFF returns [] without touching the filesystem (review
+	// F1 short-circuit).
+	applyConstraints(ctx, config, (agent) => {
+		if (config?.constraintsEnabled?.get() !== true) return [];
+		const cwd = agent?.session?.header?.cwd;
+		return annotateSkillCandidates(candidatesWithRegistry(candidates, typeof cwd === "string" ? cwd : "", config, warn));
+	});
 	applyVision(ctx, config);
 	applyIntent(ctx, config);
 	applySubagentModel(ctx);

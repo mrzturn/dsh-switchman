@@ -89,6 +89,7 @@ const STRING_FIELDS = [
 	"intentClassifierEffort",
 	"intentClassifierEndpoint",
 	"intentClassifierSystemoneModel",
+	"skillRegistryDir",
 ];
 const POOL_FIELDS = [
 	"poolEconomy",

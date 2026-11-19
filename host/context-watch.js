@@ -53,6 +53,7 @@ import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { clearHandover, handoverOf, recordHandover } from "./handover-state.js";
 import { enumerateLiveSubagents, sessionRecordPath, sessionRecordsDir } from "./subagents.js";
+import { handoverFillInstruction, taskStateLines } from "./handoff-doc.js";
 import { recentTrimModelOf, recentTrimPromptTokensOf } from "./context-trim/index.js";
 import { DEFAULT_AMORTIZATION, evaluateDynamicWatermark, maxTier } from "./watermark-estimate.js";
 /** Tools whose result text is accounted against the per-turn read budget. */
@@ -521,6 +522,14 @@ function applyContextWatch(ctx, config) {
 	};
 	const warn = (message) => ctx.logger?.warn?.(`dsh-switchman: ${message}`);
 
+	// §4.6 handoff split: the plugin-controllable surface of a DSH handover
+	// is the instruction text — the document template written just before
+	// compaction and the continuation fill-in prompt armed after the wake.
+	// OFF (default) → byte-identical legacy text at both sites; ON → the
+	// handoff_min/handoff_full two-level content spec. Reads the live
+	// volatile config each time, so a settings change needs no remount.
+	const handoffSplitOn = () => config?.wmHandoffSplit === true;
+
 	// --- A. watermark: byte-stable head protocol + live tail context --------
 	// KV-cache invariant (see the file header): everything before the
 	// conversation history must stay byte-identical for the whole session,
@@ -660,14 +669,10 @@ function applyContextWatch(ctx, config) {
 					`- backup snapshot: none — the append-only session log holds the full pre-handover history`,
 					``,
 					...liveSection,
-					`## Task state (filled in by the agent right after the handover)`,
-					``,
-					`- goal / objective in flight:`,
-					`- completed so far:`,
-					`- in progress:`,
-					`- next steps:`,
-					`- files touched / key references:`,
-					``,
+					// §4.6 handoff split: OFF → legacy "Task state" bytes verbatim
+					// (zero diff); ON → handoff_min (required, sync) + handoff_full
+					// (optional, skip-without-blocking) content spec.
+					...taskStateLines(handoffSplitOn()),
 				].join("\n"),
 				"utf8",
 			);
@@ -776,7 +781,9 @@ function applyContextWatch(ctx, config) {
 				: `Create the handover document under .dsh-switchman/handover/ in the working directory.`,
 			liveSentence,
 			appearedSentence,
-			"Using the compaction summary now in your context, fill in the handover document (goal, completed, in progress, next steps, files), then continue the unfinished task — do not wait for further instructions.",
+			// §4.6: ON names the required handoff_min fields explicitly and marks
+			// handoff_full optional; OFF → the legacy sentence verbatim.
+			handoverFillInstruction(handoffSplitOn()),
 		].join(" ");
 		try {
 			agent.followup({

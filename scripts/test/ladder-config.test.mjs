@@ -24,6 +24,7 @@ function fullValues(overrides = {}) {
 		intentClassifierEndpoint: "",
 		intentClassifierSystemoneModel: "",
 		trimStateDir: "",
+		skillRegistryDir: "",
 		// pools
 		poolEconomy: [], poolMechanical: [], poolMain: [], poolHard: [], poolVision: [], poolReview: [],
 		modelRank: [],

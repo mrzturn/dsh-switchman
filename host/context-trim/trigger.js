@@ -9,6 +9,11 @@
  *                Forced MECHANICAL T1 fold (no side-model round trip — at
  *                95% the session cannot afford the latency or the failure).
  * - pressure   : view usage >= trimPressurePercent. Side-model T1 fold.
+ * - budget     : absolute mass above thresholds.budgetTarget tokens
+ *                (guide §4.6: min(pool target, current × ratio); null =
+ *                off) AND the growth tier's increment gate met. Catches a
+ *                fold that committed ABOVE the budget while the growth
+ *                gate waits for another full trimGrowthTokens.
  * - growth     : growth since the last fold's post-fold low (the anchor
  *                that keeps the gate armed after folds committing at high
  *                view points) > trimGrowthTokens AND the contiguous
@@ -131,8 +136,7 @@ function bestLadderRun(runs, minBlocks) {
  *   messages,        // captured raw messages (increment measurement)
  *   viewTokens,      // outbound-view token estimate of the current history
  *   windowTokens,    // context window size, or null when unknown
- *   thresholds: { growthTokens, incrementTokens, pressurePercent, emergencyPercent, maxFoldsPerHour,
- *                 ladderT2Tokens, ladderT2MinBlocks, ladderT3Tokens, ladderT3MinBlocks },
+ *   thresholds: { growthTokens, incrementTokens, pressurePercent, emergencyPercent, maxFoldsPerHour, budgetTarget,
  *   now, lastFoldAt, foldsThisHour, lastEmergencyAt,
  *   ledger,          // the session ledger (growth anchor fields)
  *   ladderRuns: { t2: [{ consumes, mass, count }], t3: [...] },  // census runs
@@ -211,9 +215,23 @@ export function evaluateTrigger(input) {
 					return { action: "fold", kind: "raw", tier: "pressure", reason: `usage ${usagePct.toFixed(1)}% >= ${pressurePercent}%`, startIdx, endIdx, incrementTokens, consumes: null };
 				}
 			}
+			// Tier a′ — budget line (guide §4.6): an ABSOLUTE token ceiling
+			// (min(pool target, current × ratio)) passed via
+			// thresholds.budgetTarget — null/absent (fail-open) means no
+			// budget constraint, exactly the pre-feature behavior. Sits
+			// after pressure (which keeps its tier identity) and before
+			// growth: it catches the case a fold committed ABOVE the budget
+			// and the growth gate now waits for another full
+			// trimGrowthTokens of accumulation. Shares the growth tier's
+			// increment gate so a tiny foldable increment can never drive a
+			// budget fold alone (no churn).
+			const incrementGate = Number.isFinite(thresholds.incrementTokens) && thresholds.incrementTokens > 0 ? thresholds.incrementTokens : 25_000;
+			const budgetTarget = Number.isFinite(thresholds.budgetTarget) && thresholds.budgetTarget > 0 ? thresholds.budgetTarget : null;
+			if (budgetTarget !== null && input.viewTokens > budgetTarget && incrementTokens >= incrementGate) {
+				return { action: "fold", kind: "raw", tier: "budget", reason: `mass ~${Math.round(input.viewTokens)} > budget ~${Math.round(budgetTarget)} and increment ~${incrementTokens} >= ${incrementGate}`, startIdx, endIdx, incrementTokens, consumes: null };
+			}
 			// Tier a — growth gate: the primary cache-friendly heuristic.
 			const growthTokens = Number.isFinite(thresholds.growthTokens) && thresholds.growthTokens > 0 ? thresholds.growthTokens : 22_500;
-			const incrementGate = Number.isFinite(thresholds.incrementTokens) && thresholds.incrementTokens > 0 ? thresholds.incrementTokens : 25_000;
 			// Growth anchor: the post-fold low when known (keeps the gate armed
 			// after folds that commit at high view points), else the pre-fold
 			// view for ledgers written before lastFoldLowTokens existed.

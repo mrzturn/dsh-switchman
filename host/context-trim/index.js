@@ -35,6 +35,7 @@ import { appendFileSync, mkdirSync, realpathSync, renameSync, statSync } from "n
 import { join, resolve } from "node:path";
 import { buildView, estimateTokensOf, injectView, isFoldSummaryMessage, ledgerIsStale, messageTokens, rangeIsSegmentAligned, refOf, refPositions } from "./view.js";
 import { computeFoldableRange, evaluateTrigger, EMERGENCY_COOLDOWN_MS } from "./trigger.js";
+import { COMPRESS_BUDGET_RATIO_DEFAULT, budgetNudgePercent, compressBudgetTargetTokens } from "./budget.js";
 import { LADDER_SYSTEM_PROMPT, mechanicalSummary, renderLadderMaterial, renderMaterial, summarizeWithModel } from "./summarizer.js";
 import { createStore } from "./state.js";
 import { createMetrics, extractUsage, promptTokensOf, wrapStreamForMetrics } from "./metrics.js";
@@ -406,10 +407,10 @@ function advisoryRepeatLines(config) {
  * fold (trimCriticalRelief, cooldown-gated). At threshold, the live-number
  * instruction is appended to the session surface tail, not injected into
  * the registered system section. */
-export function advisoryNudgeText(pressurePercent, critical, foldLine = ADVISORY_NUDGE_PERCENT, criticalLine = ADVISORY_NUDGE_CRITICAL_PERCENT, target = null, nth = 0) {
+export function advisoryNudgeText(pressurePercent, critical, foldLine = ADVISORY_NUDGE_PERCENT, criticalLine = ADVISORY_NUDGE_CRITICAL_PERCENT, target = null, nth = 0, budgetPercent = ADVISORY_NUDGE_PERCENT) {
 	const action = critical
-		? `Pressure is CRITICAL (${pressurePercent}% ≥ ${criticalLine}%): fold down to under ~50% of the context IN THIS TURN.`
-		: `At ${pressurePercent}% (fold line ${foldLine}%): ${foldLine}–${foldLine + 9}% → fold roughly half of the older history now; ≥${foldLine + 10}% → fold down to under ~50%.`;
+		? `Pressure is CRITICAL (${pressurePercent}% ≥ ${criticalLine}%): fold down to under ~${budgetPercent}% of the context IN THIS TURN.`
+		: `At ${pressurePercent}% (fold line ${foldLine}%): ${foldLine}–${foldLine + 9}% → fold roughly half of the older history now; ≥${foldLine + 10}% → fold down to under ~${budgetPercent}%.`;
 	if (nth >= 2) {
 		const targetLine = target !== null ? ` Recommended: ${target}` : " Get ranges with ctx_trim_status."; // eslint-disable-line no-template-curly-in-string
 		return [
@@ -787,6 +788,7 @@ export function applyContextTrim(ctx, config) {
 			Math.round(pressurePercent), critical, nudgeLines.line, nudgeLines.critical,
 			targetText,
 			nextRepeats - 1,
+			budgetPercentNow(),
 		);
 		const appended = surfacePass.nudgeAppend(sessionId, nudge);
 		if (appended.error !== null || !Number.isFinite(appended.seq)) {
@@ -1003,6 +1005,13 @@ export function applyContextTrim(ctx, config) {
 		protectTaskIntent: readBool(config, "trimProtectTaskIntent", true),
 	});
 	const ladderEnabledNow = () => readBool(config, "trimLadderEnabled", true);
+	// Advisory fold-down depth (guide §4.6): when the budget switch is on,
+	// the nudge's "under ~50%" percent derives from compressBudgetRatio
+	// (0.5 default = byte-identical text); off or unusable ratio = 50.
+	const budgetPercentNow = () =>
+		readBool(config, "trimBudgetEnabled", false)
+			? budgetNudgePercent(readNumber(config, "compressBudgetRatio", COMPRESS_BUDGET_RATIO_DEFAULT), ADVISORY_NUDGE_PERCENT)
+			: ADVISORY_NUDGE_PERCENT;
 	/** CJK-aware summary-mass estimator for the ladder census (same units
 	 * the view estimate speaks, applied to summary text). */
 	const summaryTokensOf = (text) => messageTokens({ role: "user", content: [{ type: "text", text: typeof text === "string" ? text : "" }] });
@@ -1507,12 +1516,19 @@ export function applyContextTrim(ctx, config) {
 			// stayed silent. Unknown tally → exactly today's behavior.
 			const wireTokens = wireTokensOf(sessionId);
 			const pressureTokens = wireTokens !== null ? Math.max(capture.viewTokens, wireTokens) : capture.viewTokens;
+			// Budget line (guide §4.6): min(pool target, current × ratio) as
+			// an extra trigger ceiling (trigger.js "budget" tier). Off, or
+			// any unusable input → null = no budget constraint — fail-open,
+			// exactly today's behavior.
+			const budgetTarget = readBool(config, "trimBudgetEnabled", false)
+				? compressBudgetTargetTokens({ currentTokens: pressureTokens, ratio: readNumber(config, "compressBudgetRatio", COMPRESS_BUDGET_RATIO_DEFAULT) })
+				: null;
 			decision = evaluateTrigger({
 				foldable,
 				messages: capture.messages,
 				viewTokens: pressureTokens,
 				windowTokens,
-				thresholds,
+				thresholds: { ...thresholds, budgetTarget },
 				now: Date.now(),
 				lastFoldAt: ledger.lastFoldAt,
 				foldsThisHour: ledger.foldsThisHour,

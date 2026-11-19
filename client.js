@@ -412,6 +412,7 @@ window.__ModuleLoader__.load({
 			'intentFallbackRoute',
 			// Constraint recognition (guide §4.1/§4.2).
 			'constraintsEnabled',
+			'skillRegistryDir',
 		];
 
 		/** Stable identity of one provider/model route. */
@@ -617,6 +618,7 @@ window.__ModuleLoader__.load({
 					({ provider: '', model: '' }),
 				// Constraint recognition (guide §4.1/§4.2).
 				constraintsEnabled: bool('constraintsEnabled', false),
+				skillRegistryDir: string('skillRegistryDir'),
 			};
 		}
 
@@ -701,6 +703,7 @@ window.__ModuleLoader__.load({
 				),
 				intentFallbackRoute: `${routeKey(values.intentFallbackRoute)}\0${values.intentFallbackRoute.effort ?? ''}`,
 				constraintsEnabled: values.constraintsEnabled,
+				skillRegistryDir: values.skillRegistryDir,
 			});
 		}
 
@@ -975,6 +978,9 @@ window.__ModuleLoader__.load({
 				constraintsEnabledLabel: '启用约束注入',
 				constraintsEnabledHelp:
 					'开启后按当前轮次注入 [SWITCHMAN:CONSTRAINTS] 标签行与带注解技能表；关闭时所有注入点渲染为空（零字节，无 diff）。',
+				skillRegistryDirLabel: '技能注册目录',
+				skillRegistryDirHelp:
+					'开放技能注册（§5.2.2）：此目录下每个子目录一个本地技能（SKILL.md）；相对路径基于会话工作目录，留空 = <cwd>/.dsh-switchman/skills/。',
 				wmDynamicTurnsExpectedLabel: '期望轮数',
 				wmDynamicTurnsExpectedHelp: '预计多少轮达到水位线，用于动态提前量。',
 				wmDynamicLookbackLabel: '回看样本',
@@ -1280,6 +1286,9 @@ window.__ModuleLoader__.load({
 				constraintsEnabledLabel: 'Enable constraint injection',
 				constraintsEnabledHelp:
 					'When on, a per-turn [SWITCHMAN:CONSTRAINTS] tag line and the annotated-skills table may be injected; off = every injection point renders empty (zero bytes, no diff).',
+				skillRegistryDirLabel: 'Skill registry directory',
+				skillRegistryDirHelp:
+					'Open skill registry (§5.2.2): one subdirectory per local skill (SKILL.md) under this path; relative paths resolve against the session working directory, empty = <cwd>/.dsh-switchman/skills/.',
 				wmDynamicTurnsExpectedLabel: 'Expected turns',
 				wmDynamicTurnsExpectedHelp: 'Turns expected to reach the watermark; drives the dynamic lead-in.',
 				wmDynamicLookbackLabel: 'Lookback samples',
@@ -5934,6 +5943,7 @@ window.__ModuleLoader__.load({
 					...(values.intentFallbackRoute.effort ? { effort: values.intentFallbackRoute.effort } : {}),
 				},
 				constraintsEnabled: values.constraintsEnabled,
+				skillRegistryDir: values.skillRegistryDir,
 			};
 			if (sameValues(current, desired)) {
 				// Whitespace-only differences: nothing to write, close the draft.
@@ -7336,6 +7346,22 @@ window.__ModuleLoader__.load({
 								},
 								disabled: !editable,
 								style: STYLE.checkbox,
+							}),
+							lines: [],
+						}),
+						h(SettingsRow, {
+							key: 'skillRegistryDir',
+							id: `${constraintsId}-registry-dir`,
+							label: t('skillRegistryDirLabel'),
+							help: t('skillRegistryDirHelp'),
+							control: h('input', {
+								type: 'text',
+								value: values.skillRegistryDir,
+								placeholder: '.dsh-switchman/skills',
+								onChange: (event) => edit('skillRegistryDir', event.target.value),
+								disabled: !editable,
+								'aria-label': t('skillRegistryDirLabel'),
+								style: STYLE.control,
 							}),
 							lines: [],
 						}),

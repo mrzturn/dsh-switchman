@@ -152,6 +152,15 @@ export const Config = z.object({
 	wmDenyMode: z.union(["cap", "deny"]).default("cap").volatile(),
 	/** Force tier triggers the handover (document + compaction) automatically. */
 	wmAutoHandover: z.boolean().default(true).volatile(),
+	/** Guide §4.6 handoff split: split the handover document's content spec
+	 *  into handoff_min (required, sync: goal, status, next steps, key
+	 *  files/commands, live subagent ids + report paths) and handoff_full
+	 *  (optional append: cost profile, decision history, open questions;
+	 *  writing none of it never blocks). OFF → the legacy document and
+	 *  continuation text byte-identical. Config-only (no client-page row,
+	 *  no routes registration): edited via the DSH native settings UI;
+	 *  settings.update merges, so client-page saves never reset it. */
+	wmHandoffSplit: z.boolean().default(false).volatile(),
 	/** Cap subagent contexts at wmSubagentForceTokens. */
 	wmSubagentCap: z.boolean().default(true).volatile(),
 	/** Subagent hard cap; 0 = share wmForceTokens. */
@@ -276,6 +285,11 @@ export const Config = z.object({
 	 *  advisory capability; splitting adds settings surface with no
 	 *  user-visible benefit until P1 dispatch gating exists. */
 	constraintsEnabled: z.boolean().default(false).volatile(),
+	/** Open skill registry directory (guide §5.2.2): per-workspace root
+	 *  scanned for user/team skills (one subdirectory + SKILL.md each).
+	 *  Relative paths resolve against the session working directory;
+	 *  empty = the bundled default `<cwd>/.dsh-switchman/skills/`. */
+	skillRegistryDir: z.string().default("").volatile(),
 	// --- Context trim: fully-automatic conversation compression ------------
 	/** Master switch for the context-trim layer (design:
 	 *  .dsh-switchman/analysis/context-trim-port-design.md). OFF disables
@@ -389,6 +403,21 @@ export const Config = z.object({
 	/** Ladder T3 companion floor: a T3 condensation merges at least this
 	 *  many active T2 blocks. */
 	trimLadderT3MinBlocks: z.number().min(2).max(200).default(2).volatile(),
+	/** Guide §4.6 compress-by-budget: an absolute compress target of
+	 *  min(pool_target, current_context × compressBudgetRatio) becomes an
+	 *  extra fold tier between pressure and growth, and the advisory
+	 *  nudge's fold-down depth derives from the same ratio (0.5 = today's
+	 *  "under ~50%" text). OFF, or any unusable input → no budget
+	 *  constraint (fail-open = exactly the pre-feature behavior).
+	 *  Config-only (see wmHandoffSplit for why there is no client row). */
+	trimBudgetEnabled: z.boolean().default(false).volatile(),
+	/** Fold-down depth ratio for the budget tier and the advisory nudge
+	 *  (guide §4.6: compress target = current × ratio, floored at the
+	 *  pool budget). 0.5 keeps the default ON text byte-identical to the
+	 *  hard-coded "under ~50%". Bounds mirror the ratio family in the
+	 *  wm group (0.1–0.9): below 0.1 the target hugs the post-fold floor
+	 *  and thrashes, above 0.9 it can never relieve pressure. */
+	compressBudgetRatio: z.number().min(0.1).max(0.9).default(0.5).volatile(),
 	/** Explicit ledger state directory (absolute, or relative inside the
 	 *  plugin root). Must stay under <dshHome>/.dsh-switchman/state/trim/
 	 *  (or the OS temp root, for throwaway test state); anything else is

@@ -25,13 +25,17 @@
  * `constraintsEnabled` is true (default false), in which case the section
  * renders "" on every assembly = zero prompt diff vs. the layer not existing.
  *
- * Skill annotation layer (§4.2): bundled skills may declare `constraints: a,
- * b` in their SKILL.md frontmatter; annotated skills are listed in a compact
+ * Skill annotation layer (§4.2): bundled AND registry-registered skills may
+ * declare `constraints: a, b` (plus an optional `pool_hint`) in their
+ * SKILL.md frontmatter; annotated entries are listed in a compact
  * `[SWITCHMAN:SKILLS]` table (name + tags + estimated size) so the dispatch
- * layer can later (P1) match requests to constrained skills WITHOUT reading
- * every skill body. Un-annotated skills are NOT listed — the host's native
- * available-skills catalog already carries them; this table only adds the
- * annotation enrichment (the §4.2 progressive-disclosure pattern).
+ * layer can match requests to constrained skills WITHOUT reading every
+ * skill body. Rows whose name matches the newest human message carry a
+ * `→ load` marker — the model-visible pointer to the progressive-disclosure
+ * next step. Un-annotated skills are NOT listed — the host's native
+ * available-skills catalog already carries them (bundled ones AND the
+ * workspace-registry skills, which join the SAME ctx.skills provider);
+ * this table only adds the annotation enrichment.
  *
  * MODEL-VISIBILITY: the injected line carries no numeric watermark values
  * (same policy as context-watch.js:266) — only tag names, source labels, and
@@ -65,7 +69,8 @@ const SOURCE_PRECEDENCE = Object.freeze(["deterministic", "advisory", "classifie
 
 /** Skill-table row cap: bounds the injected block for pathological skill
  * sets; rows beyond the cap are silently dropped (annotated sets are small
- * by construction — the three bundled skills annotate at most three rows). */
+ * by construction — the bundled skills annotate at most three rows, and a
+ * registry skill only when its author adds constraints frontmatter). */
 const MAX_SKILL_ROWS = 12;
 
 /** Newest-human-message text cap per session: skill_match only needs the
@@ -174,17 +179,29 @@ function deterministicPressureHits(ctx, agent, config) {
 
 /** Word-boundary match of annotated skill names in the newest human message
  * (case-insensitive). False positives are acceptable — the line is advice,
- * and a mentioned skill name is exactly the signal skill_match models. */
-function skillMatchHits(latestUserText, annotatedSkills) {
-	if (typeof latestUserText !== "string" || latestUserText === "") return [];
+ * and a mentioned skill name is exactly the signal skill_match models.
+ * Returns the SET of matched names (lowercased) so the skills table can
+ * mark each hit row; the advisory tag itself stays one `skill_match`
+ * entry — one hit is enough to fire it. */
+function matchedSkillNames(latestUserText, annotatedSkills) {
+	if (typeof latestUserText !== "string" || latestUserText === "") return new Set();
 	const lower = latestUserText.toLowerCase();
+	const matched = new Set();
 	for (const skill of annotatedSkills) {
 		const name = typeof skill?.name === "string" ? skill.name.toLowerCase() : "";
 		if (name !== "" && new RegExp(`(^|[^a-z0-9-])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9-]|$)`).test(lower)) {
-			return [{ tag: "skill_match", source: "deterministic" }];
+			matched.add(name);
 		}
 	}
-	return [];
+	return matched;
+}
+
+/** The skill_match advisory hit: fires when ANY annotated skill name occurs
+ * in the newest human message (word-boundary matched). */
+function skillMatchHits(latestUserText, annotatedSkills) {
+	return matchedSkillNames(latestUserText, annotatedSkills).size > 0
+		? [{ tag: "skill_match", source: "deterministic" }]
+		: [];
 }
 
 // ---------------------------------------------------------------------------
@@ -206,9 +223,14 @@ function renderConstraintsLine(constraints) {
 
 /** The annotated-skills table: one row per annotated skill — name, tags,
  * estimated size in coarse k-tokens (size estimate only; never a watermark
- * value). Returns "" when no skill carries annotations (nothing injected —
- * the host's native available-skills catalog already lists these skills). */
-function renderSkillsTable(annotatedSkills) {
+ * value), plus a `→ load` marker on rows whose name the newest human
+ * message matched (skill_match): the model-visible pointer to the
+ * progressive-disclosure next step (load that SKILL.md body). Membership
+ * is ANNOTATED skills only — bundled and registry skills without
+ * constraints stay out entirely, the host's native available-skills
+ * catalog already lists them (§4.2). Returns "" when no skill carries
+ * annotations (nothing injected). */
+function renderSkillsTable(annotatedSkills, matchedNames) {
 	if (!Array.isArray(annotatedSkills) || annotatedSkills.length === 0) return "";
 	const rows = [];
 	for (const skill of annotatedSkills.slice(0, MAX_SKILL_ROWS)) {
@@ -216,7 +238,9 @@ function renderSkillsTable(annotatedSkills) {
 		const tags = cleanConstraintTags(skill?.tags);
 		if (name === "" || tags.length === 0) continue;
 		const size = typeof skill?.estimatedTokens === "number" && Number.isFinite(skill.estimatedTokens) ? Math.max(0.1, Math.round(skill.estimatedTokens / 100) / 10) : null;
-		rows.push(`- ${name}: ${tags.join(", ")}${size === null ? "" : ` (~${size}k tok)`}`);
+		const pool = typeof skill?.poolHint === "string" && skill.poolHint !== "" ? ` [pool: ${skill.poolHint}]` : "";
+		const load = matchedNames instanceof Set && matchedNames.has(name.toLowerCase()) ? " → load" : "";
+		rows.push(`- ${name}: ${tags.join(", ")}${size === null ? "" : ` (~${size}k tok)`}${pool}${load}`);
 	}
 	if (rows.length === 0) return "";
 	return ["[SWITCHMAN:SKILLS] annotated skills (constraints tags; estimated size):", ...rows].join("\n");
@@ -226,11 +250,33 @@ function renderSkillsTable(annotatedSkills) {
 // Skill annotation frontmatter (§4.2)
 // ---------------------------------------------------------------------------
 
+/** Closed pool_hint vocabulary — the dispatch lane names of the doctrine
+ * table (index.js POOLS section). Unknown hints drop like unknown tags:
+ * the annotation table must not advertise lanes the dispatcher won't use. */
+const POOL_HINT_VOCABULARY = Object.freeze([
+	"economy",
+	"mechanical",
+	"main",
+	"hard",
+	"vision",
+	"review",
+]);
+
+/** Validated pool_hint from raw frontmatter text: vocabulary members only,
+ * absent (undefined) for anything else — pool_hint is OPTIONAL and never
+ * makes an entry annotated on its own. */
+function cleanPoolHint(value) {
+	const hint = typeof value === "string" ? value.trim() : "";
+	return POOL_HINT_VOCABULARY.includes(hint) ? hint : undefined;
+}
+
 /** Parse a SKILL.md's frontmatter for the annotation: the `constraints:` line
- * (comma-separated vocabulary tags) plus an automatic token estimate from
- * the file's byte size (bytes / 3.5 — the codebase's own prose-to-token
- * ratio; measured at scan time, never hand-filled). Unknown tags are
- * dropped; a skill with zero valid tags is not annotated. */
+ * (comma-separated vocabulary tags), the optional `pool_hint:` lane name,
+ * and an automatic token estimate from the file's byte size (bytes / 3.5 —
+ * the codebase's own prose-to-token ratio; measured at scan time, never
+ * hand-filled). Unknown tags are dropped; a skill with zero valid tags is
+ * not annotated at all (guide migration constraint: every new frontmatter
+ * field is optional). */
 function parseSkillAnnotations(rawText) {
 	if (typeof rawText !== "string" || !rawText.startsWith("---")) return null;
 	const end = rawText.indexOf("\n---", 3);
@@ -240,8 +286,9 @@ function parseSkillAnnotations(rawText) {
 	if (match === null) return null;
 	const tags = cleanConstraintTags(match[1]);
 	if (tags.length === 0) return null;
+	const poolHint = cleanPoolHint(head.match(/^pool_hint:[ \t]*(.*)$/m)?.[1]);
 	const bytes = textByteLength(rawText) ?? Buffer.byteLength(rawText, "utf8");
-	return { tags, estimatedTokens: Math.round(bytes / 3.5) };
+	return { tags, poolHint, estimatedTokens: Math.round(bytes / 3.5) };
 }
 
 /** Byte length of a text value (null never happens today, kept defensive so
@@ -255,10 +302,11 @@ function textByteLength(rawText) {
 }
 
 
-/** Annotate the bundled skill candidates ({ name, locator } entries from
- * index.js's scan): read each SKILL.md once, parse annotations, keep only
- * skills with at least one valid tag. Broken/unreadable files are dropped
- * silently (fail-open) — the annotation table is advisory only. */
+/** Annotate skill candidates ({ name, locator } entries — bundled from
+ * index.js's scan, local from the registry, SAME shape): read each
+ * SKILL.md once, parse annotations, keep only skills with at least one
+ * valid tag. Broken/unreadable files are dropped silently (fail-open) —
+ * the annotation table is advisory only. */
 function annotateSkillCandidates(candidates) {
 	const out = [];
 	if (!Array.isArray(candidates)) return out;
@@ -272,7 +320,7 @@ function annotateSkillCandidates(candidates) {
 		}
 		const parsed = parseSkillAnnotations(raw);
 		if (parsed === null) continue;
-		out.push({ name: candidate.name, tags: parsed.tags, estimatedTokens: parsed.estimatedTokens });
+		out.push({ name: candidate.name, tags: parsed.tags, poolHint: parsed.poolHint, estimatedTokens: parsed.estimatedTokens });
 	}
 	return out;
 }
@@ -328,8 +376,11 @@ function classifierConstraintsForTurn(sessionKey) {
 // ---------------------------------------------------------------------------
 
 /** Mount the constraint-recognition layer: human-message tracking, disposal
- * cleanup, and the systemPrompt section. Registration is defensive like
- * every other layer; failures warn and disable the layer, never throw. */
+ * cleanup, and the systemPrompt section. `annotatedSkills` may be an array
+ * or a per-assembly closure (bundled + registry candidates); rows matching
+ * the newest human message carry the `→ load` marker in the skills table.
+ * Registration is defensive like every other layer; failures warn and
+ * disable the layer, never throw. */
 function applyConstraints(ctx, config, annotatedSkills) {
 	const warn = (message) => ctx.logger?.warn?.(`dsh-switchman: ${message}`);
 	try {
@@ -374,16 +425,22 @@ function applyConstraints(ctx, config, annotatedSkills) {
 					// section exists but contributes zero bytes (zero diff).
 					if (config?.constraintsEnabled?.get() !== true) return "";
 					const agent = context?.agent;
+					// Per-assembly closure (index.js) or plain array (tests):
+					// resolve once here so downstream helpers always see an array
+					// (a raw closure passed to the for..of helpers throws and the
+					// fail-open catch would blank the whole layer — review F6).
+					const skills = typeof annotatedSkills === "function" ? annotatedSkills(agent) : annotatedSkills;
 					const sessionKey = sessionIdOf(agent);
 					if (sessionKey === null) return "";
 					const lastUser = lastUserBySession.get(sessionKey) ?? null;
+					const matched = matchedSkillNames(lastUser?.text ?? null, skills);
 					const hits = mergeConstraints(
 						deterministicPressureHits(ctx, agent, config),
 						classifierConstraintsForTurn(sessionKey),
-						skillMatchHits(lastUser?.text ?? null, annotatedSkills),
+						matched.size > 0 ? [{ tag: "skill_match", source: "deterministic" }] : [],
 					);
 					const line = renderConstraintsLine(hits);
-					const table = renderSkillsTable(annotatedSkills);
+					const table = renderSkillsTable(skills, matched);
 					if (line === "" && table === "") return "";
 					logHitsOnce(ctx, sessionKey, turnKeyFor(sessionKey, lastUser), hits);
 					return line === "" ? table : table === "" ? line : `${line}\n\n${table}`;
@@ -439,12 +496,14 @@ function eventIdOf(event) {
 
 export {
 	CONSTRAINT_VOCABULARY,
+	POOL_HINT_VOCABULARY,
 	MAX_SKILL_ROWS,
 	applyConstraints,
 	annotateSkillCandidates,
 	cleanClassifierConstraints,
 	cleanConstraintTags,
 	classifierConstraintsForTurn,
+	matchedSkillNames,
 	mergeConstraints,
 	parseSkillAnnotations,
 	recordClassifierConstraints,

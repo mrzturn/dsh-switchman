@@ -344,13 +344,36 @@ test("applyConstraints: ON renders the exact expected line + table (snapshot)", 
 		rendered,
 		"[SWITCHMAN:CONSTRAINTS] hit: context_pressure, verification_required(classifier), skill_match\n\n" +
 			"[SWITCHMAN:SKILLS] annotated skills (constraints tags; estimated size):\n" +
-			"- db-query: verification_required, permission_boundary (~4.2k tok)",
+			"- db-query: verification_required, permission_boundary (~4.2k tok) → load",
 	);
 	// host-side log carries the source labels once for this turn
 	assert.equal(log.filter((line) => line.includes("constraints hit") && line.includes("deterministic")).length, 1);
 	// re-render is byte-stable and does not double-log the same turn
 	assert.equal(sections[0].text({ agent: AGENT }), rendered);
 	assert.equal(log.filter((line) => line.includes("constraints hit")).length, 1);
+});
+
+test("applyConstraints: per-assembly closure resolves to the same rendered bytes as the array path", () => {
+	const { ctx, sections, listeners } = fakeHost(90_000); // above soft → context_pressure
+	const annotated = [
+		{ name: "db-query", tags: ["permission_boundary", "verification_required"], estimatedTokens: 4200 },
+	];
+	const config = hostConfig(true, 90_000);
+	// Production wiring passes a per-assembly closure (index.js), not the
+	// plain array the other tests use. Before review F6 the raw closure
+	// reached the for..of helpers, threw, and the fail-open catch blanked
+	// the whole layer — this test pins the resolution path.
+	applyConstraints(ctx, config, () => annotated);
+	emit(listeners, "session/event", AGENT, USER_EVENT("u1", "please check db-query records"));
+	recordClassifierConstraints("s-inject", turnKeyFor("s-inject", { id: "u1" }), [
+		{ tag: "verification_required", confidence: 0.8 },
+	]);
+	assert.equal(
+		sections[0].text({ agent: AGENT }),
+		"[SWITCHMAN:CONSTRAINTS] hit: context_pressure, verification_required(classifier), skill_match\n\n" +
+			"[SWITCHMAN:SKILLS] annotated skills (constraints tags; estimated size):\n" +
+			"- db-query: verification_required, permission_boundary (~4.2k tok) → load",
+	);
 });
 
 test("applyConstraints: stale-turn classifier constraints are dropped", () => {
