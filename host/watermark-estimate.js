@@ -18,6 +18,12 @@
  *    (share of gaps ≥ TTL/2). Even so the verdict stays rare by construction
  *    and ONLY ever advances into soft (early read-budget tightening) — it
  *    never replaces the fixed force tier.
+ *
+ *  KNOWN LIMITATION: samples arrive per agent-loop step (each model call),
+ *  not per conversational turn; turnsToThreshold counts steps while
+ *  turnsExpected defaults to turns (3), so the dynamic lead-in
+ *  under-triggers in tool-loop-heavy sessions — conservative direction,
+ *  documented as a known limitation.
  *  The caller combines the result with the fixed ladder via maxTier, so a
  *  dynamic verdict can only ADVANCE the intervention tier — it can never
  *  delay or weaken the fixed soft/hard/force thresholds (guide §4.3: "动态

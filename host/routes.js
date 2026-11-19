@@ -112,6 +112,11 @@ const WM_BOUNDED_NUMBER_FIELDS = [
 	{ field: "wmReadBudgetTokens", min: 200, max: 10000000, def: 3500 },
 	{ field: "wmSubagentForceTokens", min: 0, max: 10000000, def: 0 },
 	{ field: "wmSubagentWindowRatio", min: 0.1, max: 1, def: 0.75 },
+	// Dynamic watermark knobs (guide §4.3) — mirror host/config.js bounds.
+	{ field: "wmDynamicTurnsExpected", min: 1, max: 20, def: 3 },
+	{ field: "wmDynamicLookback", min: 2, max: 50, def: 6 },
+	{ field: "wmDynamicOutPerM", min: 0.1, max: 10000, def: 4 },
+	{ field: "wmDynamicAmortization", min: 1, max: 100, def: 1.75 },
 ];
 /** Trim numbers carry their own schema bounds (host/config.js), so a
  *  negative-only coercion is too loose — these validate against each
@@ -137,6 +142,7 @@ const TRIM_NUMBER_FIELDS = [
 const BOOLEAN_FIELDS = [
 	"wmAutoHandover",
 	"wmSubagentCap",
+	"wmDynamicEnabled",
 	// The following six mirror the pool*Manual switches in host/config.js
 	"poolEconomyManual",
 	"poolMechanicalManual",

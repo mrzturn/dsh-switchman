@@ -54,7 +54,7 @@ import { dirname, join } from "node:path";
 import { clearHandover, handoverOf, recordHandover } from "./handover-state.js";
 import { enumerateLiveSubagents, sessionRecordPath, sessionRecordsDir } from "./subagents.js";
 import { recentTrimModelOf, recentTrimPromptTokensOf } from "./context-trim/index.js";
-
+import { DEFAULT_AMORTIZATION, evaluateDynamicWatermark, maxTier } from "./watermark-estimate.js";
 /** Tools whose result text is accounted against the per-turn read budget. */
 const ACCOUNT_TOOLS = new Set(["read", "glob", "grep", "bash"]);
 
@@ -72,6 +72,20 @@ const IDLE_RESET_MS = 15 * 60 * 1000;
 
 /** Cooldown between automatic force-tier handovers per session. */
 const HANDOVER_COOLDOWN_MS = 10 * 60 * 1000;
+
+// ---- dynamic watermark constants (refactor guide §4.3) --------------------
+/** Sample-buffer capacity margin over the estimator lookback (the estimator
+ *  consumes the last lookback+1 points; the margin absorbs dedupe churn). */
+const SAMPLE_CAPACITY_MARGIN = 8;
+/** Minimum spacing between two recorded samples with an unchanged reading. */
+const SAMPLE_MIN_INTERVAL_MS = 60_000;
+/** Cache prices per million tokens, guide §2.3's own figures (0.02 hit / 1
+ *  miss, the 1:50 ratio): constants, NOT settings — the settings surface
+ *  stays limited to the tunables the guide leaves open. */
+const GUIDE_HIT_PER_M = 0.02;
+const GUIDE_MISS_PER_M = 1;
+/** Blended output price default (per million tokens); wmDynamicOutPerM overrides. */
+const DEFAULT_OUT_PER_M = 4;
 
 // ---- shared volatile-read helpers (mirrors lang.js / dispatch.js) ----------
 
@@ -141,6 +155,81 @@ function readThresholds(config) {
 	};
 }
 
+// ---- dynamic watermark (refactor guide 2026-11-19 §4.3, P0 item 3) --------
+// Growth rate is the primary signal, the incremental stay/switch cost
+// comparison the secondary one; the estimator (host/watermark-estimate.js)
+// is pure and self-guarding. The layer can only ADVANCE the fixed ladder —
+// every helper here fails open to the fixed tier unchanged.
+
+/** Resolved dynamic-watermark config block fed to the estimator (prices per
+ *  million tokens; hit/miss carry the guide's own figures, see above). */
+function readDynamicConfig(config) {
+	return {
+		lookback: readNumber(config.wmDynamicLookback, 6),
+		turnsExpected: readNumber(config.wmDynamicTurnsExpected, 3),
+		amortization: readNumber(config.wmDynamicAmortization, DEFAULT_AMORTIZATION),
+		outPerM: readNumber(config.wmDynamicOutPerM, DEFAULT_OUT_PER_M),
+		hitPerM: GUIDE_HIT_PER_M,
+		missPerM: GUIDE_MISS_PER_M,
+	};
+}
+
+/** Append one (ts, used) reading to a session's rolling sample buffer: a
+ *  reading is recorded when it moved or the last sample aged past
+ *  SAMPLE_MIN_INTERVAL_MS; the result is trimmed to `capacity`. Pure —
+ *  returns a fresh array, never mutates the input. */
+function recordSample(buffer, used, now = Date.now(), capacity = 14) {
+	const last = Array.isArray(buffer) && buffer.length > 0 ? buffer[buffer.length - 1] : undefined;
+	const next = Array.isArray(buffer) ? buffer.slice() : [];
+	if (!Number.isFinite(Number(used)) || Number(used) < 0) return next;
+	if (last !== undefined && last.tokens === used && now - last.t < SAMPLE_MIN_INTERVAL_MS) return next;
+	next.push({ t: now, tokens: used });
+	const cap = Math.max(2, Math.floor(Number(capacity) || 2));
+	return next.length > cap ? next.slice(-cap) : next;
+}
+
+/** Dynamic verdict for one fresh root reading; null when there is nothing to
+ *  act on (estimator silent) or anything failed (fail-open to the fixed tier). */
+function dynamicVerdictOf({ samples, used, th, dynamic }) {
+	if (used === null || !Number.isFinite(used) || !th || !dynamic) return null;
+	try {
+		const verdict = evaluateDynamicWatermark({ samples, used, thresholds: th, dynamic });
+		return verdict && verdict.advance !== "none" ? verdict : null;
+	} catch {
+		return null;
+	}
+}
+
+/** Combine the fixed ladder with a dynamic verdict (guide §4.3: dynamic may
+ *  only advance — never delay or weaken a fixed tier). The directive reason
+ *  is set only when the verdict STRICTLY advanced the fixed tier; ties keep
+ *  the fixed crossing wording. */
+function combineTier(fixedLevel, verdict) {
+	const fixed = typeof fixedLevel === "string" && fixedLevel !== "" ? fixedLevel : "ok";
+	if (!verdict || typeof verdict.advance !== "string") return { level: fixed, reason: null };
+	const level = maxTier(fixed, verdict.advance);
+	const advanced = level !== fixed && level === verdict.advance;
+	return { level, reason: advanced ? verdict.reason ?? null : null };
+}
+
+/** Effective root-session tier for one fresh measurement: records a rolling
+ *  sample first (only while the dynamic layer is active and unpaused), then
+ *  takes max(fixed ladder, dynamic verdict). Every path fails open to the
+ *  fixed tier. `sample=false` for read-only callers (tool gates, auto
+ *  handover) — the runtime-context render is the canonical sampling point. */
+function rootTierOf(state, config, sessionId, used, th, sample = true) {
+	const fixed = levelOf(used, th);
+	try {
+		if (used === null || readBool(config.wmDynamicEnabled, false) !== true || state.paused.has(sessionId)) return { level: fixed, reason: null };
+		if (sample) {
+			const capacity = readNumber(config.wmDynamicLookback, 6) + SAMPLE_CAPACITY_MARGIN;
+			state.samples.set(sessionId, recordSample(state.samples.get(sessionId), used, Date.now(), capacity));
+		}
+		return combineTier(fixed, dynamicVerdictOf({ samples: state.samples.get(sessionId), used, th, dynamic: readDynamicConfig(config) }));
+	} catch {
+		return { level: fixed, reason: null };
+	}
+}
 /** Measure one agent's session now; null when the meter is missing/failing. */
 export function measureNow(ctx, agent) {
 	try {
@@ -207,12 +296,24 @@ const PAUSED_LINE =
  * policy note above). "" while the session sits at the silent ok tier. */
 function renderRootWatermark(level, status) {
 	if (level === "ok") return "";
-	if (level === "soft") return "[SWITCHMAN:WATERMARK] soft tier: prefer delegating lightweight work (subagent/workflow) over reading more context yourself.";
-	if (level === "hard")
+	if (level === "soft") {
+		if (status?.reason === "dynamic_cost")
+			return "[SWITCHMAN:WATERMARK] soft tier (dynamic cost): staying in this session is trending more expensive than handing over early — tighten reads now (delegate the bulk reading, keep captured results small) so the eventual handover stays cheap.";
+		return "[SWITCHMAN:WATERMARK] soft tier: prefer delegating lightweight work (subagent/workflow) over reading more context yourself.";
+	}
+	if (level === "hard") {
+		if (status?.reason === "dynamic_growth")
+			return (
+				"[SWITCHMAN:WATERMARK] hard tier (dynamic growth): context is growing fast enough to reach the wrap-up boundary within a few turns — stop broad reading (read/glob/grep are budget-limited this turn) and start wrapping up now. " +
+				"If a fold or handover was committed within the last turn, this tier may reflect pre-fold pressure — the next turn carries the reduced history; do not re-verify with broad reads."
+			);
 		return (
 			"[SWITCHMAN:WATERMARK] hard tier: stop broad reading (read/glob/grep are budget-limited this turn) and start wrapping up. " +
 			"If a fold or handover was committed within the last turn, this tier may reflect pre-fold pressure — the next turn carries the reduced history; do not re-verify with broad reads."
 		);
+	}
+	// force: a dynamic verdict shares the fixed force wording verbatim — the
+	// mandatory wrap-up is identical, only the trigger reason differs.
 	const lines = ["[SWITCHMAN:WATERMARK] force tier: MANDATORY wrap-up now — produce the final answer from what you already hold."];
 	const phase = status?.phase;
 	if (phase === "backup") {
@@ -339,7 +440,7 @@ function renderWatermarkContext(ctx, config, state, agent) {
 			);
 			return renderSubWatermark(levelOf(used, subTh));
 		}
-		const level = levelOf(used, th);
+		const { level, reason } = rootTierOf(state, config, sessionId, used, th);
 		if (level === "ok") return "";
 		if (state.paused.has(sessionId)) return PAUSED_LINE;
 		const live = handoverOf(sessionId);
@@ -350,6 +451,7 @@ function renderWatermarkContext(ctx, config, state, agent) {
 			attempt: live?.attempt,
 			cooldown: elapsed < HANDOVER_COOLDOWN_MS,
 			tool: state.handoverTool ?? undefined,
+			reason,
 		});
 	} catch {
 		return "";
@@ -414,6 +516,7 @@ function applyContextWatch(ctx, config) {
 		handoverTool: null,
 		lastHandover: new Map(),
 		readUsed: new Map(),
+		samples: new Map(), // sessionId -> rolling [{ t, tokens }] growth samples (dynamic watermark)
 		subWindow: new Map(), // "provider/model" -> { value: number|null, at } — resolved subagent model windows (see subagentWindowTokens)
 	};
 	const warn = (message) => ctx.logger?.warn?.(`dsh-switchman: ${message}`);
@@ -833,6 +936,9 @@ function applyContextWatch(ctx, config) {
 					text: `/ctx-handover: compaction failed — ${outcome.reason}`,
 				};
 			recordHandover(sessionId, { phase: "continuation", source, at: Date.now() });
+			// The compaction rewrote the waterline: stale pre-handover samples
+			// would poison the growth estimate, so the history restarts here.
+			state.samples.delete(sessionId);
 			// Final enumeration right after compaction settled: anything that
 			// materialized during the compaction window (the deferred-dispatch
 			// race the document refresh cannot fully close) is announced in
@@ -887,7 +993,8 @@ function applyContextWatch(ctx, config) {
 			const now = Date.now();
 			if (now - (state.lastHandover.get(sessionId) ?? 0) < HANDOVER_COOLDOWN_MS) return;
 			const used = measureNow(ctx, agent);
-			if (used === null || levelOf(used, readThresholds(config)) !== "force") return;
+			if (used === null) return;
+			if (rootTierOf(state, config, sessionId, used, readThresholds(config), false).level !== "force") return;
 			state.lastHandover.set(sessionId, now);
 			runHandover(agent, sessionId, `switchman-auto-${sessionId}`, undefined, "auto").then(
 				(result) =>
@@ -913,10 +1020,11 @@ function applyContextWatch(ctx, config) {
 					const ceiling = budget * CEILING_MULTIPLE;
 					const used = measureNow(ctx, exec.agent);
 					const th = readThresholds(config);
+					const wmLevel = used === null ? "ok" : rootTierOf(state, config, sessionId, used, th, false).level;
 					if (
 						entry.used >= ceiling &&
 						used !== null &&
-						(levelOf(used, th) === "hard" || levelOf(used, th) === "force") &&
+						(wmLevel === "hard" || wmLevel === "force") &&
 						readString(config.wmDenyMode) !== "deny" &&
 						Array.isArray(result?.content)
 					) {
@@ -959,7 +1067,7 @@ function applyContextWatch(ctx, config) {
 			if (turnUsed(state, sessionId) < budget * CEILING_MULTIPLE) return next();
 			const used = measureNow(ctx, exec.agent);
 			if (used === null) return next();
-			const level = levelOf(used, readThresholds(config));
+			const level = rootTierOf(state, config, sessionId, used, readThresholds(config), false).level;
 			if (level !== "hard" && level !== "force") return next();
 			if (readString(config.wmDenyMode) !== "deny") return next();
 			const ceiling = budget * CEILING_MULTIPLE;
@@ -981,6 +1089,22 @@ function applyContextWatch(ctx, config) {
 		if (sessionId !== null) state.readUsed.delete(sessionId);
 	});
 
+	// --- session disposal: release this session's per-session Maps (the
+	// intent.js / ptc-bindings.js pattern; the growth-sample buffer is the
+	// only new resident — readUsed/lastHandover/paused were process-lifetime
+	// leaks before, now they leave with the session too).
+	ctx.on("session/disposed", (session) => {
+		try {
+			const id = typeof session?.id === "string" ? session.id : null;
+			if (id === null) return;
+			state.samples.delete(id);
+			state.readUsed.delete(id);
+			state.lastHandover.delete(id);
+			state.paused.delete(id);
+		} catch {
+			/* cleanup is best-effort */
+		}
+	});
 	// --- D. /ctx-pause, /ctx-resume, /ctx-handover ----------------------------
 	ctx.commands.register({
 		name: "ctx-pause",
@@ -1085,4 +1209,9 @@ export {
 	PROTOCOL_SUB_TEXT,
 	renderRootWatermark,
 	renderSubWatermark,
+	recordSample,
+	readDynamicConfig,
+	dynamicVerdictOf,
+	combineTier,
+	rootTierOf,
 };

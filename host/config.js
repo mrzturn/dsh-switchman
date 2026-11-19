@@ -165,6 +165,14 @@ export const Config = z.object({
 	 * lands, the static tiers apply (fail-open). */
 	wmSubagentWindowRatio: z.number().min(0.1).max(1).default(0.75).volatile(),
 
+	// --- Dynamic watermark (refactor guide 2026-11-19 §4.3): P0 ships
+	// gray-release OFF; hit/miss prices stay internal at the guide's
+	// §2.3 figures, only horizon/lookback/pricing knobs are exposed.
+	wmDynamicEnabled: z.boolean().default(false).volatile(),
+	wmDynamicTurnsExpected: z.number().min(1).max(20).default(3).volatile(),
+	wmDynamicLookback: z.number().min(2).max(50).default(6).volatile(),
+	wmDynamicOutPerM: z.number().min(0.1).max(10000).default(4).volatile(),
+	wmDynamicAmortization: z.number().min(1).max(100).default(1.75).volatile(),
 	// --- Teams mode: doctrine injection + whitelist sync -------------------
 	/** Agent Teams master switch. ON = inject the `[SWITCHMAN:TEAMS]` doctrine
 	 *  section (order 10250), keep the DSH child-model whitelist detection in

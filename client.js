@@ -200,6 +200,12 @@ window.__ModuleLoader__.load({
 			{ field: 'wmReadBudgetTokens', min: 200, max: 10000000, def: 3500 },
 			{ field: 'wmSubagentForceTokens', min: 0, max: 10000000, def: 0 },
 			{ field: 'wmSubagentWindowRatio', min: 0.1, max: 1, def: 0.75 },
+			// Dynamic watermark knobs — MUST mirror host/routes.js
+			// WM_BOUNDED_NUMBER_FIELDS (same field/min/max/def quadruples).
+			{ field: 'wmDynamicTurnsExpected', min: 1, max: 20, def: 3 },
+			{ field: 'wmDynamicLookback', min: 2, max: 50, def: 6 },
+			{ field: 'wmDynamicOutPerM', min: 0.1, max: 10000, def: 4 },
+			{ field: 'wmDynamicAmortization', min: 1, max: 100, def: 1.75 },
 		];
 
 		/** The three thresholds that must keep a strict ascending order. */
@@ -218,6 +224,22 @@ window.__ModuleLoader__.load({
 			wmSubagentWindowRatio: {
 				label: 'wmSubagentWindowRatioLabel',
 				help: 'wmSubagentWindowRatioHelp',
+			},
+			wmDynamicTurnsExpected: {
+				label: 'wmDynamicTurnsExpectedLabel',
+				help: 'wmDynamicTurnsExpectedHelp',
+			},
+			wmDynamicLookback: {
+				label: 'wmDynamicLookbackLabel',
+				help: 'wmDynamicLookbackHelp',
+			},
+			wmDynamicOutPerM: {
+				label: 'wmDynamicOutPerMLabel',
+				help: 'wmDynamicOutPerMHelp',
+			},
+			wmDynamicAmortization: {
+				label: 'wmDynamicAmortizationLabel',
+				help: 'wmDynamicAmortizationHelp',
 			},
 		};
 
@@ -352,6 +374,7 @@ window.__ModuleLoader__.load({
 		/** Every settings field this page edits, in mutate order. */
 		const ALL_FIELDS = [
 			'uiLocale',
+			'langScope',
 			...LANG_FIELDS,
 			...POOL_FIELDS.map(({ field }) => field),
 			...POOL_FIELDS.map(({ manualField }) => manualField),
@@ -362,12 +385,14 @@ window.__ModuleLoader__.load({
 			'wmDenyMode',
 			'wmAutoHandover',
 			'wmSubagentCap',
+			'wmDynamicEnabled',
 			// Context trim (design: context-trim-port-design.md).
 			'trimMode',
 			'trimEnabled',
 			'trimLadderEnabled',
 			'trimProtectTaskIntent',
 			'trimCriticalRelief',
+			'trimVerboseLog',
 			'surfaceFold',
 			'trimSideModel',
 			'trimFoldFallbackModel',
@@ -541,6 +566,7 @@ window.__ModuleLoader__.load({
 				wmDenyMode: value?.wmDenyMode === 'deny' ? 'deny' : 'cap',
 				wmAutoHandover: bool('wmAutoHandover', true),
 				wmSubagentCap: bool('wmSubagentCap', true),
+				wmDynamicEnabled: bool('wmDynamicEnabled', false),
 				// Context trim (design: context-trim-port-design.md).
 				trimMode: TRIM_MODES.includes(value?.trimMode)
 					? value.trimMode
@@ -635,6 +661,7 @@ window.__ModuleLoader__.load({
 				wmDenyMode: values.wmDenyMode,
 				wmAutoHandover: values.wmAutoHandover,
 				wmSubagentCap: values.wmSubagentCap,
+				wmDynamicEnabled: values.wmDynamicEnabled,
 				trimMode: values.trimMode,
 				trimEnabled: values.trimEnabled,
 				trimLadderEnabled: values.trimLadderEnabled,
@@ -934,6 +961,16 @@ window.__ModuleLoader__.load({
 				wmSubagentWindowRatioHelp:
 					'按子智能体自身模型窗口缩放三档：force = min(静态档，窗口×比例)，soft/hard 同比收缩；只收紧不放宽。',
 				wmSubagentFollowForce: '跟随 force 档（0）',
+				wmDynamicEnabledLabel: '动态水位',
+				wmDynamicEnabledHelp: '开启后按最近样本动态前移水位线干预；关闭则只用上方静态三档。',
+				wmDynamicTurnsExpectedLabel: '期望轮数',
+				wmDynamicTurnsExpectedHelp: '预计多少轮达到水位线，用于动态提前量。',
+				wmDynamicLookbackLabel: '回看样本',
+				wmDynamicLookbackHelp: '动态估算取样的最近样本数（每个模型调用为一个样本）。',
+				wmDynamicOutPerMLabel: '输出价(¥/M)',
+				wmDynamicOutPerMHelp: '每百万输出 token 的价格，折算进上下文增长估算。',
+				wmDynamicAmortizationLabel: '摊销系数',
+				wmDynamicAmortizationHelp: '系统提示等固定开销的分摊系数，越大动态预警越保守。',
 				wmCommands:
 					'命令：/ctx-pause 暂停水位干预 · /ctx-resume 恢复干预 · /ctx-handover 立即写交接文档并压缩。',
 				trimSectionTitle: '上下文裁剪',
@@ -1222,6 +1259,16 @@ window.__ModuleLoader__.load({
 				wmSubagentWindowRatioHelp:
 					'Scale the subagent tiers to its own model window: force = min(static tier, window × ratio); soft/hard shrink by the same factor. Tightens only, never loosens.',
 				wmSubagentFollowForce: 'Follow the force tier (0)',
+				wmDynamicEnabledLabel: 'Dynamic watermark',
+				wmDynamicEnabledHelp: 'Advance watermark interventions from recent samples; off = the static tiers only.',
+				wmDynamicTurnsExpectedLabel: 'Expected turns',
+				wmDynamicTurnsExpectedHelp: 'Turns expected to reach the watermark; drives the dynamic lead-in.',
+				wmDynamicLookbackLabel: 'Lookback samples',
+				wmDynamicLookbackHelp: 'Recent samples (one per model call) feeding the estimate.',
+				wmDynamicOutPerMLabel: 'Output ¥/M',
+				wmDynamicOutPerMHelp: 'Price per million output tokens, folded into the growth estimate.',
+				wmDynamicAmortizationLabel: 'Amortization',
+				wmDynamicAmortizationHelp: 'Spread factor for fixed overhead like system prompts; higher = more conservative.',
 				wmCommands:
 					'Commands: /ctx-pause suspends watermark actions · /ctx-resume resumes them · /ctx-handover writes the handover doc and compacts now.',
 				trimSectionTitle: 'Context trim',
@@ -5813,6 +5860,7 @@ window.__ModuleLoader__.load({
 				wmDenyMode: values.wmDenyMode,
 				wmAutoHandover: values.wmAutoHandover,
 				wmSubagentCap: values.wmSubagentCap,
+				wmDynamicEnabled: values.wmDynamicEnabled,
 				trimMode: values.trimMode,
 				trimEnabled: values.trimEnabled,
 				trimLadderEnabled: values.trimLadderEnabled,
@@ -7295,6 +7343,23 @@ window.__ModuleLoader__.load({
 								checked: values.wmAutoHandover,
 								onChange: () => {
 									edit('wmAutoHandover', !values.wmAutoHandover);
+								},
+								disabled: !editable,
+								style: STYLE.checkbox,
+							}),
+							lines: [],
+						}),
+						h(SettingsRow, {
+							key: 'wmDynamicEnabled',
+							id: `${wmId}-dynamic`,
+							label: t('wmDynamicEnabledLabel'),
+							help: t('wmDynamicEnabledHelp'),
+							control: h('input', {
+								type: 'checkbox',
+								id: `${wmId}-dynamic`,
+								checked: values.wmDynamicEnabled,
+								onChange: () => {
+									edit('wmDynamicEnabled', !values.wmDynamicEnabled);
 								},
 								disabled: !editable,
 								style: STYLE.checkbox,
