@@ -291,10 +291,12 @@ same-turn `ctx_trim_fold`. Rules:
   bindings, so a program folds with `await tools.ctx_trim_fold({ firstId, lastId, count, summary })`.
   The protocol head and the nudge text name this form explicitly, so a PTC-mode model never
   concludes the fold tool is absent.
-- Same-band throttle: one nudge per band (`high`/`critical`) per 10 minutes
-  (`ADVISORY_NUDGE_REPEAT_MS`, `index.js:286`); any band change re-speaks
-  immediately, including escalation to critical (`trimAdvisoryCriticalPercent`,
-  default `80`) and a downgrade to high after a partial fold.
+- Same-band throttle: one nudge per band (`high`/`critical`) per 120 s by default
+  (`trimAdvisoryRepeatMs`, exposed as `ADVISORY_NUDGE_REPEAT_MS`,
+  `host/context-trim/index.js:379`); the critical band re-speaks on a shorter
+  45 s cadence; any band change re-speaks immediately, including escalation to
+  critical (`trimAdvisoryCriticalPercent`, default `80`) and a downgrade to
+  high after a partial fold.
 - When pressure falls below the line, a tail sweep retires every live nudge it
 can see — the recorded seq joined with a bounded last-50-node scan, so
 restarts and registry evictions cannot leave a stale nudge behind — logs one
