@@ -218,9 +218,10 @@ test("the four promoted §4.6 fields are declared, routed, and client-wired", ()
 		assert.match(routesSrc, new RegExp(`["']${field}["']`), `${field} must be registered in routes.js (client-page saves would silently drop it)`);
 		assert.match(clientSrc, new RegExp(field), `${field} must be wired into client.js (ALL_FIELDS / payload / labels)`);
 	}
-	// Exact schema shapes: gray-release defaults stay false ×3, ratio 0.5.
-	assert.match(configSrc, /^\ttrimBudgetEnabled: z\.boolean\(\)\.default\(false\)\.volatile\(\),$/m);
-	assert.match(configSrc, /^\twmHandoffSplit: z\.boolean\(\)\.default\(false\)\.volatile\(\),$/m);
-	assert.match(configSrc, /^\tcostProfileEnabled: z\.boolean\(\)\.default\(false\)\.volatile\(\),$/m);
+	// Exact schema shapes: the three promoted switches default ON since
+	// 2026-11-20 (maintainer profile), ratio 0.5.
+	assert.match(configSrc, /^\ttrimBudgetEnabled: z\.boolean\(\)\.default\(true\)\.volatile\(\),$/m);
+	assert.match(configSrc, /^\twmHandoffSplit: z\.boolean\(\)\.default\(true\)\.volatile\(\),$/m);
+	assert.match(configSrc, /^\tcostProfileEnabled: z\.boolean\(\)\.default\(true\)\.volatile\(\),$/m);
 	assert.match(configSrc, /^\tcompressBudgetRatio: z\.number\(\)\.min\(0\.1\)\.max\(0\.9\)\.default\(0\.5\)\.volatile\(\),$/m);
 });

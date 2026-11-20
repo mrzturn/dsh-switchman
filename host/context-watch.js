@@ -557,9 +557,10 @@ function applyContextWatch(ctx, config) {
 	// §4.6 handoff split: the plugin-controllable surface of a DSH handover
 	// is the instruction text — the document template written just before
 	// compaction and the continuation fill-in prompt armed after the wake.
-	// OFF (default) → byte-identical legacy text at both sites; ON → the
-	// handoff_min/handoff_full two-level content spec. Reads the live
-	// volatile config each time, so a settings change needs no remount.
+	// OFF → byte-identical legacy text at both sites; ON (default since
+	// 2026-11-20) → the handoff_min/handoff_full two-level content spec.
+	// Reads the live volatile config each time, so a settings change needs
+	// no remount.
 	const handoffSplitOn = () => config?.wmHandoffSplit === true;
 
 	// --- A. watermark: byte-stable head protocol + live tail context --------

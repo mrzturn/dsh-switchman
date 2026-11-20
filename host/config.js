@@ -156,11 +156,13 @@ export const Config = z.object({
 	 *  into handoff_min (required, sync: goal, status, next steps, key
 	 *  files/commands, live subagent ids + report paths) and handoff_full
 	 *  (optional append: cost profile, decision history, open questions;
-	 *  writing none of it never blocks). OFF (default) → the legacy document
+	 *  writing none of it never blocks). OFF → the legacy document
 	 *  and continuation text byte-identical. Promoted (2026-11-20): now has a
-	 *  client settings-page row and routes registration; the default stays
-	 *  false, so gray-release semantics are unchanged. */
-	wmHandoffSplit: z.boolean().default(false).volatile(),
+	 *  client settings-page row and routes registration.
+	 *  [2026-11-20]-[default promoted to ON]-[the maintainer desktop profile
+	 *  runs the split and its cost appendix daily; new installs ship the
+	 *  same shape, OFF still restores the legacy bytes.] */
+	wmHandoffSplit: z.boolean().default(true).volatile(),
 	/** Guide §5 P2 ① cost attribution profile: when ON (and wmHandoffSplit is
 	 *  ON), the handover document's handoff_full cost-profile bullet is
 	 *  pre-filled with a measured per-session aggregate folded from the usage
@@ -169,14 +171,14 @@ export const Config = z.object({
 	 *  cache-miss spikes; ≤12 lines / ≤600 bytes, top contributors only).
 	 *  Dimensions NOT derivable at that seam (per-tool-output tokens,
 	 *  per-turn skill loads) are neither estimated nor injected — the block
-	 *  says so in one line instead. OFF (default) → handoff_full bytes
+	 *  says so in one line instead. OFF → handoff_full bytes
 	 *  identical to the pre-P2 template. Needs trimEnabled (the samples come
 	 *  from its stream seam — trim off = no samples = an empty block) and
 	 *  fails open: aggregation errors never block the handover document.
 	 *  Promoted (2026-11-20): now has a client settings-page row and routes
-	 *  registration, same as wmHandoffSplit; the default stays false and
-	 *  gray-release semantics are unchanged. */
-	costProfileEnabled: z.boolean().default(false).volatile(),
+	 *  registration, same as wmHandoffSplit;
+	 *  [2026-11-20]-[default promoted to ON together with the split.] */
+	costProfileEnabled: z.boolean().default(true).volatile(),
 	/** Cap subagent contexts at wmSubagentForceTokens. */
 	wmSubagentCap: z.boolean().default(true).volatile(),
 	/** Subagent hard cap; 0 = share wmForceTokens. */
@@ -190,10 +192,12 @@ export const Config = z.object({
 	 * lands, the static tiers apply (fail-open). */
 	wmSubagentWindowRatio: z.number().min(0.1).max(1).default(0.75).volatile(),
 
-	// --- Dynamic watermark (refactor guide 2026-11-19 §4.3): P0 ships
-	// gray-release OFF; hit/miss prices stay internal at the guide's
-	// §2.3 figures, only horizon/lookback/pricing knobs are exposed.
-	wmDynamicEnabled: z.boolean().default(false).volatile(),
+	// --- Dynamic watermark (refactor guide 2026-11-19 §4.3): hit/miss prices
+	// stay internal at the guide's §2.3 figures, only horizon/lookback/pricing
+	// knobs are exposed. P0 shipped gray-release OFF;
+	// [2026-11-20]-[wmDynamicEnabled/wmCacheAdaptive defaults promoted to ON
+	// alongside the other maintainer-proven switches (desktop profile).]
+	wmDynamicEnabled: z.boolean().default(true).volatile(),
 	wmDynamicTurnsExpected: z.number().min(1).max(20).default(3).volatile(),
 	wmDynamicLookback: z.number().min(2).max(50).default(6).volatile(),
 	wmDynamicOutPerM: z.number().min(0.1).max(10000).default(4).volatile(),
@@ -202,11 +206,14 @@ export const Config = z.object({
 	// dynamic cost signal is the clamped P90 of the recent cadence gaps
 	// (60s–600s envelope, fixed-300s fallback without a P90 basis). Requires
 	// wmDynamicEnabled; results go to the host log only, never to the model.
-	wmCacheAdaptive: z.boolean().default(false).volatile(),
+	wmCacheAdaptive: z.boolean().default(true).volatile(),
 	// --- Teams mode: doctrine injection + whitelist sync -------------------
 	/** Agent Teams master switch (refactor guide §4.4: P0 tightened the
 	 *  default from ON to OFF — teams are the exception path, not the
-	 *  default upgrade). ON = inject the delegation doctrine (the `## 一`
+	 *  default upgrade; [2026-11-20]-[default promoted back to ON]-[the
+	 *  maintainer's proven desktop config runs teams mode; the constraint
+	 *  gate below still keeps resident-team suggestions conditional.]).
+	 *  ON = inject the delegation doctrine (the `## 一`
 	 *  delegate-by-default block extracted from the persona suffix, order
 	 *  10250) plus the `[SWITCHMAN:TEAMS]` section, keep the DSH child-model
 	 *  whitelist detection in the pools table, and asynchronously ensure the
@@ -218,7 +225,7 @@ export const Config = z.object({
 	 *  mode: no delegation or teams doctrine at all, no whitelist detection
 	 *  (the DSH factory conservative team policy takes over); the bundle is
 	 *  never disabled and the whitelist is never cleared. */
-	teamsMode: z.boolean().default(false).volatile(),
+	teamsMode: z.boolean().default(true).volatile(),
 	/** Replace-sync the dispatch model union (the six pools plus modelRank)
 	 *  into DSH's subagent model-selection whitelist
 	 *  (`subagent-model-selection-settings`) whenever the teams
@@ -300,13 +307,14 @@ export const Config = z.object({
 	 *  recognized constraint, source-labeled) plus a `[SWITCHMAN:SKILLS]`
 	 *  table of annotated skills near the pools table; the intent
 	 *  classifier may additionally return an optional weak-signal
-	 *  `constraints` array. OFF (default) = every injection point renders
+	 *  `constraints` array. OFF = every injection point renders
 	 *  "" and the classifier prompt is byte-identical to the pre-feature
 	 *  text — dispatch behavior does not change either way (advice only).
 	 *  One combined switch by design: both halves ship as a single
 	 *  advisory capability; splitting adds settings surface with no
-	 *  user-visible benefit until P1 dispatch gating exists. */
-	constraintsEnabled: z.boolean().default(false).volatile(),
+	 *  user-visible benefit until P1 dispatch gating exists. Promoted to
+	 *  ON 2026-11-20 (maintainer desktop config). */
+	constraintsEnabled: z.boolean().default(true).volatile(),
 	/** Open skill registry directory (guide §5.2.2): per-workspace root
 	 *  scanned for user/team skills (one subdirectory + SKILL.md each).
 	 *  Relative paths resolve against the session working directory;
@@ -320,21 +328,24 @@ export const Config = z.object({
 	 *  the skill_loaded stats of pool_hint-annotated skills. The DATA
 	 *  requires constraintsEnabled (load recording and the annotations are
 	 *  gated behind it), so an on/off mismatch simply renders "". OFF
-	 *  (default) = the section renders "" on every assembly — zero prompt
+	 *  = the section renders "" on every assembly — zero prompt
 	 *  diff. Fail-open: missing stats never block the main
-	 *  [SWITCHMAN:POOLS] table. */
-	poolFeedbackEnabled: z.boolean().default(false).volatile(),
+	 *  [SWITCHMAN:POOLS] table. Promoted to ON 2026-11-20 (maintainer
+	 *  desktop config). */
+	poolFeedbackEnabled: z.boolean().default(true).volatile(),
 	// --- Dispatch-result observability (guide §4.5/§4.3, P2 pack B0) -------
 	/** Master switch for the pool×model×skill dispatch telemetry. ON = host
 	 *  listeners record one bounded record per settled subagent run (success
 	 *  vs failure, wall-clock latency, rework repeats) and expose them via
 	 *  getDispatchStats() for pack B (differentiation). Counts reach ONLY the
 	 *  host logger and the getter — never a model-injection surface
-	 *  (MODEL-VISIBILITY). OFF (default, same opt-in direction as the other
-	 *  observability switches: constraintsEnabled, poolFeedbackEnabled) =
-	 *  listeners early-return before any capture: zero reads, zero writes,
-	 *  zero pending state. */
-	dispatchStatsEnabled: z.boolean().default(false).volatile(),
+	 *  (MODEL-VISIBILITY). OFF = listeners early-return before any capture:
+	 *  zero reads, zero writes, zero pending state. [2026-11-20]-[the
+	 *  observability switches (constraintsEnabled, poolFeedbackEnabled,
+	 *  dispatchStatsEnabled, poolDifferentiationEnabled) were promoted to
+	 *  ON together — the maintainer profile runs all of them; the
+	 *  MODEL-VISIBILITY guarantees are unchanged.] */
+	dispatchStatsEnabled: z.boolean().default(true).volatile(),
 	/** Master switch for the per-lane differentiation advice (guide §5 P2 ②,
 	 *  "分池/分 skill 的切换置信度与思考强度差异化", mechanisms §4.3 + §4.5).
 	 *  ON = one [SWITCHMAN:POOLS-DIFF] section (order 10407) may render
@@ -345,9 +356,10 @@ export const Config = z.object({
 	 *  below the sample floor are omitted (= global defaults). MODEL-VISIBILITY:
 	 *  no counts/rates/latencies in the block. The DATA requires
 	 *  dispatchStatsEnabled (capture is gated behind it), so an on/off mismatch
-	 *  simply renders "". OFF (default) = zero bytes AND zero computation —
-	 *  the master switch is checked before any stats read. */
-	poolDifferentiationEnabled: z.boolean().default(false).volatile(),
+	 *  simply renders "". OFF = zero bytes AND zero computation —
+	 *  the master switch is checked before any stats read. Promoted to
+	 *  ON 2026-11-20 (maintainer desktop config). */
+	poolDifferentiationEnabled: z.boolean().default(true).volatile(),
 	// --- Context trim: fully-automatic conversation compression ------------
 	/** Master switch for the context-trim layer (design:
 	 *  docs/requirements-and-design/2026-11-02-context-trim-port-design.md). OFF disables
@@ -363,8 +375,12 @@ export const Config = z.object({
 	 *  much since the last fold. */
 	trimGrowthTokens: z.number().min(1000).default(22500).volatile(),
 	/** Growth gate companion: the contiguous compressible increment must
-	 *  also reach this many estimated tokens (chars/4 heuristic). */
-	trimIncrementTokens: z.number().min(1000).default(45000).volatile(),
+	/** Growth gate companion: the contiguous compressible increment must
+	 *  also reach this many estimated tokens (chars/4 heuristic).
+	 *  [2026-11-20]-[45000 → 55000]-[maintainer desktop calibration: at the
+	 *  200k force window 55k ≈ window/3.6 — one larger fold per steady-growth
+	 *  hour instead of two smaller ones.] */
+	trimIncrementTokens: z.number().min(1000).default(55000).volatile(),
 	/** Pressure tier (tier b): fold when view usage reaches this percent of
 	 *  the context window (requires a resolvable window; otherwise skipped). */
 	trimPressurePercent: z.number().min(5).max(100).default(45).volatile(),
@@ -398,8 +414,9 @@ export const Config = z.object({
 	 *  cannot see. On, every engine step, gate evaluation and decision path
 	 *  writes a debug row to decisions.log; off keeps the key decision rows
 	 *  only. Exceptions log full detail (message + stack frames) regardless
-	 *  of this switch.] */
-	trimVerboseLog: z.boolean().default(false).volatile(),
+	 *  of this switch.] [2026-11-20]-[default promoted to ON with the
+	 *  maintainer profile.] */
+	trimVerboseLog: z.boolean().default(true).volatile(),
 	/** [2026-11-07]-[growth/increment constants are absolute tokens
 	 *  calibrated for the default 150k effective window]-[scaling
 	 *  trimWindowTokens down without scaling trimGrowthTokens /
@@ -468,9 +485,9 @@ export const Config = z.object({
 	 *  "under ~50%" text). OFF, or any unusable input → no budget
 	 *  constraint (fail-open = exactly the pre-feature behavior).
 	 *  Promoted (2026-11-20): now also on the client settings page and in
-	 *  routes BOOLEAN_FIELDS; default stays false (fail-open, pre-feature
-	 *  behavior). */
-	trimBudgetEnabled: z.boolean().default(false).volatile(),
+	 *  routes BOOLEAN_FIELDS; [2026-11-20]-[default promoted to ON with the
+	 *  maintainer profile — OFF keeps the fail-open pre-feature behavior.] */
+	trimBudgetEnabled: z.boolean().default(true).volatile(),
 	/** Fold-down depth ratio for the budget tier and the advisory nudge
 	 *  (guide §4.6: compress target = current × ratio, floored at the
 	 *  pool budget). 0.5 keeps the default ON text byte-identical to the

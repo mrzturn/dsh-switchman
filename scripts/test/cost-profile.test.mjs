@@ -268,5 +268,5 @@ test("wiring: stream seam folds merged usage; the doc builder consumes the secti
 	const watchSource = sourceOf("context-watch.js");
 	assert.match(watchSource, /costProfileSection\(sessionId,\s*config\)/u, "handoff_full builder must consume the section");
 	const configSource = sourceOf("config.js");
-	assert.match(configSource, /costProfileEnabled: z\.boolean\(\)\.default\(false\)\.volatile\(\)/u, "config key must default OFF");
+	assert.match(configSource, /costProfileEnabled: z\.boolean\(\)\.default\(true\)\.volatile\(\)/u, "config key must default ON (2026-11-20 promotion)");
 });

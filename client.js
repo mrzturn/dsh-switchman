@@ -299,7 +299,7 @@ window.__ModuleLoader__.load({
 		 *  write (and vice versa). */
 		const TRIM_NUMBER_FIELDS = [
 			{ field: 'trimGrowthTokens', min: 1000, def: 22500 },
-			{ field: 'trimIncrementTokens', min: 1000, def: 45000 },
+			{ field: 'trimIncrementTokens', min: 1000, def: 55000 },
 			{ field: 'trimPressurePercent', min: 5, max: 100, def: 45 },
 			{ field: 'trimEmergencyPercent', min: 5, max: 100, def: 90 },
 			{ field: 'trimAdvisoryPercent', min: 5, max: 100, def: 50 },
@@ -1009,7 +1009,7 @@ window.__ModuleLoader__.load({
 					'把交接文档拆成必写的 handoff_min（目标、状态、下一步、关键文件/命令、存活子智能体 id 与回报路径）与可选的 handoff_full 附录（成本画像、决策历史、悬而未决的问题）；全部跳过也不阻塞交接。关闭 = 原单文档行为。',
 				costProfileEnabledLabel: '预填实测成本画像',
 				costProfileEnabledHelp:
-					'开启后（需先开上方交接拆分与自动裁剪）handoff_full 附录预填实测的单会话成本画像（轮数、token、缓存命中占比、头部池/模型占比）；无法度量的维度只写一行说明，不做估算。灰度开关：默认关闭。',
+					'开启后（需先开上方交接拆分与自动裁剪）handoff_full 附录预填实测的单会话成本画像（轮数、token、缓存命中占比、头部池/模型占比）；无法度量的维度只写一行说明，不做估算。默认开启。',
 				// Constraint recognition (guide §4.1/§4.2).
 				constraintsSectionTitle: '约束识别与技能注解',
 				constraintsSectionDescription:
@@ -1046,7 +1046,7 @@ window.__ModuleLoader__.load({
 				trimCriticalReliefLabel: '临界救援折叠',
 				trimCriticalReliefHelp: '开启后（默认），advisory 模式压力到达临界线（trimAdvisoryCriticalPercent）时引擎自动执行一次机械折叠（90 秒冷却），不再只依赖提示。',
 			trimVerboseLogLabel: '调试模式（详细日志）',
-			trimVerboseLogHelp: '默认关闭。开启后引擎的每个执行步骤、闸门判定与决策路径都会写入 decisions.log（debug 行），便于问题追溯；关闭时只记录关键决策行。无论开关与否，异常始终记录完整细节。',
+			trimVerboseLogHelp: '默认开启。开启后引擎的每个执行步骤、闸门判定与决策路径都会写入 decisions.log（debug 行），便于问题追溯；关闭时只记录关键决策行。无论开关与否，异常始终记录完整细节。',
 		trimDockLabel: '折叠 {pressure}%（线 {line}%）',
 		trimDockTipDomain: '折叠引擎口径：最近一次实付 prompt（max(view, wire)）÷ 有效窗口（含上限）——不是输入框旁上下文面板的预测口径，两者本就不同、不应收敛。',
 		trimDockTipMass: '实付 {mass} / 窗口 {window} tokens',
@@ -1110,7 +1110,7 @@ window.__ModuleLoader__.load({
 					'切换派发形态：关闭为纯 subagent 派发（DSH 出厂保守团队策略接管）；开启后注入自主团队规程并启用 Agent Teams。',
 				teamsModeLabel: '智能体团队模式',
 				teamsModeHelp:
-					'默认关闭。开启后注入团队规程并自动启用 DSH 的 Agent Teams bundle；约束识别开启时，仅当命中 ≥2 条结构性标签（并行子任务/权限隔离/持续协作）才建议常驻团队，否则默认仍走无状态 subagent + 按需 skill；约束识别关闭时保持原有默认委派行为。派发池的 ⚠ 授权徽标仅在开启时显示。',
+					'默认开启。开启后注入团队规程并自动启用 DSH 的 Agent Teams bundle；约束识别开启时，仅当命中 ≥2 条结构性标签（并行子任务/权限隔离/持续协作）才建议常驻团队，否则默认仍走无状态 subagent + 按需 skill；约束识别关闭时保持原有默认委派行为。派发池的 ⚠ 授权徽标仅在开启时显示。',
 				syncWhitelistLabel: '同步子智能体模型白名单',
 				syncWhitelistHelp:
 					'独立开关（不依赖智能体团队模式）：把六池选中模型的并集整体写入 DSH「设置 → 子智能体 → 模型选择」的授权列表；dsh-switchman 成为唯一事实源。',
@@ -1339,7 +1339,7 @@ window.__ModuleLoader__.load({
 					'Split the handover document into a required handoff_min (goal, status, next steps, key files/commands, live subagent ids + report paths) and an optional handoff_full appendix (cost profile, decision history, open questions); skipping it never blocks the handover. Off = the legacy single document.',
 				costProfileEnabledLabel: 'Pre-fill measured cost profile',
 				costProfileEnabledHelp:
-					'When on (requires the handover split above and auto-trim on), the handoff_full appendix is pre-filled with a measured per-session cost profile (turns, tokens, cache-hit share, top pool/model shares); dimensions that cannot be measured are stated in one line instead of estimated. Gray-release: default off.',
+					'When on (requires the handover split above and auto-trim on), the handoff_full appendix is pre-filled with a measured per-session cost profile (turns, tokens, cache-hit share, top pool/model shares); dimensions that cannot be measured are stated in one line instead of estimated. On by default.',
 				// Constraint recognition (guide §4.1/§4.2).
 				constraintsSectionTitle: 'Constraint recognition & skill annotations',
 				constraintsSectionDescription:
@@ -1376,7 +1376,7 @@ window.__ModuleLoader__.load({
 				trimCriticalReliefLabel: 'Critical relief fold',
 				trimCriticalReliefHelp: 'When on (default), advisory mode performs one mechanical fold itself at the critical line (trimAdvisoryCriticalPercent, 90 s cooldown) instead of only nudging.',
 			trimVerboseLogLabel: 'Debug mode (verbose log)',
-			trimVerboseLogHelp: 'Off by default. When on, every engine step, gate evaluation and decision path is written to decisions.log (debug rows) for issue tracing; when off, only the key decision rows are kept. Exceptions always log full detail regardless of this switch.',
+			trimVerboseLogHelp: 'On by default. When on, every engine step, gate evaluation and decision path is written to decisions.log (debug rows) for issue tracing; when off, only the key decision rows are kept. Exceptions always log full detail regardless of this switch.',
 		trimDockLabel: 'fold {pressure}% (line {line}%)',
 		trimDockTipDomain: 'Fold-engine domain: last PAID prompt (max of view/wire) over the effective window (cap included) — not the composer context meter projection; the two answer different questions and are not meant to converge.',
 		trimDockTipMass: 'paid {mass} / window {window} tokens',
@@ -1448,7 +1448,7 @@ window.__ModuleLoader__.load({
 					"Switch the dispatch shape: off is plain subagent dispatch (DSH's factory conservative team policy takes over); on injects the autonomous team doctrine and enables Agent Teams.",
 				teamsModeLabel: 'Agent teams mode',
 				teamsModeHelp:
-					'Off by default. When on, the team doctrine is injected and the DSH Agent Teams bundle is enabled; with constraint recognition on, a resident team is only suggested on a >=2 structural-tag hit (parallel subtasks / permission isolation / sustained collaboration), otherwise stateless subagents + on-demand skills stay the default path; with constraints off it falls back to the original delegate-by-default behavior. The dispatch pools ⚠ authorization badges show only in this mode.',
+					'On by default. When on, the team doctrine is injected and the DSH Agent Teams bundle is enabled; with constraint recognition on, a resident team is only suggested on a >=2 structural-tag hit (parallel subtasks / permission isolation / sustained collaboration), otherwise stateless subagents + on-demand skills stay the default path; with constraints off it falls back to the original delegate-by-default behavior. The dispatch pools ⚠ authorization badges show only in this mode.',
 				syncWhitelistLabel: 'Sync the subagent model whitelist',
 				syncWhitelistHelp:
 					'Independent switch (does not require agent teams mode): writes the union of the six pools over the DSH "Settings → Subagents → model selection" authorization list; dsh-switchman becomes the single source of truth.',

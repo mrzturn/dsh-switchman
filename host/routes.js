@@ -126,7 +126,7 @@ const WM_BOUNDED_NUMBER_FIELDS = [
  *  but never sent by the client fails every fenced write (and vice versa). */
 const TRIM_NUMBER_FIELDS = [
 	{ field: "trimGrowthTokens", min: 1000, max: Number.POSITIVE_INFINITY, def: 22500 },
-	{ field: "trimIncrementTokens", min: 1000, max: Number.POSITIVE_INFINITY, def: 45000 },
+	{ field: "trimIncrementTokens", min: 1000, max: Number.POSITIVE_INFINITY, def: 55000 },
 	{ field: "trimPressurePercent", min: 5, max: 100, def: 45 },
 	{ field: "trimEmergencyPercent", min: 5, max: 100, def: 90 },
 	{ field: "trimAdvisoryPercent", min: 5, max: 100, def: 50 },
@@ -149,7 +149,8 @@ const BOOLEAN_FIELDS = [
 	// P2 ③ cache-window adaptive (mirrors host/config.js wmCacheAdaptive).
 	"wmCacheAdaptive",
 	// Promoted config-only gray-release switches (2026-11-20): now on the
-	// client settings page; defaults stay false.
+	// client settings page; defaults promoted to ON 2026-11-20 (maintainer
+	// profile).
 	"wmHandoffSplit",
 	"costProfileEnabled",
 	// The following six mirror the pool*Manual switches in host/config.js
@@ -178,7 +179,8 @@ const BOOLEAN_FIELDS = [
 	"trimEnabled",
 	"trimLadderEnabled",
 	// Promoted config-only gray-release gate (2026-11-20): now on the client
-	// settings page; default stays false (fail-open semantics).
+	// settings page; default promoted to ON 2026-11-20 (maintainer profile);
+	// OFF keeps the fail-open semantics.
 	"trimBudgetEnabled",
 	"trimProtectTaskIntent",
 	"trimCriticalRelief",

@@ -1,8 +1,9 @@
 /** Teams doctrine conditionalization tests (refactor guide §4.4, P0 item 4).
  *
- *  Three behaviors are pinned together: (1) `teamsMode` defaults to OFF —
- *  teams are the constraint-triggered exception path, not the default
- *  upgrade, so OFF renders ZERO bytes on every assembly and the DSH factory
+ *  Three behaviors are pinned together: (1) `teamsMode` defaults to ON
+ *  since 2026-11-20 (maintainer-proven desktop config; §4.4 P0 shipped OFF
+ *  — teams were the constraint-triggered exception path), and the OFF
+ *  path still renders ZERO bytes on every assembly and the DSH factory
  *  conservative team policy takes over; (2) the ON-mode doctrine is the
  *  `## 一` delegation block + the teams clauses, both extracted verbatim
  *  from the cordis.patch.yml persona-suffix anchor — the byte snapshots
@@ -106,10 +107,10 @@ function mount(ctx, config) {
 
 // ---- 1. the default --------------------------------------------------------------
 
-test("teamsMode defaults to OFF (§4.4 P0 tightening); constraints stay OFF", () => {
+test("teamsMode defaults to ON (2026-11-20 promotion); constraints default ON", () => {
 	const parsed = Config({});
-	assert.equal(parsed.teamsMode.get(), false);
-	assert.equal(parsed.constraintsEnabled.get(), false);
+	assert.equal(parsed.teamsMode.get(), true);
+	assert.equal(parsed.constraintsEnabled.get(), true);
 });
 
 // ---- 2. OFF renders zero bytes (the old non-teams session shape) ------------------
