@@ -142,3 +142,92 @@ test("promoted config-only gray-release fields are wired on both sides", () => {
 		assert.ok(client.has(field), `client.js ALL_FIELDS must include ${field}`);
 	}
 });
+
+/** Quoted identifier-like matches in a block, repeats included. */
+function quotedEntries(block, quote) {
+	return [...block.matchAll(new RegExp(`${quote}([A-Za-z]\\w*)${quote}`, "g"))].map(
+		(m) => m[1],
+	);
+}
+
+test("settings field registries contain no duplicate entries", () => {
+	// registry-review follow-up: a duplicated name inside one registry list
+	// silently double-writes the same setting and hides the shadowed entry
+	// from the parity checks above — every registry stays duplicate-free.
+	const dup = (list) => list.filter((v, i) => list.indexOf(v) !== i);
+
+	// host/routes.js — a const array whose non-comment content is only quoted
+	// strings, commas and whitespace is a field registry; path lists (ROUTES)
+	// yield no identifier-like entries and the bounded-number tables carry
+	// object rows, so both fall through to the checks below.
+	for (const m of routesSrc.matchAll(/const (\w+)\s*=\s*\[/g)) {
+		const block = constArrayBlock(routesSrc, m[1]);
+		if (block === null) continue;
+		const body = block
+			.slice(block.indexOf("[") + 1)
+			.replace(/\/\/[^\n]*/g, "");
+		const bare = body.replace(/"[^"]*"/g, '""');
+		if (!/^[\s",\[\]]+$/.test(bare)) continue;
+		const repeated = dup(quotedEntries(body, '"'));
+		assert.deepEqual(
+			repeated,
+			[],
+			`routes.js ${m[1]} registry has duplicate entries: ${repeated.join(", ")}`,
+		);
+	}
+
+	// host/routes.js + client.js — bounded-number tables: exactly one row per
+	// field (a duplicated row would double-coerce and mask the other bounds).
+	for (const [label, src, quote] of [
+		["routes.js", routesSrc, '"'],
+		["client.js", clientSrc, "'"],
+	]) {
+		for (const m of src.matchAll(/const (\w+)\s*=\s*\[/g)) {
+			const block = constArrayBlock(src, m[1]);
+			if (block === null) continue;
+			const body = block.replace(/\/\/[^\n]*/g, "");
+			if (!new RegExp(`field:\\s*${quote}`).test(body)) continue;
+			const fields = [
+				...body.matchAll(new RegExp(`field:\\s*${quote}(\\w+)${quote}`, "g")),
+			].map((x) => x[1]);
+			const repeated = dup(fields);
+			assert.deepEqual(
+				repeated,
+				[],
+				`${label} ${m[1]} has duplicate field rows: ${repeated.join(", ")}`,
+			);
+		}
+	}
+
+	// client.js ALL_FIELDS — direct entries plus every expanded spread must
+	// form a duplicate-free union.
+	const allBlock = constArrayBlock(clientSrc, "ALL_FIELDS");
+	assert.ok(allBlock !== null, "client.js must declare const ALL_FIELDS = [ ... ]");
+	const union = quotedEntries(allBlock.replace(/\/\/[^\n]*/g, ""), "'");
+	for (const line of allBlock.split("\n")) {
+		const plain = line.match(/\.\.\.(\w+),\s*$/);
+		if (plain) {
+			const spread = constArrayBlock(clientSrc, plain[1]);
+			if (spread !== null)
+				union.push(...quotedEntries(spread.replace(/\/\/[^\n]*/g, ""), "'"));
+			continue;
+		}
+		const mapped = line.match(
+			/\.\.\.(\w+)\.map\(\(\{\s*(\w+)\s*\}\)\s*=>\s*\2\)/,
+		);
+		if (mapped) {
+			const spread = constArrayBlock(clientSrc, mapped[1]);
+			if (spread !== null) {
+				const keyRe = new RegExp(`${mapped[2]}:\\s*'([A-Za-z]\\w*)'`, "g");
+				for (const m of spread.replace(/\/\/[^\n]*/g, "").matchAll(keyRe))
+					union.push(m[1]);
+			}
+		}
+	}
+	const repeated = dup(union);
+	assert.deepEqual(
+		repeated,
+		[],
+		`client.js ALL_FIELDS (spreads expanded) has duplicate entries: ${repeated.join(", ")}`,
+	);
+});
