@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 格式参照 Keep a Changelog;版本遵循语义化版本。
 ## [Unreleased]
 
+### Added
+
+- Edit-tool feedback watcher (`host/edit-feedback.js`, config `editFeedbackEnabled`, default on): a `tools/post-execute` listener rewrites native `edit` / `str_replace_editor` miss failures (`FS_EDIT_NOT_FOUND` / `FS_AMBIGUOUS_EDIT`) into self-contained corrective feedback — per-match excerpts with the file's exact text (±2 lines, bounded), the failure class (verbatim / whitespace-drift / indent-drift / multi-hit / zero-hit), the correct retry recipe (extend the anchor; `replace_all` suggested only for `edit`), and a loop-guard escalation after 3 same file+class failures ("switch strategy"). Classification is memory-only (whitespace/indentation-flexible ladder, aider-style) and NEVER writes to disk; the whole listener fails open (any internal error passes the original failure through untouched) and fires only on already-failing calls. The preset-patch doctrine suffix gains a "Native Edit Discipline" section for the same failure class.
+- 编辑回喂 watcher（`host/edit-feedback.js`，配置 `editFeedbackEnabled`，默认开）：一个 `tools/post-execute` 监听器把原生 `edit` / `str_replace_editor` 的未命中失败（`FS_EDIT_NOT_FOUND` / `FS_AMBIGUOUS_EDIT`）改写为自足纠正反馈——逐处摘录文件精确文本（±2 行、有界）、失败分类（verbatim / 空白漂移 / 缩进漂移 / 多处命中 / 零命中）、正确重试配方（扩大锚点；仅 `edit` 建议 `replace_all`），以及同文件同类失败 3 次后的循环守卫升级（“换策略”）。分类仅在内存中进行（空白/缩进宽容阶梯，aider 式），绝不写盘；监听器整体失败开放（任何内部错误原样透传原始报错），且只在已失败的调用上触发。预设补丁规程 suffix 同步新增「原生编辑纪律」一节。
+
 ### Removed
 
 - The preset-patch doctrine suffix drops the "Hash-Anchor Edit Discipline" section: it described the `dsh-better-edit` tool surface (batch_edit, 3-char anchors, `E_*` codes), which is no longer installed in any maintained profile. The native `edit`/`str_replace_editor` fail-closed surface and the [SWITCHMAN:TRIM] fold-anchor protocol are untouched; a native-edit discipline section may follow once the edit-feedback watcher lands.

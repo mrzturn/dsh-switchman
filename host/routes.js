@@ -175,6 +175,8 @@ const BOOLEAN_FIELDS = [
 	// Per-lane differentiation advice (mirrors host/config.js
 	// poolDifferentiationEnabled).
 	"poolDifferentiationEnabled",
+	// Edit-tool feedback watcher (mirrors host/config.js editFeedbackEnabled).
+	"editFeedbackEnabled",
 	// Context trim switches (mirrors the trim group in host/config.js).
 	"trimEnabled",
 	"trimLadderEnabled",

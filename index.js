@@ -130,6 +130,9 @@ import { applyRoutes } from "./host/routes.js";
 // Tool-argument sanitation (transparent coercion of stringified-JSON and
 // empty-string argument shapes before tool validation).
 import { applyToolArgsSanitize } from "./host/tool-args-sanitize.js";
+// Edit-tool feedback watcher (rewrites native edit-tool miss failures into
+// self-contained corrective feedback; diagnosis-only, fail-open).
+import { applyEditFeedback } from "./host/edit-feedback.js";
 
 /** Cordis plugin name. */
 const name = "dsh-switchman";
@@ -267,6 +270,9 @@ function apply(ctx, config) {
 	applySubagentModel(ctx);
 	applyRoutes(ctx, config);
 	applyToolArgsSanitize(ctx, config);
+	// Edit-feedback watcher (post-execute; fires only on already-failing
+	// edit calls; fail-open passthrough when disabled or on internal errors).
+	applyEditFeedback(ctx, config);
 }
 
 export { apply, inject, name };

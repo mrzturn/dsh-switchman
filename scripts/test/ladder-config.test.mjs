@@ -94,6 +94,7 @@ function fullValues(overrides = {}) {
 		poolFeedbackEnabled: false,
 		dispatchStatsEnabled: false,
 		poolDifferentiationEnabled: false,
+		editFeedbackEnabled: false,
 		trimEnabled: true,
 		trimLadderEnabled: true,
 		trimBudgetEnabled: false,

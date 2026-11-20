@@ -429,6 +429,9 @@ window.__ModuleLoader__.load({
 			'dispatchStatsEnabled',
 			// Per-lane differentiation advice (guide §5 P2 ②).
 			'poolDifferentiationEnabled',
+			// Edit-tool feedback watcher (mirrors host/config.js
+			// editFeedbackEnabled).
+			'editFeedbackEnabled',
 		];
 
 		/** Stable identity of one provider/model route. */
@@ -642,6 +645,7 @@ window.__ModuleLoader__.load({
 				poolFeedbackEnabled: bool('poolFeedbackEnabled', false),
 				dispatchStatsEnabled: bool('dispatchStatsEnabled', false),
 				poolDifferentiationEnabled: bool('poolDifferentiationEnabled', false),
+				editFeedbackEnabled: bool('editFeedbackEnabled', false),
 			};
 		}
 
@@ -734,6 +738,7 @@ window.__ModuleLoader__.load({
 				poolFeedbackEnabled: values.poolFeedbackEnabled,
 				dispatchStatsEnabled: values.dispatchStatsEnabled,
 				poolDifferentiationEnabled: values.poolDifferentiationEnabled,
+				editFeedbackEnabled: values.editFeedbackEnabled,
 			});
 		}
 
@@ -1029,6 +1034,9 @@ window.__ModuleLoader__.load({
 				poolDifferentiationEnabledLabel: '分池差异化建议',
 				poolDifferentiationEnabledHelp:
 					'开启后在池表旁注入 [SWITCHMAN:POOLS-DIFF] 差异化建议行：按派发统计给出各泳道的思考强度方向（raise / steady）与切换置信度（low / high，仅方向标签，无具体数字）；样本不足的泳道不注入（沿用全局默认）。仅为建议层，不改动静态档位与水位参数；数据依赖派发结果观测。关闭 = 零注入且零计算。',
+				editFeedbackEnabledLabel: '编辑失败纠正回喂',
+				editFeedbackEnabledHelp:
+					'开启后，原生 edit / str_replace_editor 的未命中失败（old_str 未找到 / 多处匹配）被改写为自足纠正反馈：逐处摘录文件精确文本 + 重试配方，模型当轮即可修复，省去 1–2 个重读轮。仅诊断不写盘，宽松匹配只在内存中分类失败；监听器整体失败开放（内部错误一律透传原始报错），且只在已失败的调用上触发。关闭 = 与功能上线前行为一致（裸原生报错）。',
 				wmDynamicTurnsExpectedLabel: '期望轮数',
 				wmDynamicTurnsExpectedHelp: '预计多少轮达到水位线，用于动态提前量。',
 				wmDynamicLookbackLabel: '回看样本',
@@ -1359,6 +1367,9 @@ window.__ModuleLoader__.load({
 				poolDifferentiationEnabledLabel: 'Per-lane differentiation advice',
 				poolDifferentiationEnabledHelp:
 					'When on, a [SWITCHMAN:POOLS-DIFF] block may render beside the pools table: per-lane effort direction (raise / steady) and switch-confidence (low / high) labels derived from the dispatch telemetry (direction labels only, no numbers); lanes below the sample floor are omitted (= global defaults). Advice only — static effort pins and watermark parameters stay untouched; data requires dispatch observability. Off = zero bytes AND zero computation.',
+				editFeedbackEnabledLabel: 'Edit-failure corrective feedback',
+				editFeedbackEnabledHelp:
+					'When on, native edit / str_replace_editor miss failures (old_str not found / multiple matches) are rewritten into self-contained corrective feedback: per-match excerpts with the file’s exact text plus the retry recipe, so the model fixes the retry without extra read rounds. Diagnosis only — the lenient matcher never writes to disk; the listener fails open (internal errors pass the original failure through) and fires only on already-failing calls. Off = exactly the pre-feature behavior (bare native errors).',
 				wmDynamicTurnsExpectedLabel: 'Expected turns',
 				wmDynamicTurnsExpectedHelp: 'Turns expected to reach the watermark; drives the dynamic lead-in.',
 				wmDynamicLookbackLabel: 'Lookback samples',
@@ -7491,6 +7502,23 @@ window.__ModuleLoader__.load({
 								checked: values.poolDifferentiationEnabled,
 								onChange: () => {
 									edit('poolDifferentiationEnabled', !values.poolDifferentiationEnabled);
+								},
+								disabled: !editable,
+								style: STYLE.checkbox,
+							}),
+							lines: [],
+						}),
+						h(SettingsRow, {
+							key: 'editFeedbackEnabled',
+							id: `${constraintsId}-edit-feedback`,
+							label: t('editFeedbackEnabledLabel'),
+							help: t('editFeedbackEnabledHelp'),
+							control: h('input', {
+								type: 'checkbox',
+								id: `${constraintsId}-edit-feedback`,
+								checked: values.editFeedbackEnabled,
+								onChange: () => {
+									edit('editFeedbackEnabled', !values.editFeedbackEnabled);
 								},
 								disabled: !editable,
 								style: STYLE.checkbox,

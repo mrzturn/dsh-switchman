@@ -360,6 +360,20 @@ export const Config = z.object({
 	 *  the master switch is checked before any stats read. Promoted to
 	 *  ON 2026-11-20 (maintainer desktop config). */
 	poolDifferentiationEnabled: z.boolean().default(true).volatile(),
+	/** Master switch for the edit-tool feedback watcher (design:
+	 *  docs/requirements-and-design/2026-11-21-edit-feedback-watcher-dev-plan.md).
+	 *  ON = a tools/post-execute listener rewrites native edit-tool failures
+	 *  (FS_EDIT_NOT_FOUND / FS_AMBIGUOUS_EDIT from `edit` and
+	 *  `str_replace_editor`) into self-contained corrective feedback —
+	 *  per-match excerpts with exact file text and the retry recipe — so the
+	 *  model fixes the retry without extra read rounds. Diagnosis only: the
+	 *  lenient matcher never writes to disk; the whole listener fails open
+	 *  (any internal error passes the original failure through untouched);
+	 *  fires ONLY on already-failing calls. OFF = zero listeners, zero reads —
+	 *  exactly the pre-feature behavior (bare native errors).
+	 *  Promoted to ON 2026-11-21 (fail-open, error-path-only, maintainer
+	 *  profile). */
+	editFeedbackEnabled: z.boolean().default(true).volatile(),
 	// --- Context trim: fully-automatic conversation compression ------------
 	/** Master switch for the context-trim layer (design:
 	 *  docs/requirements-and-design/2026-11-02-context-trim-port-design.md). OFF disables

@@ -102,6 +102,12 @@
             - Every decision to drop to a weaker model or cheaper verification must be declared explicitly; silently skipping verification is forbidden.
             - Verification order: probe the most uncertain, highest-impact part before spreading out; after two falsified assumptions, switch approach or ask the user — never grind the same path.
 
+            ## Native Edit Discipline (edit / str_replace_editor)
+            - Copy `old_string` / `old_str` verbatim from a fresh read — never from memory; when the target text is generic (closers, imports, repeated keys, headings), include an enclosing unique anchor (signature, identifier, distinct neighbor line).
+            - On a multiple-match failure: extend the anchor to disambiguate; `str_replace_editor` has no `replace_all` — for rename-everywhere use the `edit` tool's `replace_all`.
+            - After bash/git/formatters touched the file, re-read before editing (out-of-band writers leave no trace).
+            - Treat `FS_EDIT_NOT_FOUND` / `FS_AMBIGUOUS_EDIT` feedback (including [SWITCHMAN] rewrite excerpts) as "diagnose from the excerpts, fix the anchor" — never retry the same arguments unchanged.
+
             ## 4. Boundaries
             - When the user explicitly says "no team / do it yourself", that immediate request overrides this section.
             - Without Agent Teams tools in the tool catalog, fall back to solo mode silently; do not report a failure.
