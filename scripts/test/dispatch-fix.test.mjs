@@ -189,12 +189,12 @@ test("pools guidance renders the separate-fields example and the restored lines"
 });
 
 test("teams doctrine makes Agent Teams the default channel with an explicit fallback", () => {
-	assert.ok(TEAMS_SECTION_TEXT.includes("派发通道优先级"), "doctrine states the teams-first priority");
-	assert.ok(TEAMS_SECTION_TEXT.includes("一切子任务委派默认走 Agent Teams"), "default channel is Agent Teams");
-	assert.ok(TEAMS_SECTION_TEXT.includes("teams 不可用即降级，不重试"), "fallback rule present");
-	assert.ok(TEAMS_SECTION_TEXT.includes("直接改用 subagent/subagent_fork 派发并继续工作"), "fallback names the subagent channel");
+	assert.ok(TEAMS_SECTION_TEXT.includes("Dispatch-channel priority"), "doctrine states the teams-first priority");
+	assert.ok(TEAMS_SECTION_TEXT.includes("ALL child delegation defaults to Agent Teams"), "default channel is Agent Teams");
+	assert.ok(TEAMS_SECTION_TEXT.includes("Teams unavailable → fall back immediately, never retry"), "fallback rule present");
+	assert.ok(TEAMS_SECTION_TEXT.includes("switch directly to subagent/subagent_fork dispatch and keep working"), "fallback names the subagent channel");
 	// The superseded default split must be gone from the trigger bullet.
-	assert.ok(!TEAMS_SECTION_TEXT.includes("一次性、无需共享状态的单点调查用 subagent。\","), "old subagent-default bullet removed");
+	assert.ok(!TEAMS_SECTION_TEXT.includes("一次性"), "old subagent-default bullet removed");
 });
 
 test("leading-slash model passes through instead of recommending the malformed id back", () => {

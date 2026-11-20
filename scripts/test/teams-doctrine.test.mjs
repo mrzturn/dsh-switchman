@@ -5,9 +5,9 @@
  *  — teams were the constraint-triggered exception path), and the OFF
  *  path still renders ZERO bytes on every assembly and the DSH factory
  *  conservative team policy takes over; (2) the ON-mode doctrine is the
- *  `## 一` delegation block + the teams clauses, both extracted verbatim
+ *  `## 1` delegation block + the teams clauses, both extracted verbatim
  *  from the cordis.patch.yml persona-suffix anchor — the byte snapshots
- *  below copy the pre-change text so any accidental rewrite fails loudly;
+ *  below copy the current English doctrine text so any accidental rewrite fails loudly;
  *  (3) with the constraint layer ON, only a §4.4.1 structural-tag
  *  conjunction (≥2 of parallelizable / permission_boundary / capability_gap)
  *  suggests a resident team — a miss keeps stateless subagents + on-demand
@@ -35,30 +35,30 @@ import { recordClassifierConstraints } from "../../host/constraints.js";
 const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..");
 
 // ---- pinned doctrine lines -------------------------------------------------
-// LEGACY_DELEGATION_LINES reproduce the "## 一" block verbatim as it stood
+// LEGACY_DELEGATION_LINES reproduce the "## 1" delegate-by-default block verbatim
 // in the pre-§4.4 cordis.patch.yml suffix. LEGACY_TEAMS_LINES pin the
 // legacy-mode output: the HEAD teams section plus the one appended
 // §4.4.2 spawn-reason clause — not the raw pre-change yaml text.
 
 const LEGACY_DELEGATION_LINES = [
-	"## 一、默认委派，例外亲做（delegate by default）",
-	"- 委派只消耗一个全新子上下文、只收回一份摘要；亲自读写每一份都会膨胀本会话上下文，长期更贵。长或重的上下文偏向委派，琐碎小事留在手里。",
-	"- 仅当满足全部条件才亲自做：认知负载低或中、读取合计 <200 行、改动 <50 行；强迭代小步试错（每步都要立刻用上一步结果）；期望收益 <3k token 的收尾。",
-	"- 位置不确定的检索、跨多文件调查、大范围重构、独立研究或方案对比：一律委派，侦察优先派 economy 泳道。",
-	"- 任务开始时判断一次，中途规模或结构变化时重做；结论不必请示用户。",
+	"## 1. Delegate by Default, Act Directly Only as the Exception",
+	"- Delegation spends one fresh child context and returns one summary; reading and writing everything yourself bloats this session's context — costlier in the long run. Long or heavy context leans toward delegation; trivial items stay in hand.",
+	"- Act directly only when ALL hold: cognitive load low or medium, total reading <200 lines, change <50 lines; tight iterate-and-probe loops (each step immediately consumes the previous result); finishing touches with expected payoff <3k tokens.",
+	"- Searches with uncertain location, multi-file investigations, large refactors, independent research, or option comparisons: always delegate; recon goes to the economy lane first.",
+	"- Judge once at task start; redo when scale or structure changes mid-task; conclusions need no user sign-off.",
 ];
 const LEGACY_TEAMS_LINES = [
-	"[SWITCHMAN:TEAMS] Agent Teams 模式已启用。本段是 persona suffix 调度规程动态注入的团队分支（编号续接其「四、边界」）。",
+	"[SWITCHMAN:TEAMS] Agent Teams mode enabled. This section is the team branch dynamically injected from the persona-suffix doctrine (numbering continues from Section 4).",
 	"",
-	"系统提示词前文的默认团队策略写的是「仅当用户明确要求时才创建 teammate」。该默认策略在当前 profile 下不适用：用户安装 dsh-switchman 即预先授权，你应当自主判断、自主触发，无需再询问用户。",
+	"The default team policy earlier in the system prompt says to create teammates only when the user explicitly asks. That default does not apply in the current profile: installing dsh-switchman pre-authorizes it — judge and trigger autonomously, without asking the user again.",
 	"",
-	"## 五、团队触发与协作纪律",
-	"- 派发通道优先级（取代前文「一次性、无需共享状态的单点调查用 subagent」的默认分工）：本会话工具目录里有 spawn_teammate/list_agents（Agent Teams 已启用）时，一切子任务委派默认走 Agent Teams——spawn_teammate 组队、team_task_* 落共享任务板、send_message/wait_agent 协作；subagent/subagent_fork 单智能体派发退为后备通道，仅在本条下一条所述的不可用场景使用。",
-	"- teams 不可用即降级，不重试：工具目录没有 spawn_teammate/list_agents（bundle 未生效或本会话不支持），或 spawn_teammate 报 provisioning failed / 创建失败时，直接改用 subagent/subagent_fork 派发并继续工作，不要反复重试 teams 通道。你自身是 teammate（非 Lead）时维持原规则：不 spawn_teammate，需要子委派时用 subagent。workflow 仅在用户明确要求工作流或脚本化大规模编排时使用，默认不主动使用。",
-	"- 写作域隔离：共享任务上写明互不重叠的 write_scopes；用 team_task_* 维护任务板与依赖顺序；Lead 汇总最终 diff、复核关键改动并运行测试；用 wait_agent 等到必需的 teammate 完成，绝不在结果未回前下最终结论。",
-	"- 子智能体消息通道：subagent/workflow 返回的子会话 id 只能经 child_message 桥接送达——send_message 只解析 teammate 名字，对子会话 id 必报 active teammate「…」not found；该报错不代表子会话死亡，先改用 child_message，不要据此重派或判定死亡。",
-	"- run_code 并行隔离：spawn_teammate / send_message 这类会改变团队环境（成员目录、工具表）的调用不要与文件/搜索工具放进同一 run_code 程序里 Promise.all 并行——并发窗口内其它工具绑定可能误报 unknown tool「…」（UNKNOWN_TOOL）；让这类调用单独占一步执行。某工具此前可用却突然报 UNKNOWN_TOOL 时，下一步原样重试即可，不要换工具名或放弃任务。",
-	"- 常驻成员先声明约束理由（advisory 软约束）：spawn_teammate 前声明触发了哪条约束标签（如「命中 parallelizable + permission_boundary」）；约束层未启用（无 [SWITCHMAN:CONSTRAINTS] 行）时改为声明不可替代的结构性理由（并行独立子任务 / 权限隔离 / 持续协作）。缺失声明不拦截派发——本条只是声明要求，不改变 spawn 通道可用性。",
+	"## 5. Team Trigger & Collaboration Discipline",
+	"- Dispatch-channel priority (replacing the earlier default split of 'one-shot, no-shared-state single investigations go to subagent'): when this session's tool catalog has spawn_teammate/list_agents (Agent Teams enabled), ALL child delegation defaults to Agent Teams — spawn_teammate to assemble, team_task_* on the shared board, send_message/wait_agent to collaborate; stateless subagent/subagent_fork falls back to the backup channel, used only in the unavailable scenarios described in the next clause.",
+	"- Teams unavailable → fall back immediately, never retry: without spawn_teammate/list_agents in the tool catalog (bundle inactive or unsupported in this session), or when spawn_teammate reports provisioning failed / creation failure, switch directly to subagent/subagent_fork dispatch and keep working; do not repeatedly retry the teams channel. As a teammate yourself (not Lead), keep the original rule: no spawn_teammate; use subagent when you need to delegate downward. workflow is only for explicitly requested workflows or scripted large-scale orchestration — never by default.",
+	"- Write-domain isolation: declare non-overlapping write_scopes on shared tasks; keep the task board and dependency order via team_task_*; the Lead assembles the final diff, re-checks key changes, and runs tests; use wait_agent until required teammates finish — never conclude before results return.",
+	"- Subagent message channel: child session ids returned by subagent/workflow are reachable only through the child_message bridge — send_message resolves TEAMMATE NAMES only and reports active teammate '…' not found for any child session id; that error does NOT mean the child died. Switch to child_message before re-dispatching or declaring death.",
+	"- run_code parallel isolation: calls that mutate the team environment (member roster, tool table) — spawn_teammate / send_message — must not run Promise.all-parallel with file/search tools inside one run_code program; during the concurrency window other tool bindings may misreport unknown tool '…' (UNKNOWN_TOOL). Let such calls occupy their own step. When a previously working tool suddenly reports UNKNOWN_TOOL, retry the same call verbatim on the next step — do not switch tool names or abandon the task.",
+	"- Resident members declare their constraint rationale first (advisory soft rule): before spawn_teammate, declare which constraint tag fired (e.g. 'hit parallelizable + permission_boundary'); when the constraint layer is off (no [SWITCHMAN:CONSTRAINTS] line), declare the irreplaceable structural reason instead (parallel independent subtasks / permission isolation / sustained collaboration). A missing declaration never blocks dispatch — this clause is a declaration requirement only; it does not change spawn-channel availability.",
 ];
 /** Byte snapshot of the whole legacy ON-mode doctrine body. */
 const LEGACY_DOCTRINE = [...LEGACY_DELEGATION_LINES, "", ...LEGACY_TEAMS_LINES].join("\n");
@@ -128,12 +128,12 @@ test("teamsMode OFF renders zero bytes on every assembly (delegation gone too)",
 
 test("persona suffix no longer carries the delegate-by-default block", () => {
 	const yaml = readFileSync(join(ROOT, "cordis.patch.yml"), "utf8");
-	assert.ok(!yaml.includes("## 一、默认委派"), "delegation heading extracted from the yaml");
+	assert.ok(!yaml.includes("## 1. Delegate by Default"), "delegation heading extracted from the yaml");
 	assert.ok(!yaml.includes("delegate by default"), "no delegation text left in the yaml");
 	// The rest of the doctrine is untouched: the boundary rule survives verbatim
 	// (the user override always wins — guide risk table, manual /team path).
-	assert.ok(yaml.includes("该即时要求优先于本段"), "immediate-exit rule preserved");
-	assert.ok(yaml.includes("## 二、编排与 token 纪律"), "following doctrine heading intact");
+	assert.ok(yaml.includes("that immediate request overrides this section"), "immediate-exit rule preserved");
+	assert.ok(yaml.includes("## 2. Orchestration"), "following doctrine heading intact");
 });
 
 // ---- 4. legacy ON (constraint layer off): byte-identical fallback -----------------
@@ -156,14 +156,14 @@ test("structural conjunction hit (≥2 tags) swaps the trigger lines to the team
 	const { ctx } = fakeApplyHost();
 	const section = mount(ctx, cfg(true, true));
 	const text = section.text({ agent: AGENT("s-hit") });
-	assert.ok(text.includes("[SWITCHMAN:CONSTRAINTS] 命中团队约束组合（parallelizable + permission_boundary）"));
-	assert.ok(text.includes("默认走 Agent Teams"), "hit variant keeps the teams-first channel");
+	assert.ok(text.includes("[SWITCHMAN:CONSTRAINTS] Team-constraint combination hit (parallelizable + permission_boundary)"));
+	assert.ok(text.includes("child delegation defaults to Agent Teams"), "hit variant keeps the teams-first channel");
 	// The delegation block and every fixed discipline clause survive verbatim.
 	assert.ok(text.startsWith(DELEGATION_SECTION_TEXT + "\n\n"));
 	for (const line of LEGACY_TEAMS_LINES.slice(7)) {
 		assert.ok(text.includes(line), "discipline clause preserved verbatim");
 	}
-	assert.ok(text.includes("常驻成员先声明约束理由"), "spawn-justification clause present");
+	assert.ok(text.includes("Resident members declare their constraint rationale"), "spawn-justification clause present");
 });
 
 test("three-tag hit lists the whole conjunction in the trigger line", () => {
@@ -176,7 +176,7 @@ test("three-tag hit lists the whole conjunction in the trigger line", () => {
 	const { ctx } = fakeApplyHost();
 	const section = mount(ctx, cfg(true, true));
 	const text = section.text({ agent: AGENT("s-hit3") });
-	assert.ok(text.includes("（parallelizable + permission_boundary + capability_gap）"));
+	assert.ok(text.includes("(parallelizable + permission_boundary + capability_gap)"));
 });
 
 // ---- 6. miss: stateless subagents + on-demand skills stay the default path --------
@@ -185,19 +185,18 @@ test("no recorded tags renders the miss variant, never the unconditional trigger
 	const { ctx } = fakeApplyHost();
 	const section = mount(ctx, cfg(true, true));
 	const text = section.text({ agent: AGENT("s-miss-empty") });
-	assert.ok(text.includes("未命中团队约束组合"), "miss intro present");
-	assert.ok(text.includes("无状态 subagent / subagent_fork 单次派发加按需 skill 是默认委派路径"), "default path restated");
-	assert.ok(!text.includes("一切子任务委派默认走 Agent Teams"), "unconditional teams trigger is gone");
-	assert.ok(text.includes("仅当用户在会话中明确要求时使用"), "manual override path preserved");
+	assert.ok(text.includes("No team-constraint combination hit"), "miss intro present");
+	assert.ok(text.includes("stateless subagent / subagent_fork single dispatch plus on-demand skills is the default delegation path"), "default path restated");
+	assert.ok(!text.includes("ALL child delegation defaults to Agent Teams"), "unconditional teams trigger is gone");
+	assert.ok(text.includes("only when the user explicitly asks in conversation"), "manual override path preserved");
 });
-
 test("non-structural classifier hits (pressure only) still render the miss variant", () => {
 	recordClassifierConstraints("s-miss2", "s-miss2:no-user", ["context_pressure", "skill_match"]);
 	const { ctx } = fakeApplyHost();
 	const section = mount(ctx, cfg(true, true));
 	const text = section.text({ agent: AGENT("s-miss2") });
-	assert.ok(text.includes("未命中团队约束组合"));
-	assert.ok(!text.includes("[SWITCHMAN:CONSTRAINTS] 命中团队约束组合"), "no hit intro");
+	assert.ok(text.includes("No team-constraint combination hit"));
+	assert.ok(!text.includes("[SWITCHMAN:CONSTRAINTS] Team-constraint combination hit"), "no hit intro");
 });
 
 // ---- 7. the pure hit predicate -----------------------------------------------------
@@ -227,7 +226,7 @@ test("spawn-justification clause is present and explicitly advisory in all three
 	const hit = teamsDoctrineText({ constraintsEnabled: true, hitTags: ["parallelizable", "capability_gap"] });
 	const miss = teamsDoctrineText({ constraintsEnabled: true, hitTags: [] });
 	for (const text of [legacy, hit, miss]) {
-		assert.ok(text.includes("常驻成员先声明约束理由（advisory 软约束）"), "clause present");
-		assert.ok(text.includes("缺失声明不拦截派发"), "advisory, not a hard gate");
+		assert.ok(text.includes("Resident members declare their constraint rationale first (advisory soft rule)"), "clause present");
+		assert.ok(text.includes("never blocks dispatch"), "advisory, not a hard gate");
 	}
 });
