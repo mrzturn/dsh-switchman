@@ -990,7 +990,7 @@ export function applyContextTrim(ctx, config) {
 	const reliefEnabledNow = () => readBool(config, "trimCriticalRelief", true);
 	const thresholdsNow = () => ({
 		growthTokens: readNumber(config, "trimGrowthTokens", 22_500),
-		incrementTokens: readNumber(config, "trimIncrementTokens", 45_000),
+		incrementTokens: readNumber(config, "trimIncrementTokens", 55_000),
 		// Count-typed fields integerize here (Math.round): the schema allows
 		// decimals (z.number()), but trigger.js gates them with Number.isInteger
 		// — a non-integer config value would otherwise fall back to the

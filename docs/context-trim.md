@@ -241,21 +241,21 @@ any fold; they fire only when the raw tiers stay quiet.
 
 | Gate / constant | Value | Code | Notes |
 | --- | --- | --- | --- |
-| Growth anchor | `max(view, wire) − lastFoldLowTokens > 22500` | eval `trigger.js:196-207` (anchor fields `trigger.js:203-205`, written `state.js:502`); defaults `index.js:479`, `config.js:249` | strict `>` |
-| Foldable-increment floor | contiguous increment ≥ 45000 | `trigger.js:198`, `index.js:480`, `config.js:252` | binds first in practice |
-| Pressure tier | usage ≥ 45% of window (90k of 200k) | `trigger.js:189-195`, `index.js:481`, `config.js:254` | side-model fold |
-| Emergency tier | usage ≥ 90% (180k of 200k) | `trigger.js:141-147`, `index.js:482`, `config.js:256` | mechanical fold, no side-model call |
-| Emergency cooldown | 90 s | `trigger.js:41` `EMERGENCY_COOLDOWN_MS` | also applies to a rejected emergency commit |
-| Min interval, side-model folds | 60 s | `trigger.js:38` `FOLD_MIN_INTERVAL_MS` | |
-| Hourly cap | 30 side-model folds per rolling hour | `trigger.js:130-132`, `config.js:277` | emergency exempt: evaluated before the cap AND before the 60 s min-interval (it has its own 90 s cooldown) |
-| Protected tail | 10 messages | `trigger.js:56-59`, `config.js:270` | never folded |
+| Growth anchor | `max(view, wire) − lastFoldLowTokens > 22500` | eval `trigger.js:234-246` (anchor fields `trigger.js:238-242`, written `state.js:502`); defaults `context-trim/index.js:992`, `config.js:376` | strict `>` |
+| Foldable-increment floor | contiguous increment ≥ 55000 | `trigger.js:228, 245`, `context-trim/index.js:993`, `config.js:383` | binds first in practice |
+| Pressure tier | usage ≥ 45% of window (90k of 200k) | `trigger.js:211-215`, `context-trim/index.js:998`, `config.js:386` | side-model fold |
+| Emergency tier | usage ≥ 90% (180k of 200k) | `trigger.js:159-166, 206`, `context-trim/index.js:999`, `config.js:389` | mechanical fold, no side-model call |
+| Emergency cooldown | 90 s | `trigger.js:17` `EMERGENCY_COOLDOWN_MS` | also applies to a rejected emergency commit |
+| Min interval, side-model folds | 60 s | `trigger.js:14` `FOLD_MIN_INTERVAL_MS` | |
+| Hourly cap | 30 side-model folds per rolling hour | `trigger.js:156-157`, `context-trim/index.js:1001`, `config.js:446` | emergency exempt: evaluated before the cap AND before the 60 s min-interval (it has its own 90 s cooldown) |
+| Protected tail | 6 messages | `trigger.js:67-69`, `context-trim/index.js:1000`, `config.js:439` | never folded |
 | Window | model-resolved (200000 for deepseek-flash), capped by `trimWindowTokens` (0 ⇒ `wmForceTokens`) | `index.js:525-530`, `index.js:548-568` | `null` disables pressure/emergency tiers |
-| Advisory nudge lines | speak ≥ `trimAdvisoryPercent` (50), re-speak ≥ `trimAdvisoryCriticalPercent` (80); inverted/out-of-range pair ⇒ fall back to 50/80 | `index.js:286-297`, `config.js:273-277` | advisory mode only; same-band 10-min throttle `ADVISORY_NUDGE_REPEAT_MS` |
+| Advisory nudge lines | speak ≥ `trimAdvisoryPercent` (50), re-speak ≥ `trimAdvisoryCriticalPercent` (80); inverted/out-of-range pair ⇒ fall back to 50/80 | `context-trim/index.js:369-370, 386-387`, `config.js:393-397` | advisory mode only; same-band 10-min throttle `ADVISORY_NUDGE_REPEAT_MS` |
 | Fold-failure backoff | 60 s × 2^(n−1), 15 min ceiling | `index.js:323-324` | failures advance no cadence gate |
 
 Which gate binds: at the 200k force window the 45% pressure line (90k wire) sits well
-above the ~49-51k wire point where the growth gate's 45000 increment is reached, so
-growth fires first in the normal case and pressure pins the ceiling. The 45000
+above the ~59-61k wire point where the growth gate's 55000 increment is reached, so
+growth fires first in the normal case and pressure pins the ceiling. The 55000
 increment floor is the binding constraint, not the 22500 growth delta.
 
 ### Reading trim percentages next to the DSH context panel

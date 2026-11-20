@@ -663,7 +663,7 @@
         trimEnabled: true
         trimMode: auto
         trimGrowthTokens: 22500
-        trimIncrementTokens: 45000
+        trimIncrementTokens: 55000
         trimPressurePercent: 45
         trimEmergencyPercent: 90
         trimAdvisoryPercent: 50

@@ -160,7 +160,7 @@ export function evaluateTrigger(input) {
 		const { startIdx, endIdx } = foldable;
 		// Tier c — emergency: window pressure, mechanical, cooldown-gated.
 		const windowTokens = Number.isFinite(input?.windowTokens) && input.windowTokens > 0 ? input.windowTokens : null;
-		const emergencyPercent = Number.isFinite(thresholds.emergencyPercent) && thresholds.emergencyPercent > 0 ? thresholds.emergencyPercent : 95;
+		const emergencyPercent = Number.isFinite(thresholds.emergencyPercent) && thresholds.emergencyPercent > 0 ? thresholds.emergencyPercent : 90;
 		if (windowTokens !== null) {
 			const usagePct = (input.viewTokens / windowTokens) * 100;
 			if (usagePct >= emergencyPercent) {
@@ -208,7 +208,7 @@ export function evaluateTrigger(input) {
 		}
 		if (!hourlyBlocked && now - lastFoldAt >= FOLD_MIN_INTERVAL_MS) {
 			// Tier b — pressure: soft window threshold, side-model.
-			const pressurePercent = Number.isFinite(thresholds.pressurePercent) && thresholds.pressurePercent > 0 ? thresholds.pressurePercent : 65;
+			const pressurePercent = Number.isFinite(thresholds.pressurePercent) && thresholds.pressurePercent > 0 ? thresholds.pressurePercent : 45;
 			if (windowTokens !== null) {
 				const usagePct = (input.viewTokens / windowTokens) * 100;
 				if (usagePct >= pressurePercent) {
@@ -225,7 +225,7 @@ export function evaluateTrigger(input) {
 			// trimGrowthTokens of accumulation. Shares the growth tier's
 			// increment gate so a tiny foldable increment can never drive a
 			// budget fold alone (no churn).
-			const incrementGate = Number.isFinite(thresholds.incrementTokens) && thresholds.incrementTokens > 0 ? thresholds.incrementTokens : 25_000;
+			const incrementGate = Number.isFinite(thresholds.incrementTokens) && thresholds.incrementTokens > 0 ? thresholds.incrementTokens : 55_000;
 			const budgetTarget = Number.isFinite(thresholds.budgetTarget) && thresholds.budgetTarget > 0 ? thresholds.budgetTarget : null;
 			if (budgetTarget !== null && input.viewTokens > budgetTarget && incrementTokens >= incrementGate) {
 				return { action: "fold", kind: "raw", tier: "budget", reason: `mass ~${Math.round(input.viewTokens)} > budget ~${Math.round(budgetTarget)} and increment ~${incrementTokens} >= ${incrementGate}`, startIdx, endIdx, incrementTokens, consumes: null };
