@@ -7,12 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 格式参照 Keep a Changelog;版本遵循语义化版本。
 ## [Unreleased]
 
+## [1.11.9] — 2026-11-20
+
+
 ### Changed
 
 - Factory defaults promoted to the maintainer-desktop calibration: twelve non-model switches default on (handoff split, cost profile, trim budget gates, dynamic watermark + cache-adaptive, teams mode, constraints, pool feedback, dispatch stats, pool differentiation, trim verbose log) and `trimIncrementTokens` 45000 → 55000.
 - 出厂默认晋升为维护者桌面校准值：12 个非模型开关默认开（handoff split、cost profile、trim budget gates、动态水印 + cache-adaptive、teams mode、constraints、pool feedback、dispatch stats、pool differentiation、trim verbose log），`trimIncrementTokens` 45000 → 55000。
 - Documentation and seed mirrors caught up with the promotion: the preset patch seed's `trimIncrementTokens` moves to 55000, the trim loop's fail-open fallbacks (increment 25000/45000 → 55000, pressure 65 → 45, emergency 95 → 90) match the schema again, all eleven READMEs flip the Agent Teams "off by default" copy to on-by-default and the increment figures to 55000, and docs/context-trim.md's gate table is recalibrated (values + current config.js line refs). A new parity test (`preset-patch-parity.test.mjs`) pins the patch seed and every trim fallback to the schema defaults so these mirrors cannot drift silently again.
 - 文档与种子镜像跟上晋升：预设补丁种子的 `trimIncrementTokens` → 55000；trim 循环的 fail-open 兜底（increment 25000/45000 → 55000、pressure 65 → 45、emergency 95 → 90）重新与 schema 对齐；11 个语言版 README 的 Agent Teams「默认关闭」文案翻转为默认开、增量数字改 55000；docs/context-trim.md 闸门表重新校准（数值 + 最新 config.js 行号引用）。新增 parity 测试（`preset-patch-parity.test.mjs`）把 patch 种子与全部 trim 兜底钉在 schema 默认值上，杜绝再次静默漂移。
+
+### Fixed
+
+- All eleven READMEs and docs/context-trim.md realigned with actual behavior (audited against `host/config.js`, `host/context-trim/`, the client settings page and the real npm pack): the trim tier count (three → four tiers plus the 55000-token budget line), the enforcement enum (`off`/`advice`/`force`, not "auto"), the classifier kinds (`chat` / `systemone`), the ✕ reorder button, the localized "Switchman" sidebar label, the measured wire sawtooth on the 150k window (≈97.5k ↔ ~25k), the advisory nudge throttles (120 s default / 45 s critical band, `trimAdvisoryRepeatMs`), the pack shape (72 files / 550 kB / 1.7 MB unpacked) and the protocol-line tag list (14 tags, CONSTRAINTS included).
+- 11 个语言版 README 与 docs/context-trim.md 与实际行为对齐（对照 `host/config.js`、`host/context-trim/`、客户端设置页与真实 npm pack 审计）：trim 档数（三档 → 四档 + 55000-token 预算线）、enforce 枚举（`off`/`advice`/`force`，而非 "auto"）、分类器类型（`chat` / `systemone`）、✕ 排序按钮、侧栏 "Switchman" 本地化 label、150k 窗实测锯齿口径（≈97.5k ↔ ~25k）、建议提示节流（默认 120 秒 / critical 档 45 秒，`trimAdvisoryRepeatMs`）、pack 形状（72 文件 / 550 kB / 1.7 MB unpacked）、协议行 tag 清单（14 tag，含 CONSTRAINTS）。
 
 ## [1.11.8] — 2026-11-17
 
