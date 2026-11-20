@@ -312,6 +312,8 @@ window.__ModuleLoader__.load({
 			{ field: 'trimLadderT2MinBlocks', min: 2, max: 200, def: 3 },
 			{ field: 'trimLadderT3Tokens', min: 1000, def: 6000 },
 			{ field: 'trimLadderT3MinBlocks', min: 2, max: 200, def: 2 },
+			// §4.6 budget tier ratio — mirrors host/routes.js TRIM_NUMBER_FIELDS.
+			{ field: 'compressBudgetRatio', min: 0.1, max: 0.9, def: 0.5 },
 		];
 
 		/** Dictionary keys per numeric trim row. */
@@ -369,6 +371,10 @@ window.__ModuleLoader__.load({
 				label: 'trimLadderT3MinBlocksLabel',
 				help: 'trimLadderT3MinBlocksHelp',
 			},
+			compressBudgetRatio: {
+				label: 'compressBudgetRatioLabel',
+				help: 'compressBudgetRatioHelp',
+			},
 		};
 
 		/** Every settings field this page edits, in mutate order. */
@@ -387,10 +393,14 @@ window.__ModuleLoader__.load({
 			'wmSubagentCap',
 			'wmDynamicEnabled',
 			'wmCacheAdaptive',
+			// Promoted config-only gray-release switches (2026-11-20).
+			'wmHandoffSplit',
+			'costProfileEnabled',
 			// Context trim (design: context-trim-port-design.md).
 			'trimMode',
 			'trimEnabled',
 			'trimLadderEnabled',
+			'trimBudgetEnabled',
 			'trimProtectTaskIntent',
 			'trimCriticalRelief',
 			'trimVerboseLog',
@@ -577,12 +587,15 @@ window.__ModuleLoader__.load({
 				wmSubagentCap: bool('wmSubagentCap', true),
 				wmDynamicEnabled: bool('wmDynamicEnabled', false),
 				wmCacheAdaptive: bool('wmCacheAdaptive', false),
+				wmHandoffSplit: bool('wmHandoffSplit', false),
+				costProfileEnabled: bool('costProfileEnabled', false),
 				// Context trim (design: context-trim-port-design.md).
 				trimMode: TRIM_MODES.includes(value?.trimMode)
 					? value.trimMode
 					: 'auto',
 				trimEnabled: bool('trimEnabled', true),
 				trimLadderEnabled: bool('trimLadderEnabled', true),
+				trimBudgetEnabled: bool('trimBudgetEnabled', false),
 				trimProtectTaskIntent: bool('trimProtectTaskIntent', true),
 				trimCriticalRelief: bool('trimCriticalRelief', true),
 				trimVerboseLog: bool('trimVerboseLog', false),
@@ -679,9 +692,12 @@ window.__ModuleLoader__.load({
 				wmSubagentCap: values.wmSubagentCap,
 				wmDynamicEnabled: values.wmDynamicEnabled,
 				wmCacheAdaptive: values.wmCacheAdaptive,
+				wmHandoffSplit: values.wmHandoffSplit,
+				costProfileEnabled: values.costProfileEnabled,
 				trimMode: values.trimMode,
 				trimEnabled: values.trimEnabled,
 				trimLadderEnabled: values.trimLadderEnabled,
+				trimBudgetEnabled: values.trimBudgetEnabled,
 				trimProtectTaskIntent: values.trimProtectTaskIntent,
 				trimCriticalRelief: values.trimCriticalRelief,
 				trimVerboseLog: values.trimVerboseLog,
@@ -988,6 +1004,12 @@ window.__ModuleLoader__.load({
 				wmCacheAdaptiveLabel: '缓存窗口自适应（P90）',
 				wmCacheAdaptiveHelp:
 					'开启后（需先开动态水位）按最近轮距间隔的 P90 自适应缓存窗口，夹在 60s–600s 厂商安全边界内，样本不足时回退 300s；结果只写入宿主日志，不进入模型注入。',
+				wmHandoffSplitLabel: '交接文档拆分（必写/可选）',
+				wmHandoffSplitHelp:
+					'把交接文档拆成必写的 handoff_min（目标、状态、下一步、关键文件/命令、存活子智能体 id 与回报路径）与可选的 handoff_full 附录（成本画像、决策历史、悬而未决的问题）；全部跳过也不阻塞交接。关闭 = 原单文档行为。',
+				costProfileEnabledLabel: '预填实测成本画像',
+				costProfileEnabledHelp:
+					'开启后（需先开上方交接拆分与自动裁剪）handoff_full 附录预填实测的单会话成本画像（轮数、token、缓存命中占比、头部池/模型占比）；无法度量的维度只写一行说明，不做估算。灰度开关：默认关闭。',
 				// Constraint recognition (guide §4.1/§4.2).
 				constraintsSectionTitle: '约束识别与技能注解',
 				constraintsSectionDescription:
@@ -1035,6 +1057,8 @@ window.__ModuleLoader__.load({
 				trimEnabledHelp: '上下文裁剪层的总开关。',
 				trimLadderEnabledLabel: '阶梯折叠（T1/T2/T3）',
 				trimLadderEnabledHelp: '把累积的 T1 摘要再蒸馏为 T2、T2 再凝聚为 T3，让长会话视图保持平稳。',
+				trimBudgetEnabledLabel: '按预算压缩折叠量',
+				trimBudgetEnabledHelp: '在压力与增长档之间加一个绝对压缩目标档：目标 = min(池预算, 当前上下文 × 折叠比例)，advisory 提醒的折叠深度沿用同一比例。关闭（或输入不可用）= 失败开放，与功能上线前行为一致。',
 				trimProtectTaskIntentLabel: '保护任务意图',
 				trimProtectTaskIntentHelp: '第一条 user 消息（任务意图）永不折叠。关闭后它可进入折叠范围。',
 				surfaceFoldLabel: '把折叠写入会话表面',
@@ -1052,6 +1076,8 @@ window.__ModuleLoader__.load({
 				trimProtectedTailHelp: '最后 N 条消息永不折叠。',
 				trimMaxFoldsPerHourLabel: '每小时折叠上限',
 				trimMaxFoldsPerHourHelp: '带模型调用的折叠节奏上限（紧急机械折叠不受限）。',
+				compressBudgetRatioLabel: '预算折叠比例（0.1–0.9）',
+				compressBudgetRatioHelp: '预算档与 advisory 提醒的折叠深度：压缩目标 = 当前上下文 × 比例，下限为池预算。0.5 保持默认提醒文案（“低于约 50%”）不变。',
 				trimLadderT2TokensLabel: '阶梯 T2 质量（token）',
 				trimLadderT2TokensHelp: 'T1 摘要总质量达到该值后蒸馏为一个 T2。',
 				trimLadderT2MinBlocksLabel: '阶梯 T2 块数',
@@ -1308,6 +1334,12 @@ window.__ModuleLoader__.load({
 				wmCacheAdaptiveLabel: 'Adaptive cache window (P90)',
 				wmCacheAdaptiveHelp:
 					'When on (requires the dynamic watermark above), the cache TTL feeding the cost signal becomes the P90 of recent turn gaps, clamped to a 60s–600s vendor-safety envelope, falling back to the fixed 300s without enough samples; results go to the host log only, never into model injection.',
+				wmHandoffSplitLabel: 'Handover doc split (min/full)',
+				wmHandoffSplitHelp:
+					'Split the handover document into a required handoff_min (goal, status, next steps, key files/commands, live subagent ids + report paths) and an optional handoff_full appendix (cost profile, decision history, open questions); skipping it never blocks the handover. Off = the legacy single document.',
+				costProfileEnabledLabel: 'Pre-fill measured cost profile',
+				costProfileEnabledHelp:
+					'When on (requires the handover split above and auto-trim on), the handoff_full appendix is pre-filled with a measured per-session cost profile (turns, tokens, cache-hit share, top pool/model shares); dimensions that cannot be measured are stated in one line instead of estimated. Gray-release: default off.',
 				// Constraint recognition (guide §4.1/§4.2).
 				constraintsSectionTitle: 'Constraint recognition & skill annotations',
 				constraintsSectionDescription:
@@ -1356,6 +1388,8 @@ window.__ModuleLoader__.load({
 				trimLadderEnabledLabel: 'Ladder folding (T1/T2/T3)',
 				trimLadderEnabledHelp:
 					'Distill accumulated T1 summaries into T2, and T2 into T3, keeping long sessions flat.',
+				trimBudgetEnabledLabel: 'Compress by budget',
+				trimBudgetEnabledHelp: 'Adds an absolute compress target of min(pool target, current × ratio) as an extra fold tier between pressure and growth; the advisory nudge depth follows the same ratio. Off (or unusable inputs) = fail-open, exactly the pre-feature behavior.',
 				trimProtectTaskIntentLabel: 'Protect task intent',
 				trimProtectTaskIntentHelp: 'When on (default), the first user message (task intent) stays out of the automatic fold range. Turn off to let it fold like any other content.',
 				surfaceFoldLabel: 'Ship folds to the session surface',
@@ -1375,6 +1409,8 @@ window.__ModuleLoader__.load({
 				trimProtectedTailHelp: 'The last N messages are never folded.',
 				trimMaxFoldsPerHourLabel: 'Max folds per hour',
 				trimMaxFoldsPerHourHelp: 'Cadence cap for side-model folds (emergency mechanical folds exempt).',
+				compressBudgetRatioLabel: 'Budget fold ratio (0.1–0.9)',
+				compressBudgetRatioHelp: 'Fold-down depth for the budget tier and the advisory nudge: compress target = current × ratio, floored at the pool budget. 0.5 keeps the default nudge text (“under ~50%”) unchanged.',
 				trimLadderT2TokensLabel: 'Ladder T2 mass (tokens)',
 				trimLadderT2TokensHelp:
 					'Distill T1 summaries into one T2 once their combined mass reaches this.',
@@ -5928,9 +5964,12 @@ window.__ModuleLoader__.load({
 				wmSubagentCap: values.wmSubagentCap,
 				wmDynamicEnabled: values.wmDynamicEnabled,
 				wmCacheAdaptive: values.wmCacheAdaptive,
+				wmHandoffSplit: values.wmHandoffSplit,
+				costProfileEnabled: values.costProfileEnabled,
 				trimMode: values.trimMode,
 				trimEnabled: values.trimEnabled,
 				trimLadderEnabled: values.trimLadderEnabled,
+				trimBudgetEnabled: values.trimBudgetEnabled,
 				trimProtectTaskIntent: values.trimProtectTaskIntent,
 				trimCriticalRelief: values.trimCriticalRelief,
 				trimVerboseLog: values.trimVerboseLog,
@@ -7525,6 +7564,40 @@ window.__ModuleLoader__.load({
 							lines: [],
 						}),
 						h(SettingsRow, {
+							key: 'wmHandoffSplit',
+							id: `${wmId}-split`,
+							label: t('wmHandoffSplitLabel'),
+							help: t('wmHandoffSplitHelp'),
+							control: h('input', {
+								type: 'checkbox',
+								id: `${wmId}-split`,
+								checked: values.wmHandoffSplit,
+								onChange: () => {
+									edit('wmHandoffSplit', !values.wmHandoffSplit);
+								},
+								disabled: !editable,
+								style: STYLE.checkbox,
+							}),
+							lines: [],
+						}),
+						h(SettingsRow, {
+							key: 'costProfileEnabled',
+							id: `${wmId}-costprofile`,
+							label: t('costProfileEnabledLabel'),
+							help: t('costProfileEnabledHelp'),
+							control: h('input', {
+								type: 'checkbox',
+								id: `${wmId}-costprofile`,
+								checked: values.costProfileEnabled,
+								onChange: () => {
+									edit('costProfileEnabled', !values.costProfileEnabled);
+								},
+								disabled: !editable,
+								style: STYLE.checkbox,
+							}),
+							lines: [],
+						}),
+						h(SettingsRow, {
 							key: 'wmDynamicEnabled',
 							id: `${wmId}-dynamic`,
 							label: t('wmDynamicEnabledLabel'),
@@ -7650,6 +7723,23 @@ window.__ModuleLoader__.load({
 							checked: values.trimLadderEnabled,
 							onChange: () => {
 								edit('trimLadderEnabled', !values.trimLadderEnabled);
+							},
+							disabled: !editable,
+							style: STYLE.checkbox,
+						}),
+						lines: [],
+					}),
+					h(SettingsRow, {
+						key: 'trimBudgetEnabled',
+						id: `${trimId}-budget`,
+						label: t('trimBudgetEnabledLabel'),
+						help: t('trimBudgetEnabledHelp'),
+						control: h('input', {
+							type: 'checkbox',
+							id: `${trimId}-budget`,
+							checked: values.trimBudgetEnabled,
+							onChange: () => {
+								edit('trimBudgetEnabled', !values.trimBudgetEnabled);
 							},
 							disabled: !editable,
 							style: STYLE.checkbox,

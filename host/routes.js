@@ -139,6 +139,8 @@ const TRIM_NUMBER_FIELDS = [
 	{ field: "trimLadderT3Tokens", min: 1000, max: Number.POSITIVE_INFINITY, def: 6000 },
 	{ field: "trimLadderT3MinBlocks", min: 2, max: 200, def: 2 },
 	{ field: "trimMaxFoldsPerHour", min: 1, max: 60, def: 30 },
+	// §4.6 budget tier ratio — mirrors client.js TRIM_NUMBER_FIELDS.
+	{ field: "compressBudgetRatio", min: 0.1, max: 0.9, def: 0.5 },
 ];
 const BOOLEAN_FIELDS = [
 	"wmAutoHandover",
@@ -146,6 +148,10 @@ const BOOLEAN_FIELDS = [
 	"wmDynamicEnabled",
 	// P2 ③ cache-window adaptive (mirrors host/config.js wmCacheAdaptive).
 	"wmCacheAdaptive",
+	// Promoted config-only gray-release switches (2026-11-20): now on the
+	// client settings page; defaults stay false.
+	"wmHandoffSplit",
+	"costProfileEnabled",
 	// The following six mirror the pool*Manual switches in host/config.js
 	"poolEconomyManual",
 	"poolMechanicalManual",
@@ -171,6 +177,9 @@ const BOOLEAN_FIELDS = [
 	// Context trim switches (mirrors the trim group in host/config.js).
 	"trimEnabled",
 	"trimLadderEnabled",
+	// Promoted config-only gray-release gate (2026-11-20): now on the client
+	// settings page; default stays false (fail-open semantics).
+	"trimBudgetEnabled",
 	"trimProtectTaskIntent",
 	"trimCriticalRelief",
 	"trimVerboseLog",

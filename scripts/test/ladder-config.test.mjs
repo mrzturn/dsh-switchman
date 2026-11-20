@@ -57,6 +57,8 @@ function fullValues(overrides = {}) {
 		wmSubagentWindowRatio: 0.75,
 		wmDynamicEnabled: false,
 		wmCacheAdaptive: false,
+		wmHandoffSplit: false,
+		costProfileEnabled: false,
 		wmDynamicTurnsExpected: 3,
 		wmDynamicLookback: 6,
 		wmDynamicOutPerM: 4,
@@ -75,6 +77,7 @@ function fullValues(overrides = {}) {
 		trimLadderT2MinBlocks: 3,
 		trimLadderT3Tokens: 6000,
 		trimLadderT3MinBlocks: 2,
+		compressBudgetRatio: 0.5,
 		// booleans
 		wmAutoHandover: true,
 		wmSubagentCap: true,
@@ -93,6 +96,7 @@ function fullValues(overrides = {}) {
 		poolDifferentiationEnabled: false,
 		trimEnabled: true,
 		trimLadderEnabled: true,
+		trimBudgetEnabled: false,
 		trimProtectTaskIntent: true,
 		trimCriticalRelief: true,
 	trimVerboseLog: false,
@@ -141,6 +145,12 @@ test("coerceValues round-trips every trim field the client page sends", () => {
 	assert.equal(coerced.trimLadderT3MinBlocks, 2);
 	assert.equal(coerced.wmSubagentWindowRatio, 0.75);
 	assert.equal(coerced.wmCacheAdaptive, false);
+	// Named pins for the promoted gray-release switches: structural
+	// round-trip alone would not catch them dropped from fullValues.
+	assert.equal(coerced.wmHandoffSplit, false);
+	assert.equal(coerced.costProfileEnabled, false);
+	assert.equal(coerced.trimBudgetEnabled, false);
+	assert.equal(coerced.compressBudgetRatio, 0.5);
 	// Trim side routes keep their effort pin through coercion; intent routes
 	// never gain one (cleanIntentRoute strips it).
 	assert.deepEqual(

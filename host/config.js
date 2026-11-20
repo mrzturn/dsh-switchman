@@ -156,10 +156,10 @@ export const Config = z.object({
 	 *  into handoff_min (required, sync: goal, status, next steps, key
 	 *  files/commands, live subagent ids + report paths) and handoff_full
 	 *  (optional append: cost profile, decision history, open questions;
-	 *  writing none of it never blocks). OFF → the legacy document and
-	 *  continuation text byte-identical. Config-only (no client-page row,
-	 *  no routes registration): edited via the DSH native settings UI;
-	 *  settings.update merges, so client-page saves never reset it. */
+	 *  writing none of it never blocks). OFF (default) → the legacy document
+	 *  and continuation text byte-identical. Promoted (2026-11-20): now has a
+	 *  client settings-page row and routes registration; the default stays
+	 *  false, so gray-release semantics are unchanged. */
 	wmHandoffSplit: z.boolean().default(false).volatile(),
 	/** Guide §5 P2 ① cost attribution profile: when ON (and wmHandoffSplit is
 	 *  ON), the handover document's handoff_full cost-profile bullet is
@@ -173,9 +173,9 @@ export const Config = z.object({
 	 *  identical to the pre-P2 template. Needs trimEnabled (the samples come
 	 *  from its stream seam — trim off = no samples = an empty block) and
 	 *  fails open: aggregation errors never block the handover document.
-	 *  Config-only (no client-page row, no routes registration), same as
-	 *  wmHandoffSplit: edited via the DSH native settings UI;
-	 *  settings.update merges, so client-page saves never reset it. */
+	 *  Promoted (2026-11-20): now has a client settings-page row and routes
+	 *  registration, same as wmHandoffSplit; the default stays false and
+	 *  gray-release semantics are unchanged. */
 	costProfileEnabled: z.boolean().default(false).volatile(),
 	/** Cap subagent contexts at wmSubagentForceTokens. */
 	wmSubagentCap: z.boolean().default(true).volatile(),
@@ -466,7 +466,9 @@ export const Config = z.object({
 	 *  nudge's fold-down depth derives from the same ratio (0.5 = today's
 	 *  "under ~50%" text). OFF, or any unusable input → no budget
 	 *  constraint (fail-open = exactly the pre-feature behavior).
-	 *  Config-only (see wmHandoffSplit for why there is no client row). */
+	 *  Promoted (2026-11-20): now also on the client settings page and in
+	 *  routes BOOLEAN_FIELDS; default stays false (fail-open, pre-feature
+	 *  behavior). */
 	trimBudgetEnabled: z.boolean().default(false).volatile(),
 	/** Fold-down depth ratio for the budget tier and the advisory nudge
 	 *  (guide §4.6: compress target = current × ratio, floored at the

@@ -126,3 +126,19 @@ test("dynamic watermark fields are wired on both sides (v1.11 regression guard)"
 		assert.ok(client.has(field), `client.js ALL_FIELDS must include ${field}`);
 	}
 });
+
+test("promoted config-only gray-release fields are wired on both sides", () => {
+	const host = routesFields(routesSrc);
+	const client = clientAllFields(clientSrc);
+	// 2026-11-20 promotion: the three former config-only switches plus the
+	// compressBudgetRatio companion must be coercible AND on the client page.
+	for (const field of [
+		"wmHandoffSplit",
+		"costProfileEnabled",
+		"trimBudgetEnabled",
+		"compressBudgetRatio",
+	]) {
+		assert.ok(host.has(field), `routes.js must register ${field}`);
+		assert.ok(client.has(field), `client.js ALL_FIELDS must include ${field}`);
+	}
+});

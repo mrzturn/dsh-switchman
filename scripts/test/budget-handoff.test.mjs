@@ -9,10 +9,11 @@
  *  3. Handoff instruction three-state snapshots — OFF = legacy bytes
  *     verbatim (zero diff), ON = handoff_min (required) + handoff_full
  *     (optional, skip-without-blocking) content spec.
- *  4. Config-only registration guard — the three new schema fields must
- *     stay OUT of routes.js and client.js (a routes-registered field the
- *     client page never sends 400s every fenced save; see
- *     settings-fields-parity.test.mjs for the routes ⊆ client direction).
+ *  4. Promoted-field registration guard — the four promoted §4.6 fields
+ *     (trimBudgetEnabled, compressBudgetRatio, wmHandoffSplit,
+ *     costProfileEnabled) must stay declared in config.js, registered in
+ *     routes.js, AND wired into client.js — the three lists move together
+ *     (see settings-fields-parity.test.mjs for the routes ⊆ client direction).
  */
 
 import test from "node:test";
@@ -198,19 +199,28 @@ test("handoff split ON → handoff_min (required, sync) + handoff_full (optional
 	assert.match(fill, /Using the compaction summary now in your context/u);
 });
 
-// ------------------------------------------- 4. config-only registration guard
+// ----------------------------------------- 4. promoted-field registration guard
 
-test("the three §4.6 fields live in config.js only — never in routes.js or client.js", () => {
+test("the four promoted §4.6 fields are declared, routed, and client-wired", () => {
 	const configSrc = read("host/config.js");
 	const routesSrc = read("host/routes.js");
 	const clientSrc = read("client.js");
-	for (const field of ["trimBudgetEnabled", "compressBudgetRatio", "wmHandoffSplit"]) {
+	// 2026-11-20 promotion: the former config-only switches now have a client
+	// settings-page row AND routes registration. All three lists must move
+	// together or saves silently drop fields / 400 again (v1.11 bug class).
+	for (const field of [
+		"trimBudgetEnabled",
+		"compressBudgetRatio",
+		"wmHandoffSplit",
+		"costProfileEnabled",
+	]) {
 		assert.match(configSrc, new RegExp(`^\\s*${field}: z\\..*volatile\\(\\),$`, "mu"), `${field} must be declared in host/config.js`);
-		assert.doesNotMatch(routesSrc, new RegExp(field), `${field} must NOT be registered in routes.js (client would 400 every fenced save)`);
-		assert.doesNotMatch(clientSrc, new RegExp(field), `${field} must NOT appear in client.js (lead-forbidden zone)`);
+		assert.match(routesSrc, new RegExp(`["']${field}["']`), `${field} must be registered in routes.js (client-page saves would silently drop it)`);
+		assert.match(clientSrc, new RegExp(field), `${field} must be wired into client.js (ALL_FIELDS / payload / labels)`);
 	}
-	// Exact schema shapes: defaults off/off and the 0.5 ratio with ratio-family bounds.
+	// Exact schema shapes: gray-release defaults stay false ×3, ratio 0.5.
 	assert.match(configSrc, /^\ttrimBudgetEnabled: z\.boolean\(\)\.default\(false\)\.volatile\(\),$/m);
 	assert.match(configSrc, /^\twmHandoffSplit: z\.boolean\(\)\.default\(false\)\.volatile\(\),$/m);
+	assert.match(configSrc, /^\tcostProfileEnabled: z\.boolean\(\)\.default\(false\)\.volatile\(\),$/m);
 	assert.match(configSrc, /^\tcompressBudgetRatio: z\.number\(\)\.min\(0\.1\)\.max\(0\.9\)\.default\(0\.5\)\.volatile\(\),$/m);
 });
