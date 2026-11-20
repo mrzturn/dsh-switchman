@@ -102,12 +102,6 @@
             - Every decision to drop to a weaker model or cheaper verification must be declared explicitly; silently skipping verification is forbidden.
             - Verification order: probe the most uncertain, highest-impact part before spreading out; after two falsified assumptions, switch approach or ask the user — never grind the same path.
 
-            ## Hash-Anchor Edit Discipline (hash-anchor edit tool)
-            - Batched edits only for mutually independent changes: when a later edit references lines that an earlier one creates or modifies, split into separate calls — batch preflight checks each item against the pre-batch snapshot, and intra-batch dependencies are rejected with E_BATCH_ABORT (zero writes for the whole batch; retry split).
-            - Chained edits take new anchors only from the diff returned by the previous successful edit; never reuse old rows from earlier reads.
-            - After bash/git/formatters or any other writer touched a file, read it again before editing (out-of-band writers leave no trace — the main source of stale anchors).
-            - To fix E_STALE_ANCHOR / E_STALE_RANGE / E_BATCH_ABORT: re-read for fresh anchors, split the batch if needed, then retry; never force through by blindly tweaking parameters.
-
             ## 4. Boundaries
             - When the user explicitly says "no team / do it yourself", that immediate request overrides this section.
             - Without Agent Teams tools in the tool catalog, fall back to solo mode silently; do not report a failure.

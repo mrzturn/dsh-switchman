@@ -13,8 +13,7 @@
  *    (26 failures) — the tool wants the field absent, not blank.
  *
  * This layer coerces those shapes BEFORE the tool implementations validate
- * (better-edit's requireViewRange / normalizeEncoding, or the native
- * defineTool INVALID_ARGS check) and before guards/approvals observe the
+ * (the native defineTool INVALID_ARGS check) and before guards/approvals observe the
  * arguments, so the call succeeds transparently instead of burning a retry.
  *
  * Conservative by construction:

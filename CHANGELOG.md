@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 格式参照 Keep a Changelog;版本遵循语义化版本。
 ## [Unreleased]
 
+### Removed
+
+- The preset-patch doctrine suffix drops the "Hash-Anchor Edit Discipline" section: it described the `dsh-better-edit` tool surface (batch_edit, 3-char anchors, `E_*` codes), which is no longer installed in any maintained profile. The native `edit`/`str_replace_editor` fail-closed surface and the [SWITCHMAN:TRIM] fold-anchor protocol are untouched; a native-edit discipline section may follow once the edit-feedback watcher lands.
+- 预设补丁规程 suffix 移除「哈希锚点编辑纪律」一节：其描述的是 `dsh-better-edit` 工具面（batch_edit、3 字符锚点、`E_*` 错误码），该插件已从维护中的 profile 卸载。原生 `edit`/`str_replace_editor` 的 fail-closed 面与 [SWITCHMAN:TRIM] 折叠锚点协议不受影响；原生编辑纪律一节待编辑回喂 watcher 落地后补上。
+
 ## [1.11.9] — 2026-11-20
 
 
