@@ -1,7 +1,7 @@
 /** dsh-switchman context-trim view builder (pure).
  *
  * The outbound-view half of the context-trim port (design:
- * .dsh-switchman/analysis/context-trim-port-design.md §4): folds stored in
+ * docs/requirements-and-design/2026-11-02-context-trim-port-design.md §4): folds stored in
  * a session ledger replace contiguous message ranges with ONE synthetic
  * user message each. Everything here is pure and deterministic — the same
  * (messages, ledger) pair must render a byte-identical view on every call

@@ -286,7 +286,7 @@ window.__ModuleLoader__.load({
 		};
 
 		/** Context-trim folding modes (Host config.js trimMode, design:
-		 *  .dsh-switchman/analysis/context-trim-port-design.md): off =
+		 *  docs/requirements-and-design/2026-11-02-context-trim-port-design.md): off =
 		 *  never fold, advisory = the model invokes the trim tools,
 		 *  auto = automatic idle folds. */
 		const TRIM_MODES = ['off', 'advisory', 'auto'];

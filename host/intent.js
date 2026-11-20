@@ -18,7 +18,7 @@
  * GenerateOptions carries no turn number (the abandoned waterfall did);
  * a provider prompt-cache window keeps the current model while the
  * classifier's confidence stays below the switch threshold (design:
- * .dsh-switchman/plans/intent-routing.md — field names/protocol/state machine
+ * docs/requirements-and-design/2026-10-25-intent-routing-design.md — field names/protocol/state machine
  * are frozen there).
  *
  * Fail-open everywhere: a missing service, an unconfigured classifier, a

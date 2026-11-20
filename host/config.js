@@ -233,8 +233,9 @@ export const Config = z.object({
 	syncWhitelist: z.boolean().default(true).volatile(),
 
 	// --- Intent recognition: classifier-routed "auto" model ----------------
-	/** Master switch for intent routing (design: .dsh-switchman/plans/
-	 *  intent-routing.md §2). The adapter stays mounted either way; OFF
+	/** Master switch for intent routing (design:
+	 *  docs/requirements-and-design/2026-10-25-intent-routing-design.md §2).
+	 *  The adapter stays mounted either way; OFF
 	 *  only hides the catalog entry (listModels returns [], the selector
 	 *  drops the empty group) — a session already on Auto routes through
 	 *  the documented fallback chain (routedCurrent → intentFallbackRoute
@@ -349,7 +350,7 @@ export const Config = z.object({
 	poolDifferentiationEnabled: z.boolean().default(false).volatile(),
 	// --- Context trim: fully-automatic conversation compression ------------
 	/** Master switch for the context-trim layer (design:
-	 *  .dsh-switchman/analysis/context-trim-port-design.md). OFF disables
+	 *  docs/requirements-and-design/2026-11-02-context-trim-port-design.md). OFF disables
 	 *  view folding AND metrics sampling entirely; the llm/stream listener
 	 *  degrades to a pure pass-through. */
 	trimEnabled: z.boolean().default(true).volatile(),
