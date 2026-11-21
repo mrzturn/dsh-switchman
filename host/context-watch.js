@@ -307,7 +307,7 @@ export function measureNow(ctx, agent) {
  * invariant). */
 const PROTOCOL_ROOT_TEXT = [
 	"[SWITCHMAN:WATERMARK] protocol: this session's context is managed automatically (folding runs before you notice; a handover may run when needed). You will never receive token counts, percentages, or progress numbers — none exist in this protocol, and no pacing decision is yours to make from them.",
-	"Only BEHAVIORAL directives arrive, as [SWITCHMAN:WATERMARK] lines inside the appended runtime-context snapshot, when enforcement changes: a soft line asks you to prefer delegation over reading more context yourself; a hard line says broad reading is budget-limited this turn and it is time to start wrapping up; a force line is a MANDATORY wrap-up — produce the final answer from what you already hold. /ctx-pause pauses every watermark enforcement (measurement continues), /ctx-resume restores it, /ctx-handover starts a handover immediately.",
+	"Only BEHAVIORAL directives arrive, as [SWITCHMAN:WATERMARK] lines inside the appended runtime-context snapshot, when enforcement changes: a soft line asks you to prefer delegation of bulk reading over reading more context yourself; a hard line says broad reading is budget-limited this turn and it is time to start wrapping up; a force line is a MANDATORY wrap-up — produce the final answer from what you already hold. /ctx-pause pauses every watermark enforcement (measurement continues), /ctx-resume restores it, /ctx-handover starts a handover immediately.",
 ].join("\n");
 
 /** Byte-stable protocol text for subagent sessions (same invariant). */
@@ -328,7 +328,7 @@ function renderRootWatermark(level, status) {
 	if (level === "soft") {
 		if (status?.reason === "dynamic_cost")
 			return "[SWITCHMAN:WATERMARK] soft tier (dynamic cost): staying in this session is trending more expensive than handing over early — tighten reads now (delegate the bulk reading, keep captured results small) so the eventual handover stays cheap.";
-		return "[SWITCHMAN:WATERMARK] soft tier: prefer delegating lightweight work (subagent/workflow) over reading more context yourself.";
+		return "[SWITCHMAN:WATERMARK] soft tier: prefer delegating ingestion-heavy work (bulk reading with a small captured result, via subagent/workflow) over reading more context yourself — details stay actionable in the child's report.";
 	}
 	if (level === "hard") {
 		if (status?.reason === "dynamic_growth")
