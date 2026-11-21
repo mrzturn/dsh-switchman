@@ -31,6 +31,9 @@ function mount(config) {
 			section: (spec) => {
 				if (spec.name === "switchman:dispatch") sectionText = spec.text;
 			},
+			// Silence the legacy-mode warning: this fake host exercises the
+			// pre-execute gates, not the tail-context channel.
+			context: () => {},
 		},
 	};
 	applyDispatch(ctx, config);

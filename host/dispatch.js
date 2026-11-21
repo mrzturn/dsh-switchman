@@ -33,6 +33,7 @@
 
 import { LANES, laneEffortsField, laneField, laneManualField } from "./config.js";
 import { isModelRoute, loadCapabilityDefaults, normalizeModelKey, orderedPool } from "./lib/rank.js";
+import { registerTailContext } from "./tail-context.js";
 
 /** True for a well-formed {provider, model, effort} pin; the effort value
  *  is free-form — its valid set is the DSH adapter's reported efforts. */
@@ -515,18 +516,14 @@ function sessionRouteOf(context) {
  *  outside the session's DSH-authorized child models carry a ⚠not-authorized
  *  marker (after any @effort suffix) — teams mode only: with teamsMode OFF
  *  the whitelist is never read, `state.authorized` stays null, and neither
- *  the markers nor the drift guidance lines render. When the assembling
- *  context carries the session's own model selection, a `session route:`
- *  line follows the anchor. */
-function renderPoolsBlock(state, sessionRoute = null) {
+ *  the markers nor the drift guidance lines render.
+ *
+ *  The per-session `session route:` line is NOT part of this block anymore
+ *  (2026-11-21 cache-stability migration): it is config-varying per turn, so
+ *  it travels in the tail payload — see renderSessionRouteLine(). */
+function renderPoolsBlock(state) {
 	const configured = state.lanePools.filter((pool) => pool.routes.length > 0);
 	const lines = [`[SWITCHMAN:POOLS] configured=${configured.length}/6 enforce=${state.enforce}`];
-	if (sessionRoute !== null) {
-		lines.push(
-			`session route: ${sessionRoute.provider}/${sessionRoute.model}${sessionRoute.effort === null ? "" : `@${sessionRoute.effort}`}` +
-				` — implicit dispatch (omitting provider/model/effort) gives the child THIS route; when it differs from the lane entries, only an explicit dispatch lands a lane model.`,
-		);
-	}
 	let anyUnauthorized = false;
 	for (const pool of state.lanePools) {
 		if (pool.routes.length === 0) continue;
@@ -572,6 +569,15 @@ function renderPoolsBlock(state, sessionRoute = null) {
 	return lines.join("\n");
 }
 
+/** The per-session `session route:` line — byte-identical to the line that
+ *  used to follow the [SWITCHMAN:POOLS] anchor inside renderPoolsBlock
+ *  (2026-11-21 cache-stability migration: the route varies per turn, so it
+ *  now travels in the switchman:dispatch-route tail payload, order 350). */
+function renderSessionRouteLine(sessionRoute) {
+	return `session route: ${sessionRoute.provider}/${sessionRoute.model}${sessionRoute.effort === null ? "" : `@${sessionRoute.effort}`}` +
+		` — implicit dispatch (omitting provider/model/effort) gives the child THIS route; when it differs from the lane entries, only an explicit dispatch lands a lane model.`;
+}
+
 /** The first recommended route right now: the head of the first configured
  *  lane in display order (already ordered — manual lanes use stored order,
  *  auto lanes the modelRank+capability ordering), else the modelRank head. */
@@ -585,15 +591,28 @@ function topRecommendation(state) {
 
 /** Mount the dispatch-pool layer: dynamic prompt section + enforce gate. */
 function applyDispatch(ctx, config) {
-	ctx.systemPrompt.section({
-		name: "switchman:dispatch",
-		order: 10400,
-		interpolate: false,
-		text: (context) => {
+	registerTailContext(ctx, {
+		sectionName: "switchman:dispatch",
+		sectionOrder: 10400,
+		contextName: "switchman:dispatch-route",
+		contextOrder: 350,
+		// Head doctrine: the config-stable pools block (lane rows, guidance).
+		// The per-turn `session route:` line moved to the tail payload so a
+		// session route change never invalidates the cached prefix.
+		doctrine: (context) => {
 			const state = readDispatchState(ctx, config);
 			const anyConfigured = state.lanePools.some((pool) => pool.routes.length > 0) || state.modelRank.length > 0;
 			if (!anyConfigured) return "";
-			return renderPoolsBlock(state, sessionRouteOf(context));
+			return renderPoolsBlock(state);
+		},
+		// Tail payload: today's route line, same rendering conditions as the
+		// pre-refactor section (anyConfigured && sessionRoute non-null).
+		payload: (context) => {
+			const state = readDispatchState(ctx, config);
+			const anyConfigured = state.lanePools.some((pool) => pool.routes.length > 0) || state.modelRank.length > 0;
+			const route = sessionRouteOf(context);
+			if (!anyConfigured || route === null) return "";
+			return renderSessionRouteLine(route);
 		},
 	});
 

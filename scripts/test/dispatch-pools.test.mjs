@@ -26,8 +26,12 @@ function mountedSection() {
 	const config = { dispatchEnforce: "advice", teamsMode: false, modelRank: [] };
 	for (const lane of LANES) config[laneField(lane)] = lane === "economy" ? [{ provider: "zai-coding-cn", model: "glm-5.3-flash" }] : [];
 	const sections = [];
+	const contexts = [];
 	const ctx = {
-		systemPrompt: { section: (section) => sections.push(section) },
+		systemPrompt: {
+			section: (section) => sections.push(section),
+			context: (entry) => contexts.push(entry),
+		},
 		on() {},
 		get() { return undefined; },
 		logger: { warn() {} },
@@ -35,33 +39,53 @@ function mountedSection() {
 	applyDispatch(ctx, config);
 	const section = sections.find((entry) => entry.name === "switchman:dispatch");
 	assert.ok(section, "applyDispatch must register the switchman:dispatch section");
-	return section;
+	const context = contexts.find((entry) => entry.name === "switchman:dispatch-route");
+	assert.ok(context, "applyDispatch must register the switchman:dispatch-route tail entry");
+	return { section, context };
 }
 
-test("session route renders from the assemble context, right after the anchor", () => {
-	const block = mountedSection().text({
+test("session route renders from the assemble context in the tail payload", () => {
+	const { section, context } = mountedSection();
+	const assembleContext = {
 		modelSelection: { provider: "zai-coding-cn", model: "glm-5.3-flashx", reasoningEffort: "high" },
-	});
+	};
+	// Head: the pools block WITHOUT the per-turn route line.
+	const block = section.text(assembleContext);
 	const lines = block.split("\n");
 	assert.equal(lines[0], "[SWITCHMAN:POOLS] configured=1/6 enforce=advice");
+	assert.ok(lines[1].startsWith("economy:"), `second head line is the lane row, got: ${lines[1]}`);
+	assert.ok(!block.includes("session route:"), "head must not carry the route line anymore");
+	// Tail: the route line, byte-identical to the pre-refactor placement.
+	const routeLine = context.text(assembleContext);
+	const routeLines = routeLine.split("\n");
 	assert.ok(
-		lines[1].startsWith("session route: zai-coding-cn/glm-5.3-flashx@high — implicit dispatch"),
-		`second line must state the session route, got: ${lines[1]}`,
+		routeLines[0].startsWith("session route: zai-coding-cn/glm-5.3-flashx@high — implicit dispatch"),
+		`payload must state the session route, got: ${routeLines[0]}`,
 	);
-	assert.ok(lines[1].endsWith("only an explicit dispatch lands a lane model."));
+	assert.ok(routeLine.endsWith("only an explicit dispatch lands a lane model."));
 });
 
 test("no or malformed modelSelection renders no session route line (fail-open)", () => {
-	const section = mountedSection();
-	for (const context of [undefined, {}, null, { modelSelection: null }, { modelSelection: {} }, { modelSelection: { provider: " ", model: "x" } }]) {
-		const block = section.text(context);
-		assert.ok(!block.includes("session route:"), `context ${JSON.stringify(context)} must not render the line`);
+	const { section, context } = mountedSection();
+	for (const assembleContext of [undefined, {}, null, { modelSelection: null }, { modelSelection: {} }, { modelSelection: { provider: " ", model: "x" } }]) {
+		const block = section.text(assembleContext);
+		assert.ok(!block.includes("session route:"), `context ${JSON.stringify(assembleContext)} must not render the line`);
 		assert.ok(block.startsWith("[SWITCHMAN:POOLS]"), "anchor line must survive");
+		assert.equal(context.text(assembleContext), "", `payload must stay empty for ${JSON.stringify(assembleContext)}`);
 	}
 });
 
+test("head block is byte-stable across changing session routes (cache stability)", () => {
+	const { section } = mountedSection();
+	const base = section.text({ modelSelection: { provider: "a", model: "m1" } });
+	const again = section.text({ modelSelection: { provider: "b", model: "m2", reasoningEffort: "high" } });
+	const none = section.text(undefined);
+	assert.equal(base, again);
+	assert.equal(base, none);
+});
+
 test("implicit fallback is explicit-first with a declared downgrade", () => {
-	const block = mountedSection().text({});
+	const block = mountedSection().section.text({});
 	assert.ok(block.includes("Explicit lane dispatch is the DEFAULT for subagent/workflow"));
 	assert.ok(block.includes("LAST-RESORT fallback, never a shortcut"));
 	assert.ok(block.includes("declare IMPLICIT-DOWNGRADED in your report"));
