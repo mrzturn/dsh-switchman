@@ -522,12 +522,12 @@ test("W3: patch carries the Native Edit Discipline section between ## 3 and ## 4
 	assert.match(patch, /After bash\/git\/formatters touched the file, re-read before editing/);
 });
 
-test("CHANGELOG: Unreleased documents the watcher bilingually", () => {
+test("CHANGELOG: the watcher's release section (currently 1.11.10) documents it bilingually", () => {
 	const changelog = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8");
-	const unreleased = changelog.slice(changelog.indexOf("## [Unreleased]"), changelog.indexOf("## [1.11.9]"));
-	assert.ok(unreleased.includes("host/edit-feedback.js"));
-	assert.ok(unreleased.includes("editFeedbackEnabled"));
-	assert.ok(unreleased.includes("编辑回喂 watcher"));
+	const section = changelog.slice(changelog.indexOf("## [1.11.10]"), changelog.indexOf("## [1.11.9]"));
+	assert.ok(section.includes("host/edit-feedback.js"));
+	assert.ok(section.includes("editFeedbackEnabled"));
+	assert.ok(section.includes("编辑回喂 watcher"));
 });
 
 test("wiring: index.js registers applyEditFeedback; config schema declares the switch", () => {

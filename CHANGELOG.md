@@ -5,7 +5,7 @@ All notable changes to dsh-switchman are documented here. / 本文件记录 dsh-
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 格式参照 Keep a Changelog;版本遵循语义化版本。
-## [Unreleased]
+## [1.11.10] — 2026-11-21
 
 ### Added
 
@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The preset-patch doctrine suffix drops the "Hash-Anchor Edit Discipline" section: it described the `dsh-better-edit` tool surface (batch_edit, 3-char anchors, `E_*` codes), which is no longer installed in any maintained profile. The native `edit`/`str_replace_editor` fail-closed surface and the [SWITCHMAN:TRIM] fold-anchor protocol are untouched; a native-edit discipline section may follow once the edit-feedback watcher lands.
 - 预设补丁规程 suffix 移除「哈希锚点编辑纪律」一节：其描述的是 `dsh-better-edit` 工具面（batch_edit、3 字符锚点、`E_*` 错误码），该插件已从维护中的 profile 卸载。原生 `edit`/`str_replace_editor` 的 fail-closed 面与 [SWITCHMAN:TRIM] 折叠锚点协议不受影响；原生编辑纪律一节待编辑回喂 watcher 落地后补上。
+
+### Fixed
+
+- Soft-tier watermark wording disambiguated (host/context-watch.js): the static soft line said "prefer delegating lightweight work", which collided literally with the delegation doctrine's tie-breaker "for light work, act" introduced by the 2026-11-21 recalibration. The line now targets **ingestion-heavy work** — bulk reading with a small captured result, details staying actionable via the child's report — and the byte-stable protocol paraphrase was synced ("prefer delegation of bulk reading"). teams.js's "light work" clause is untouched; the two now label complementary halves. Injected text stays English, byte-stable, and number-free (51 tests pass across trim-ladder / trim-loop / cache-stability / teams-doctrine / context-watch-dynamic).
+- 软水位措辞消歧（host/context-watch.js）：静态软水位行原为 "prefer delegating lightweight work"，与 2026-11-21 重校准引入的委派决胜规则 "for light work, act" 字面相撞。现改为指向**摄入密集型工作**——批量读入、捕获结果小、细节经子代理报告仍可取用——字节稳定的协议转述行同步改为 "prefer delegation of bulk reading"。teams.js 的 "light work" 子句保持不动，两者现在标注互补的半区。注入文本保持英文、字节稳定、无数字（trim-ladder / trim-loop / cache-stability / teams-doctrine / context-watch-dynamic 共 51 个测试通过）。
+
+- All eleven READMEs realigned with the 2026-11-21 doctrine recalibration: the point-4 parenthetical drops "delegate by default" in the nine translated editions (the advantage-first copy had only reached README.md and README.zh.md), and every edition's team-formation trigger list — "bulky self-contained work, a high main-context watermark, a need for role separation" — is replaced by the actual §5 semantics: each turn is scored against the three structural constraint tags (parallelizable subtasks / permission boundaries / capability gaps); at least two firing assembles a resident team autonomously, otherwise plain subagent dispatch stays the default path and teams assemble only on an explicit request.
+- 全部 11 个语言版 README 与 2026-11-21 规程重校准对齐：要点 4 的括注在 9 个译本里去掉「默认委派」（按优势委派的新文案此前只同步到了 README.md 和 README.zh.md）；「量大自包含、主上下文水位已高、需要角色分离」的旧组队触发列表在全部版本里替换为 §5 的真实语义——每轮按三个结构性约束标签（可并行子任务 / 权限边界 / 能力缺口）判定，命中至少两个才自主拉起常驻团队，未命中则无状态 subagent 单发仍是默认路径，团队只在明确要求时组建。
 
 ## [1.11.9] — 2026-11-20
 
