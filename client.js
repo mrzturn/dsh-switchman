@@ -1118,7 +1118,7 @@ window.__ModuleLoader__.load({
 					'切换派发形态：关闭为纯 subagent 派发（DSH 出厂保守团队策略接管）；开启后注入自主团队规程并启用 Agent Teams。',
 				teamsModeLabel: '智能体团队模式',
 				teamsModeHelp:
-					'默认开启。开启后注入团队规程并自动启用 DSH 的 Agent Teams bundle；约束识别开启时，仅当命中 ≥2 条结构性标签（并行子任务/权限隔离/持续协作）才建议常驻团队，否则默认仍走无状态 subagent + 按需 skill；约束识别关闭时保持原有默认委派行为。派发池的 ⚠ 授权徽标仅在开启时显示。',
+					'默认开启。开启后注入团队规程并自动启用 DSH 的 Agent Teams bundle；约束识别开启时，仅当命中 ≥2 条结构性标签（并行子任务/权限隔离/持续协作）才建议常驻团队，否则默认仍走无状态 subagent + 按需 skill；约束识别关闭时保持原有按优势委派（换视角/隔离优先）行为。派发池的 ⚠ 授权徽标仅在开启时显示。',
 				syncWhitelistLabel: '同步子智能体模型白名单',
 				syncWhitelistHelp:
 					'独立开关（不依赖智能体团队模式）：把六池选中模型的并集整体写入 DSH「设置 → 子智能体 → 模型选择」的授权列表；dsh-switchman 成为唯一事实源。',

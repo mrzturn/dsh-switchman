@@ -83,17 +83,23 @@ const SWITCHMAN_SETTINGS_NS = "dsh-switchman-host";
  *  revision (SettingsConflictError means another writer changed the row). */
 const MAX_MUTATE_ATTEMPTS = 3;
 
-/** The `## 1` delegate-by-default delegation block, extracted VERBATIM from
- *  the cordis.patch.yml persona-suffix anchor (extraction precedent: the team
- *  clauses left the same anchor in 6304fa9). teamsMode is its only gate: ON
+/** The `## 1` delegation block, REWRITTEN 2026-11-21 (post-trim calibration):
+ *  context trimming keeps session growth survivable, so delegation is now
+ *  justified by its structural advantages — a fresh child context, a different
+ *  model/effort lane (independent perspective), parallelism, blast-radius
+ *  isolation — instead of the retired context-bloat rationale and its hard
+ *  <200-lines-read / <50-lines-change thresholds. The pre-rewrite text is
+ *  preserved verbatim as LEGACY_DELEGATION_LINES in
+ *  scripts/test/teams-doctrine.test.mjs. teamsMode is its only gate: ON
  *  renders this text byte-for-byte in every ON-mode variant, OFF removes it
  *  entirely; the constraint layer NEVER rewrites these lines — conditionality
  *  lives only in the teams trigger-policy lines below. */
 const DELEGATION_SECTION_TEXT = [
-	"## 1. Delegate by Default, Act Directly Only as the Exception",
-	"- Delegation spends one fresh child context and returns one summary; reading and writing everything yourself bloats this session's context — costlier in the long run. Long or heavy context leans toward delegation; trivial items stay in hand.",
-	"- Act directly only when ALL hold: cognitive load low or medium, total reading <200 lines, change <50 lines; tight iterate-and-probe loops (each step immediately consumes the previous result); finishing touches with expected payoff <3k tokens.",
-	"- Searches with uncertain location, multi-file investigations, large refactors, independent research, or option comparisons: always delegate; recon goes to the economy lane first.",
+	"## 1. Delegate for Perspective and Isolation, Act Directly for Detail-Bearing Work",
+	"- Context trimming keeps this session's growth survivable, so bloat is no longer the reason to delegate. Delegation's advantages are structural: a fresh child context, a different model/effort lane (an independent perspective), parallelism, and blast-radius isolation.",
+	"- Delegate when any holds: (a) the perspective switch is the point — independent review, adversarial falsification, design or option comparison, smoke testing; (b) the parent session needs only the conclusion, never the details — mechanical batches, uncertain-location searches, multi-file investigations, large refactors, recon (recon goes to the economy lane first); (c) the work parallelizes or must stay isolated from this session's state.",
+	"- Act directly when any holds: (d) a tight iterate-and-probe loop where each step immediately consumes the previous result — dispatch overhead outweighs the round-trip; (e) the details carry downstream value in this session — exact line numbers, error strings, shapes you are about to edit; (f) the item is trivial.",
+	"- Trimming is not free: self-reads still pay wire tokens, folds rewrite history and break the prompt-cache prefix, and fast growth still invites throttling. Tie-breaker: for heavy work a wasted dispatch is cheaper than a mid-task wrap-up — delegate; for light work, act.",
 	"- Judge once at task start; redo when scale or structure changes mid-task; conclusions need no user sign-off.",
 ].join("\n");
 

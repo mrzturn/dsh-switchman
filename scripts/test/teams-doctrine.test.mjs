@@ -5,9 +5,13 @@
  *  — teams were the constraint-triggered exception path), and the OFF
  *  path still renders ZERO bytes on every assembly and the DSH factory
  *  conservative team policy takes over; (2) the ON-mode doctrine is the
- *  `## 1` delegation block + the teams clauses, both extracted verbatim
- *  from the cordis.patch.yml persona-suffix anchor — the byte snapshots
- *  below copy the current English doctrine text so any accidental rewrite fails loudly;
+ *  `## 1` delegation block + the teams clauses. The teams clauses remain
+ *  extracted verbatim from the cordis.patch.yml persona-suffix anchor, and
+ *  the byte snapshots below still pin them so any accidental rewrite fails
+ *  loudly; the delegation block itself was REWRITTEN on 2026-11-21 (post-trim
+ *  calibration: structural advantages replace the retired context-bloat
+ *  rationale) and is pinned through the DELEGATION_SECTION_TEXT import, with
+ *  its pre-rewrite text kept below as a historical snapshot;
  *  (3) with the constraint layer ON, only a §4.4.1 structural-tag
  *  conjunction (≥2 of parallelizable / permission_boundary / capability_gap)
  *  suggests a resident team — a miss keeps stateless subagents + on-demand
@@ -36,8 +40,10 @@ import { recordClassifierConstraints } from "../../host/constraints.js";
 const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..");
 
 // ---- pinned doctrine lines -------------------------------------------------
-// LEGACY_DELEGATION_LINES reproduce the "## 1" delegate-by-default block verbatim
-// in the pre-§4.4 cordis.patch.yml suffix. LEGACY_TEAMS_LINES pin the
+// LEGACY_DELEGATION_LINES preserve the retired "## 1" delegate-by-default block
+// verbatim (pre-2026-11-21, before the post-trim calibration rewrite); the
+// CURRENT delegation block is pinned through the DELEGATION_SECTION_TEXT import
+// in test 4. LEGACY_TEAMS_LINES pin the
 // legacy-mode output: the HEAD teams section plus the one appended
 // §4.4.2 spawn-reason clause — not the raw pre-change yaml text.
 
@@ -61,8 +67,6 @@ const LEGACY_TEAMS_LINES = [
 	"- run_code parallel isolation: calls that mutate the team environment (member roster, tool table) — spawn_teammate / send_message — must not run Promise.all-parallel with file/search tools inside one run_code program; during the concurrency window other tool bindings may misreport unknown tool '…' (UNKNOWN_TOOL). Let such calls occupy their own step. When a previously working tool suddenly reports UNKNOWN_TOOL, retry the same call verbatim on the next step — do not switch tool names or abandon the task.",
 	"- Resident members declare their constraint rationale first (advisory soft rule): before spawn_teammate, declare which constraint tag fired (e.g. 'hit parallelizable + permission_boundary'); when the constraint layer is off (no [SWITCHMAN:CONSTRAINTS] line), declare the irreplaceable structural reason instead (parallel independent subtasks / permission isolation / sustained collaboration). A missing declaration never blocks dispatch — this clause is a declaration requirement only; it does not change spawn-channel availability.",
 ];
-/** Byte snapshot of the whole legacy ON-mode doctrine body. */
-const LEGACY_DOCTRINE = [...LEGACY_DELEGATION_LINES, "", ...LEGACY_TEAMS_LINES].join("\n");
 
 // ---- fake host plumbing -----------------------------------------------------
 
@@ -146,6 +150,7 @@ test("persona suffix no longer carries the delegate-by-default block", () => {
 	const yaml = readFileSync(join(ROOT, "cordis.patch.yml"), "utf8");
 	assert.ok(!yaml.includes("## 1. Delegate by Default"), "delegation heading extracted from the yaml");
 	assert.ok(!yaml.includes("delegate by default"), "no delegation text left in the yaml");
+	assert.ok(!yaml.includes("Delegate for Perspective"), "rewritten delegation block also stays out of the yaml");
 	// The rest of the doctrine is untouched: the boundary rule survives verbatim
 	// (the user override always wins — guide risk table, manual /team path).
 	assert.ok(yaml.includes("that immediate request overrides this section"), "immediate-exit rule preserved");
@@ -154,16 +159,39 @@ test("persona suffix no longer carries the delegate-by-default block", () => {
 
 // ---- 4. legacy ON (constraint layer off): byte-identical fallback -----------------
 
-test("teamsMode ON + constraints OFF reproduces the pre-change text byte-for-byte", () => {
+test("teamsMode ON + constraints OFF renders the doctrine body byte-for-byte", () => {
 	const { ctx } = fakeApplyHost();
 	const { section, payload } = mount(ctx, cfg(true, false));
 	const text = section.text({ agent: AGENT("s-legacy") });
-	assert.equal(text, LEGACY_DOCTRINE);
+	const doctrine = DELEGATION_SECTION_TEXT + "\n\n" + TEAMS_SECTION_TEXT;
+	assert.equal(text, doctrine);
 	assert.equal(payload.text({ agent: AGENT("s-legacy") }), "", "constraints OFF keeps the delta empty");
 	// The exported pieces compose to exactly that body too.
-	assert.equal(DELEGATION_SECTION_TEXT, LEGACY_DELEGATION_LINES.join("\n"));
 	assert.equal(TEAMS_SECTION_TEXT, LEGACY_TEAMS_LINES.join("\n"));
-	assert.equal(teamsDoctrineText({ constraintsEnabled: false, hitTags: [] }), LEGACY_DOCTRINE);
+	assert.equal(teamsDoctrineText({ constraintsEnabled: false, hitTags: [] }), doctrine);
+	assert.notEqual(DELEGATION_SECTION_TEXT, LEGACY_DELEGATION_LINES.join("\n"), "the delegation block has moved past the retired bloat-era text");
+});
+
+// ---- 4b. the delegation block carries the 2026-11-21 trim calibration ---------
+
+test("delegation block: structural-advantage calibration, retired thresholds gone", () => {
+	assert.ok(DELEGATION_SECTION_TEXT.startsWith("## 1. Delegate for Perspective and Isolation"), "heading numbering intact");
+	for (const retired of ["Delegate by Default", "bloats this session", "<200 lines", "<50 lines", "costlier in the long run"]) {
+		assert.ok(!DELEGATION_SECTION_TEXT.includes(retired), `retired bloat-era phrasing gone: ${retired}`);
+	}
+	for (const anchor of [
+		"fresh child context",
+		"model/effort lane",
+		"independent review",
+		"falsification",
+		"smoke testing",
+		"economy lane first",
+		"iterate-and-probe loop",
+		"prompt-cache prefix",
+		"conclusions need no user sign-off",
+	]) {
+		assert.ok(DELEGATION_SECTION_TEXT.includes(anchor), `calibration anchor present: ${anchor}`);
+	}
 });
 
 // ---- 5. hit: the §4.4.1 conjunction suggests a resident team ----------------------
