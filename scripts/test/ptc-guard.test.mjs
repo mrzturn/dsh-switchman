@@ -1,14 +1,18 @@
 /** PTC direct-call guard tests.
  *
- * Covers the detection discriminator and the section contract of
- * host/ptc-guard.js against fake ToolsService/systemPrompt shapes:
- * the PTC executor is recognized purely behaviorally (describe() declaring
- * exactly knownNames ["run_code"]), the native executor (no knownNames) and
- * every unusable probe shape render an empty section (fail-open, status quo),
- * and the clause text carries the anchor plus the `await tools.name(args)`
- * SDK call shape quoted from the run_code tool's own description. It also pins
- * routine run_code argument handling, invalid-justification retry behavior,
- * grep regex escape/recovery, and the sandbox_permissions never-set rule.
+ * Covers the detection discriminator and the dual-channel registration
+ * contract of host/ptc-guard.js (mounted through host/tail-context.js)
+ * against fake ToolsService/systemPrompt shapes: the PTC executor is
+ * recognized purely behaviorally (describe() declaring exactly knownNames
+ * ["run_code"]), the native executor (no knownNames) and every unusable
+ * probe shape render an empty section AND an empty context entry (fail-open,
+ * status quo). The head channel carries the byte-stable guard rules; the
+ * growing ledger clause travels in the tail `systemPrompt.context` entry and
+ * the head bytes never change while it grows (cache-stability core). Hosts
+ * without the context API fall back to the legacy head embedding with a
+ * warning. It also pins routine run_code argument handling,
+ * invalid-justification retry behavior, grep regex escape/recovery, and the
+ * sandbox_permissions never-set rule.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -20,6 +24,7 @@ import {
 	renderPtcGuard,
 	selectedExecutor,
 } from "../../host/ptc-guard.js";
+import { applyPtcBindings, clearSessionLedger } from "../../host/ptc-bindings.js";
 
 /** PTC executor shape: describe() declares exactly the reserved run_code transport. */
 const PTC_DESCRIBE = () => ({ schemas: [{ name: "run_code" }], knownNames: ["run_code"] });
@@ -41,12 +46,45 @@ function fakeTools(executor, { missingMethod = false, throwing = false } = {}) {
 	return { tools, calls };
 }
 
-/** Fake plugin context capturing systemPrompt.section registrations. */
+/** Fake plugin context capturing systemPrompt.section AND systemPrompt.context
+ *  registrations (the tail ledger slot added by the cache-safe migration). */
 function fakeCtx(tools) {
 	const sections = [];
-	const ctx = { tools, systemPrompt: { section: (section) => sections.push(section) } };
-	return { ctx, sections };
+	const contexts = [];
+	const warnings = [];
+	const ctx = {
+		logger: { warn: (message) => warnings.push(message) },
+		tools,
+		systemPrompt: {
+			section: (section) => sections.push(section),
+			context: (entry) => contexts.push(entry),
+		},
+	};
+	return { ctx, sections, contexts, warnings };
 }
+
+/** Fake context for host/ptc-bindings.js: records waterfall listeners only. */
+function fakeBindingsCtx() {
+	const listeners = {};
+	const ctx = {
+		on(event, fn) { (listeners[event] ??= []).push(fn); },
+		systemPrompt: { section: () => {}, context: () => {} },
+		logger: { info() {}, warn() {} },
+	};
+	return { ctx, listeners };
+}
+
+/** Drive one outer run_code call through the mounted pre/post listeners. */
+async function runCall(listeners, { agent, code, isError = false, errorText = null }) {
+	const exec = { name: "run_code", arguments: { code, description: "d" }, agent };
+	for (const fn of listeners["tools/pre-execute"] ?? []) await fn(exec, () => "next");
+	const result = isError
+		? { isError: true, error: { message: errorText ?? "failed" }, content: [{ type: "text", text: errorText ?? "failed" }] }
+		: { value: { logs: [] } };
+	for (const fn of listeners["tools/post-execute"] ?? []) await fn(exec, result, () => "next");
+}
+
+function agentOf(id) { return { id, session: { id } }; }
 
 test("isPtcDescription matches exactly the single run_code knownName", () => {
 	assert.equal(isPtcDescription({ schemas: [], knownNames: ["run_code"] }), true);
@@ -82,24 +120,32 @@ test("isPtcScope discriminates behaviorally and tolerates a throwing describe", 
 	assert.equal(isPtcScope({ tools: fakeTools({}).tools }, scope), false); // executor without describe
 });
 
-test("applyPtcGuard registers exactly one final-say section", () => {
-	const { ctx, sections } = fakeCtx(fakeTools({ describe: PTC_DESCRIBE }).tools);
+test("applyPtcGuard registers the head rules section and the tail ledger entry", () => {
+	const { ctx, sections, contexts } = fakeCtx(fakeTools({ describe: PTC_DESCRIBE }).tools);
 	applyPtcGuard(ctx);
 	assert.equal(sections.length, 1);
+	assert.equal(contexts.length, 1);
 	const section = sections[0];
 	assert.equal(section.name, "switchman:ptc-guard");
 	assert.equal(section.order, 10510);
 	assert.equal(section.interpolate, false);
 	assert.equal(typeof section.text, "function");
+	const entry = contexts[0];
+	assert.equal(entry.name, "switchman:ptc-ledger");
+	assert.equal(entry.order, 310);
+	assert.equal(entry.required, true);
+	assert.equal(entry.interpolate, false);
+	assert.equal(typeof entry.text, "function");
 });
 
-test('section text renders the clause for a PTC scope and "" otherwise', () => {
-	const { ctx, sections } = fakeCtx(fakeTools({ describe: PTC_DESCRIBE }).tools);
+test('head rules render for a PTC scope and "" otherwise; ledger clause rides the tail entry', () => {
+	const { ctx, sections, contexts } = fakeCtx(fakeTools({ describe: PTC_DESCRIBE }).tools);
 	applyPtcGuard(ctx);
-	const text = sections[0].text;
+	const head = sections[0].text;
+	const tail = contexts[0].text;
 	const scope = { agent: "agent-3" };
 
-	const rendered = text({ scope });
+	const rendered = head({ scope });
 	assert.match(rendered, /^\[SWITCHMAN:PTC\] /);
 	assert.match(rendered, /`run_code` is the ONLY tool callable directly/);
 	assert.match(rendered, /await tools\.name\(args\)/);
@@ -133,24 +179,118 @@ test('section text renders the clause for a PTC scope and "" otherwise', () => {
 	assert.match(rendered, /rewrite the program in the IIFE rather than merely rerunning it/);
 	assert.ok(rendered.includes("globalThis.__dshSwitchmanPtcBindings"));
 	assert.ok(rendered.includes("This ledger is manually maintained, not automatic introspection"));
+	// The migrated clause no longer rides in the head channel.
+	assert.ok(!rendered.includes("PTC-LEDGER"));
 });
 
-test("section text is empty for a native scope and every fail-open shape", () => {
+test("head bytes stay constant while the ledger grows (cache-stability core)", async () => {
+	const { ctx, listeners } = fakeBindingsCtx();
+	applyPtcBindings(ctx);
+	const agent = agentOf("sess-grow");
+	const tools = { selectExecutor: () => ({ describe: PTC_DESCRIBE }) };
+	const { ctx: guardCtx, sections, contexts } = fakeCtx(tools);
+	applyPtcGuard(guardCtx);
+	const head = sections[0].text;
+	const tail = contexts[0].text;
+	const assemble = { scope: agent, agent };
+
+	// Empty ledger: head renders the rules, tail renders zero bytes.
+	const headBefore = head(assemble);
+	assert.match(headBefore, /^\[SWITCHMAN:PTC\] /);
+	assert.equal(tail(assemble), "");
+
+	// Grow the ledger in steps; head bytes NEVER change while the tail grows.
+	await runCall(listeners, { agent, code: "const alpha = 1;" });
+	assert.match(tail(assemble), /^\[SWITCHMAN:PTC-LEDGER\] 1 top-level binding already declared/);
+	assert.ok(tail(assemble).includes("alpha"));
+	assert.equal(head(assemble), headBefore);
+	await runCall(listeners, { agent, code: "const beta = 2;\nlet gamma = 3;" });
+	const grown = tail(assemble);
+	assert.match(grown, /3 top-level bindings already declared/);
+	assert.ok(grown.includes("alpha, beta, gamma"));
+	assert.equal(head(assemble), headBefore);
+
+	// Legacy fallback equivalence: with the payload non-empty, today's
+	// pre-refactor shape (guard + blank line + clause) is reproduced exactly.
+	assert.equal(`${head(assemble)}\n\n${grown}`, renderPtcGuard() + "\n\n" + grown);
+	// Tail collapses to "" when the agent has no recorded ledger.
+	assert.equal(tail({ scope: agent }), "");
+	assert.equal(tail({}), "");
+	assert.equal(tail(undefined), "");
+
+	clearSessionLedger("sess-grow");
+});
+
+test("tail ledger entry is gated by isPtcScope exactly like the head rules", async () => {
+	const { ctx, listeners } = fakeBindingsCtx();
+	applyPtcBindings(ctx);
+	const agent = agentOf("sess-gate");
+	await runCall(listeners, { agent, code: "const gated = 1;" });
+	// Native executor: both channels render "" despite a recorded ledger.
+	const native = fakeCtx({ selectExecutor: () => ({ describe: NATIVE_DESCRIBE }) });
+	applyPtcGuard(native.ctx);
+	const assemble = { scope: agent, agent };
+	assert.equal(native.sections[0].text(assemble), "");
+	assert.equal(native.contexts[0].text(assemble), "");
+	// Missing tools service entirely: fail-open "" on both channels, and the
+	// closures must not throw for any assemble-context shape.
+	const bare = fakeCtx(undefined);
+	applyPtcGuard(bare.ctx);
+	assert.equal(bare.sections[0].text({}), "");
+	assert.equal(bare.contexts[0].text({}), "");
+	assert.equal(bare.sections[0].text(undefined), "");
+	assert.equal(bare.contexts[0].text(undefined), "");
+	clearSessionLedger("sess-gate");
+});
+
+test("legacy fallback: no context API embeds the payload after a blank line and warns", async () => {
+	const { ctx: bindingsCtx, listeners } = fakeBindingsCtx();
+	applyPtcBindings(bindingsCtx);
+	const warnings = [];
+	const sections = [];
+	const ctx = {
+		logger: { warn: (message) => warnings.push(message) },
+		tools: fakeTools({ describe: PTC_DESCRIBE }).tools,
+		// No systemPrompt.context at all — pre-migration host shape.
+		systemPrompt: { section: (section) => sections.push(section) },
+	};
+	applyPtcGuard(ctx);
+	assert.equal(sections.length, 1);
+	const text = sections[0].text;
+	const agent = agentOf("sess-legacy");
+	const assemble = { scope: agent, agent };
+	// Empty payload -> head rules only (same bytes as the dual-channel head).
+	assert.equal(text(assemble), renderPtcGuard());
+	// Non-empty payload -> guard rules, blank line, ledger clause (today's
+	// exact pre-refactor shape).
+	await runCall(listeners, { agent, code: "const legacy = 1;" });
+	const combined = text(assemble);
+	assert.ok(combined.startsWith(renderPtcGuard() + "\n\n"));
+	assert.ok(combined.includes("[SWITCHMAN:PTC-LEDGER]"));
+	// Exactly one degradation warning per registration.
+	assert.equal(warnings.filter((message) => message.includes("legacy mode")).length, 1);
+	clearSessionLedger("sess-legacy");
+});
+
+test('section text and context entry are empty for a native scope and every fail-open shape', () => {
 	for (const tools of [
 		fakeTools({ describe: NATIVE_DESCRIBE }).tools,
 		fakeTools({}).tools,
 		fakeTools({}, { missingMethod: true }).tools,
 		fakeTools({}, { throwing: true }).tools,
 	]) {
-		const { ctx, sections } = fakeCtx(tools);
+		const { ctx, sections, contexts } = fakeCtx(tools);
 		applyPtcGuard(ctx);
 		assert.equal(sections[0].text({ scope: { agent: "x" } }), "");
+		assert.equal(contexts[0].text({ scope: { agent: "x" } }), "");
 	}
-	// No tools service at all: the closure must not throw.
-	const { ctx, sections } = fakeCtx(undefined);
+	// No tools service at all: the closures must not throw.
+	const { ctx, sections, contexts } = fakeCtx(undefined);
 	applyPtcGuard(ctx);
 	assert.equal(sections[0].text({}), "");
 	assert.equal(sections[0].text(undefined), "");
+	assert.equal(contexts[0].text({}), "");
+	assert.equal(contexts[0].text(undefined), "");
 });
 
 test("renderPtcGuard is byte-stable and interpolation-safe", () => {
@@ -159,7 +299,7 @@ test("renderPtcGuard is byte-stable and interpolation-safe", () => {
 	assert.ok(renderPtcGuard().includes("{ name:"));
 });
 
-test("the section text forwards the assemble context's scope to the probe", () => {
+test("the section and context closures forward the assemble context's scope to the probe", () => {
 	const seen = [];
 	const executor = { describe: PTC_DESCRIBE };
 	const tools = {
@@ -168,9 +308,11 @@ test("the section text forwards the assemble context's scope to the probe", () =
 			return executor;
 		},
 	};
-	const { ctx, sections } = fakeCtx(tools);
+	const { ctx, sections, contexts } = fakeCtx(tools);
 	applyPtcGuard(ctx);
 	const scope = { agent: "agent-4", step: 7 };
 	assert.notEqual(sections[0].text({ scope }), "");
-	assert.deepEqual(seen, [scope]);
+	// The tail probes too, but renders "" without an agent/recorded ledger.
+	assert.equal(contexts[0].text({ scope }), "");
+	assert.deepEqual(seen, [scope, scope]);
 });

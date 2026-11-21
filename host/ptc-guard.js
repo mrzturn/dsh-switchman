@@ -14,11 +14,19 @@
  * error with no correction hint. The clause below also states the never-set
  * default and the retry-without-the-field fix.
  *
- * Fix: one extra dynamic systemPrompt section (order 10510 — AFTER every
- * other dsh-switchman section: teams 10250, lang 10300, dispatch 10400,
+ * Fix: one extra final-say section (order 10510 — AFTER every other
+ * dsh-switchman section: teams 10250, lang 10300, dispatch 10400,
  * context-trim 10450, context-watch 10500) that re-states the transport rule
- * as the LAST word whenever the viewing scope actually resolves to the PTC
- * executor. Native scopes render an empty string (status quo).
+ * whenever the viewing scope actually resolves to the PTC executor. Native
+ * scopes render an empty string (status quo). Since the 2026-11-21
+ * cache-stability migration the section carries ONLY the byte-stable guard
+ * rules: the growing per-session binding ledger travels as a
+ * `systemPrompt.context` tail entry (`switchman:ptc-ledger`, order 310) via
+ * host/tail-context.js — a growing head section would invalidate the whole
+ * cached prompt prefix on every `run_code` program that declares a top-level
+ * binding (see the invariant in host/tail-context.js). On hosts without the
+ * runtime-context API the helper falls back to the legacy head embedding
+ * (guard rules + ledger clause concatenated).
  *
  * Detection mirrors the ToolsService's own per-scope resolution: the section
  * text closure receives the assemble context, whose `scope` is the viewing
@@ -44,9 +52,15 @@
 const RUN_CODE_NAME = "run_code";
 
 import { renderPtcLedgerClause, sessionKeyOf } from "./ptc-bindings.js";
+import { registerTailContext } from "./tail-context.js";
 
 /** Final-say section position: after context-watch (10500), the last existing section. */
 const PTC_GUARD_ORDER = 10510;
+
+/** Tail ledger slot: directly after the watermark's runtime-context entry
+ *  (order 300, host/context-watch.js), first of the migrated switchman
+ *  payloads (constraints 320 … lang 370). */
+const PTC_LEDGER_ORDER = 310;
 
 /** True when an executor description declares exactly the reserved run_code transport. */
 function isPtcDescription(description) {
@@ -101,26 +115,27 @@ function renderPtcGuard() {
 	].join("\n");
 }
 
-/** Mount the PTC guard section. Section registration itself relies on the
- *  injected systemPrompt service (same as every other layer); the text closure
- *  is fully defensive so an assembly in an unexpected shape renders "". */
+/** Mount the PTC guard layer: byte-stable head rules + tail ledger clause.
+ *  Registration goes through host/tail-context.js (cache-safe dual-channel
+ *  split); every text closure is fully defensive so an assembly in an
+ *  unexpected shape renders "". */
 function applyPtcGuard(ctx) {
-	ctx.systemPrompt.section({
-		name: "switchman:ptc-guard",
-		order: PTC_GUARD_ORDER,
-		interpolate: false,
-		text: (context) => {
-			try {
-				if (!isPtcScope(ctx, context?.scope)) return "";
-				// Automatic binding ledger (host/ptc-bindings.js): when this
-				// session has recorded top-level declarations, append the
-				// no-redeclare list as the last word. No agent on the assemble
-				// context (fake scopes, diagnostics) renders the guard alone.
-				const clause = renderPtcLedgerClause(sessionKeyOf(context?.agent));
-				return clause === "" ? renderPtcGuard() : renderPtcGuard() + "\n\n" + clause;
-			} catch {
-				return "";
-			}
+	registerTailContext(ctx, {
+		sectionName: "switchman:ptc-guard",
+		sectionOrder: PTC_GUARD_ORDER,
+		contextName: "switchman:ptc-ledger",
+		contextOrder: PTC_LEDGER_ORDER,
+		// Head doctrine: the transport rules, byte-stable within a session.
+		doctrine: (context) => {
+			if (!isPtcScope(ctx, context?.scope)) return "";
+			return renderPtcGuard();
+		},
+		// Tail payload: the no-redeclare ledger for this session's recorded
+		// top-level declarations. No agent on the assemble context (fake
+		// scopes, diagnostics) renders the guard alone with an empty ledger.
+		payload: (context) => {
+			if (!isPtcScope(ctx, context?.scope)) return "";
+			return renderPtcLedgerClause(sessionKeyOf(context?.agent));
 		},
 	});
 }
