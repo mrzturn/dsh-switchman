@@ -46,6 +46,7 @@
 
 import { readFileSync } from "node:fs";
 import { sessionIdOf, measureNow, readThresholds, levelOf } from "./context-watch.js";
+import { registerTailContext } from "./tail-context.js";
 
 /** Final position of the constraints section: right after dispatch (10400),
  * before context-trim (10450) — constraint tags read best beside the pools
@@ -415,44 +416,70 @@ function applyConstraints(ctx, config, annotatedSkills) {
 		return;
 	}
 	try {
-		ctx.systemPrompt.section({
-			name: "switchman:constraints",
-			order: CONSTRAINTS_ORDER,
-			interpolate: false,
-			text: (context) => {
-				try {
-					// Master switch: off renders "" on every assembly — the
-					// section exists but contributes zero bytes (zero diff).
-					if (config?.constraintsEnabled?.get() !== true) return "";
-					const agent = context?.agent;
-					// Per-assembly closure (index.js) or plain array (tests):
-					// resolve once here so downstream helpers always see an array
-					// (a raw closure passed to the for..of helpers throws and the
-					// fail-open catch would blank the whole layer — review F6).
-					const skills = typeof annotatedSkills === "function" ? annotatedSkills(agent) : annotatedSkills;
-					const sessionKey = sessionIdOf(agent);
-					if (sessionKey === null) return "";
-					const lastUser = lastUserBySession.get(sessionKey) ?? null;
-					const matched = matchedSkillNames(lastUser?.text ?? null, skills);
-					const hits = mergeConstraints(
-						deterministicPressureHits(ctx, agent, config),
-						classifierConstraintsForTurn(sessionKey),
-						matched.size > 0 ? [{ tag: "skill_match", source: "deterministic" }] : [],
-					);
-					const line = renderConstraintsLine(hits);
-					const table = renderSkillsTable(skills, matched);
-					if (line === "" && table === "") return "";
-					logHitsOnce(ctx, sessionKey, turnKeyFor(sessionKey, lastUser), hits);
-					return line === "" ? table : table === "" ? line : `${line}\n\n${table}`;
-				} catch {
-					return "";
-				}
+		/** The volatile per-turn payload: today's exact section closure body.
+		 *  Renders "" when the layer is off, the agent is unknown, or no
+		 *  hit/table applies; keeps the logHitsOnce side effect in the
+		 *  payload path (per-turn only). */
+		const renderConstraintsLive = (context) => {
+			try {
+				// Master switch: off renders "" on every assembly — the entry
+				// exists but contributes zero bytes (zero diff).
+				if (config?.constraintsEnabled?.get() !== true) return "";
+				const agent = context?.agent;
+				// Per-assembly closure (index.js) or plain array (tests):
+				// resolve once here so downstream helpers always see an array
+				// (a raw closure passed to the for..of helpers throws and the
+				// fail-open catch would blank the whole layer — review F6).
+				const skills = typeof annotatedSkills === "function" ? annotatedSkills(agent) : annotatedSkills;
+				const sessionKey = sessionIdOf(agent);
+				if (sessionKey === null) return "";
+				const lastUser = lastUserBySession.get(sessionKey) ?? null;
+				const matched = matchedSkillNames(lastUser?.text ?? null, skills);
+				const hits = mergeConstraints(
+					deterministicPressureHits(ctx, agent, config),
+					classifierConstraintsForTurn(sessionKey),
+					matched.size > 0 ? [{ tag: "skill_match", source: "deterministic" }] : [],
+				);
+				const line = renderConstraintsLine(hits);
+				const table = renderSkillsTable(skills, matched);
+				if (line === "" && table === "") return "";
+				logHitsOnce(ctx, sessionKey, turnKeyFor(sessionKey, lastUser), hits);
+				return line === "" ? table : table === "" ? line : `${line}\n\n${table}`;
+			} catch {
+				return "";
+			}
+		};
+		registerTailContext(ctx, {
+			sectionName: "switchman:constraints",
+			sectionOrder: CONSTRAINTS_ORDER,
+			contextName: "switchman:constraints-live",
+			contextOrder: CONSTRAINTS_LIVE_ORDER,
+			// Head doctrine: a static anchor line (byte-stable) declaring the
+			// tail snapshot binding. The per-turn hits and table bytes travel
+			// in the tail payload — a per-turn head would invalidate the whole
+			// cached prefix on every turn with a hit.
+			doctrine: (context) => {
+				if (config?.constraintsEnabled?.get() !== true) return "";
+				return CONSTRAINTS_ANCHOR;
 			},
+			// Tail payload: today's per-turn closure body, verbatim (including
+			// the logHitsOnce side effect, which must NOT move to the head).
+			payload: renderConstraintsLive,
 		});
 	} catch (error) {
 		warn(`systemPrompt.section registration failed — constraint advisory line disabled: ${error?.message ?? error}`);
 	}
 }
+
+/** Byte-stable head anchor line (§4.4 of the 2026-11-21 cache-stability
+ *  design): constant string literal, nothing interpolated into it. */
+const CONSTRAINTS_ANCHOR =
+	"Per-turn constraint hits and the matched-skills table are delivered in the Current runtime context snapshot at the tail of the conversation; treat them as binding for this turn.";
+
+/** Tail context slot: directly after the PTC ledger (310), first of the
+ *  per-turn advisory payloads (pool-feedback 330, pool-differentiation 340,
+ *  dispatch route 350, teams hits 360, lang ask 370). */
+const CONSTRAINTS_LIVE_ORDER = 320;
 
 /** Log a constraint hit once per turn (context-watch's logger pattern):
  * `dsh-switchman: constraints hit (turn <key>): tag[source, ...] at <ISO>`.
