@@ -38,6 +38,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { reportedUiLocale } from "./ui-locale.js";
+import { registerTailContext } from "./tail-context.js";
 
 /** Marker embedded in the ask's question texts and matched on capture. */
 const LANG_ASK_MARKER = "switchman-lang";
@@ -277,15 +278,27 @@ function applyLanguage(ctx, config) {
 		return readProjectPref(cwd) ?? { conversation: "", comments: "", docs: "" };
 	};
 
-	ctx.systemPrompt.section({
-		name: "switchman:lang",
-		order: 10300,
-		interpolate: false,
-		text: (context) => {
+	registerTailContext(ctx, {
+		sectionName: "switchman:lang",
+		sectionOrder: 10300,
+		contextName: "switchman:lang-ask",
+		contextOrder: 370,
+		// Head doctrine: the configured [SWITCHMAN:LANG] block — byte-stable
+		// within a session (a function of the stored preferences only). Empty
+		// while unconfigured; the ask guidance then travels in the tail.
+		doctrine: (context) => {
+			const pref = effectivePref(context);
+			return pref.conversation !== "" ? renderLangBlock(pref) : "";
+		},
+		// Tail payload: the one-shot ask guidance (latched per process /
+		// session, roots only). Unlatched it renders once as a NEW tail
+		// message, then "" — the head anchor above never moves either way.
+		payload: (context) => {
 			try {
 				const agent = context?.agent;
 				const pref = effectivePref(context);
-				if (pref.conversation !== "") return renderLangBlock(pref);
+				// Configured: nothing to ask.
+				if (pref.conversation !== "") return "";
 				// Unconfigured: one ask per process (global) or per session
 				// (project); subagents never see the ask guidance.
 				if (readScope(config) === "project") {
