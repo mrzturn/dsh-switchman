@@ -29,6 +29,7 @@ import {
 	TEAMS_STRUCTURAL_TAGS,
 	structuralTeamHits,
 	teamsDoctrineText,
+	renderTeamsHitsDelta,
 } from "../../host/teams.js";
 import { recordClassifierConstraints } from "../../host/constraints.js";
 
@@ -70,12 +71,17 @@ const LEGACY_DOCTRINE = [...LEGACY_DELEGATION_LINES, "", ...LEGACY_TEAMS_LINES].
  *  "unavailable" warn branch (same as teams-sync.test.mjs). */
 function fakeApplyHost() {
 	const sections = [];
+	const contexts = [];
 	const listeners = new Map();
 	const log = [];
 	return {
 		ctx: {
 			sections,
-			systemPrompt: { section: (def) => sections.push(def) },
+			contexts,
+			systemPrompt: {
+				section: (def) => sections.push(def),
+				context: (def) => contexts.push(def),
+			},
 			on: (name, fn) => {
 				if (!listeners.has(name)) listeners.set(name, []);
 				listeners.get(name).push(fn);
@@ -87,6 +93,7 @@ function fakeApplyHost() {
 			get: () => undefined,
 		},
 		sections,
+		contexts,
 		listeners,
 		log,
 	};
@@ -102,7 +109,12 @@ function mount(ctx, config) {
 	assert.equal(ctx.sections.length, 1);
 	assert.equal(ctx.sections[0].name, "switchman:teams");
 	assert.equal(ctx.sections[0].order, 10250);
-	return ctx.sections[0];
+	assert.equal(ctx.contexts.length, 1);
+	assert.equal(ctx.contexts[0].name, "switchman:teams-hits");
+	assert.equal(ctx.contexts[0].order, 360);
+	assert.equal(ctx.contexts[0].required, true);
+	assert.equal(ctx.contexts[0].interpolate, false);
+	return { section: ctx.sections[0], payload: ctx.contexts[0] };
 }
 
 // ---- 1. the default --------------------------------------------------------------
@@ -117,11 +129,15 @@ test("teamsMode defaults to ON (2026-11-20 promotion); constraints default ON", 
 
 test("teamsMode OFF renders zero bytes on every assembly (delegation gone too)", () => {
 	const { ctx } = fakeApplyHost();
-	const section = mount(ctx, cfg(false));
+	const { section, payload } = mount(ctx, cfg(false));
 	assert.equal(section.text({ agent: AGENT("s-off") }), "");
 	assert.equal(section.text({ agent: null }), "");
 	assert.equal(section.text({}), "");
 	assert.equal(section.text(), "");
+	assert.equal(payload.text({ agent: AGENT("s-off") }), "");
+	assert.equal(payload.text({ agent: null }), "");
+	assert.equal(payload.text({}), "");
+	assert.equal(payload.text(), "");
 });
 
 // ---- 3. the yaml no longer ships the delegation block -----------------------------
@@ -140,9 +156,10 @@ test("persona suffix no longer carries the delegate-by-default block", () => {
 
 test("teamsMode ON + constraints OFF reproduces the pre-change text byte-for-byte", () => {
 	const { ctx } = fakeApplyHost();
-	const section = mount(ctx, cfg(true, false));
+	const { section, payload } = mount(ctx, cfg(true, false));
 	const text = section.text({ agent: AGENT("s-legacy") });
 	assert.equal(text, LEGACY_DOCTRINE);
+	assert.equal(payload.text({ agent: AGENT("s-legacy") }), "", "constraints OFF keeps the delta empty");
 	// The exported pieces compose to exactly that body too.
 	assert.equal(DELEGATION_SECTION_TEXT, LEGACY_DELEGATION_LINES.join("\n"));
 	assert.equal(TEAMS_SECTION_TEXT, LEGACY_TEAMS_LINES.join("\n"));
@@ -151,22 +168,38 @@ test("teamsMode ON + constraints OFF reproduces the pre-change text byte-for-byt
 
 // ---- 5. hit: the §4.4.1 conjunction suggests a resident team ----------------------
 
-test("structural conjunction hit (≥2 tags) swaps the trigger lines to the teams suggestion", () => {
+test("structural conjunction hit (≥2 tags) swaps the trigger lines via the tail delta", () => {
 	recordClassifierConstraints("s-hit", "s-hit:no-user", ["parallelizable", "permission_boundary"]);
 	const { ctx } = fakeApplyHost();
-	const section = mount(ctx, cfg(true, true));
+	const { section, payload } = mount(ctx, cfg(true, true));
 	const text = section.text({ agent: AGENT("s-hit") });
-	assert.ok(text.includes("[SWITCHMAN:CONSTRAINTS] Team-constraint combination hit (parallelizable + permission_boundary)"));
-	assert.ok(text.includes("child delegation defaults to Agent Teams"), "hit variant keeps the teams-first channel");
-	// The delegation block and every fixed discipline clause survive verbatim.
-	assert.ok(text.startsWith(DELEGATION_SECTION_TEXT + "\n\n"));
+	// Head stays on the not-hit variant — per-turn bytes moved to the delta.
+	assert.ok(text.includes("No team-constraint combination hit"), "head shows the not-hit trigger pair");
+	assert.ok(!text.includes("Team-constraint combination hit (parallelizable + permission_boundary)"), "hit intro must NOT be in the head");
+	const delta = payload.text({ agent: AGENT("s-hit") });
+	assert.ok(delta.includes("[SWITCHMAN:CONSTRAINTS] Team-constraint combination hit (parallelizable + permission_boundary)"));
+	assert.ok(delta.includes("child delegation defaults to Agent Teams"), "hit variant keeps the teams-first channel");
+	// Combined channels carry today's information: the delta's hit lines plus
+	// the head's fixed body (delegation block + every discipline clause).
+	const head = teamsDoctrineText({ constraintsEnabled: true, hitTags: [] });
+	assert.equal(text, head, "head bytes equal the empty-hit doctrine exactly");
+	const legacyHit = teamsDoctrineText({ constraintsEnabled: true, hitTags: ["parallelizable", "permission_boundary"] });
+	assert.ok(legacyHit.startsWith(DELEGATION_SECTION_TEXT + "\n\n"));
+	assert.ok(delta.startsWith("[SWITCHMAN:CONSTRAINTS]"), "delta opens with the hit intro line");
+	// The delta fragment is byte-identical to the two swapped lines in the
+	// pre-refactor hit text (intro + priority, joined by a blank line).
+	const legacyLines = legacyHit.split("\n");
+	const hitIntro = legacyLines.find((line) => line.startsWith("[SWITCHMAN:CONSTRAINTS] Team-constraint combination hit"));
+	const hitPriority = legacyLines.find((line) => line.startsWith("- Dispatch-channel priority (constraints hit)"));
+	assert.equal(delta, `${hitIntro}\n\n${hitPriority}`, "delta must be the byte-identical swapped pair");
+	// Every fixed discipline clause still rides the head verbatim.
 	for (const line of LEGACY_TEAMS_LINES.slice(7)) {
 		assert.ok(text.includes(line), "discipline clause preserved verbatim");
 	}
 	assert.ok(text.includes("Resident members declare their constraint rationale"), "spawn-justification clause present");
 });
 
-test("three-tag hit lists the whole conjunction in the trigger line", () => {
+test("three-tag hit lists the whole conjunction in the tail delta", () => {
 	recordClassifierConstraints("s-hit3", "s-hit3:no-user", [
 		"parallelizable",
 		"permission_boundary",
@@ -174,29 +207,68 @@ test("three-tag hit lists the whole conjunction in the trigger line", () => {
 		"context_pressure",
 	]);
 	const { ctx } = fakeApplyHost();
-	const section = mount(ctx, cfg(true, true));
-	const text = section.text({ agent: AGENT("s-hit3") });
-	assert.ok(text.includes("(parallelizable + permission_boundary + capability_gap)"));
+	const { payload } = mount(ctx, cfg(true, true));
+	assert.ok(payload.text({ agent: AGENT("s-hit3") }).includes("(parallelizable + permission_boundary + capability_gap)"));
+});
+
+test("head is byte-constant across every simulated tag variation (cache stability)", () => {
+	const { ctx } = fakeApplyHost();
+	const { section, payload } = mount(ctx, cfg(true, true));
+	const missHead = section.text({ agent: AGENT("s-const") });
+	for (const tags of [
+		[],
+		["context_pressure"],
+		["skill_match", "verification_required"],
+		["parallelizable"],
+		["parallelizable", "permission_boundary"],
+		["parallelizable", "permission_boundary", "capability_gap"],
+		[null, 42, "parallelizable", {}],
+	]) {
+		recordClassifierConstraints("s-const", "s-const:no-user", tags);
+		assert.equal(section.text({ agent: AGENT("s-const") }), missHead, `head must not move for tags=${JSON.stringify(tags)}`);
+	}
+	// The payload meanwhile reproduces the pre-refactor hit text exactly when
+	// combined with the head (no information loss, per-tag enumeration).
+	const legacyHit = teamsDoctrineText({ constraintsEnabled: true, hitTags: ["parallelizable", "permission_boundary", "capability_gap"] });
+	recordClassifierConstraints("s-const", "s-const:no-user", ["parallelizable", "permission_boundary", "capability_gap"]);
+	const delta = payload.text({ agent: AGENT("s-const") });
+	// Locate the swapped pair by its stable line prefix (the legacy hit text
+	// and the head share every other line byte-for-byte).
+	const hitIntro = legacyHit.split("\n").find((line) => line.startsWith("[SWITCHMAN:CONSTRAINTS] Team-constraint combination hit"));
+	const hitPriority = legacyHit.split("\n").find((line) => line.startsWith("- Dispatch-channel priority (constraints hit)"));
+	const missLines = missHead.split("\n");
+	const introAt = missLines.findIndex((line) => line.startsWith("[SWITCHMAN:CONSTRAINTS] No team-constraint combination hit"));
+	const priorityAt = missLines.findIndex((line) => line.startsWith("- Dispatch-channel priority (constraints not hit)"));
+	assert.ok(introAt >= 0 && priorityAt >= 0, "head carries the not-hit pair to swap");
+	// Replacing the miss pair with the hit pair must reproduce the legacy
+	// hit bytes; the delta is exactly that byte-identical pair.
+	const combined = missLines.slice();
+	combined[introAt] = hitIntro;
+	combined[priorityAt] = hitPriority;
+	assert.equal(delta, `${hitIntro}\n\n${hitPriority}`);
+	assert.equal(combined.join("\n"), legacyHit);
 });
 
 // ---- 6. miss: stateless subagents + on-demand skills stay the default path --------
 
-test("no recorded tags renders the miss variant, never the unconditional trigger", () => {
+test("no recorded tags renders the miss variant in the head and zero delta bytes", () => {
 	const { ctx } = fakeApplyHost();
-	const section = mount(ctx, cfg(true, true));
+	const { section, payload } = mount(ctx, cfg(true, true));
 	const text = section.text({ agent: AGENT("s-miss-empty") });
 	assert.ok(text.includes("No team-constraint combination hit"), "miss intro present");
 	assert.ok(text.includes("stateless subagent / subagent_fork single dispatch plus on-demand skills is the default delegation path"), "default path restated");
 	assert.ok(!text.includes("ALL child delegation defaults to Agent Teams"), "unconditional teams trigger is gone");
 	assert.ok(text.includes("only when the user explicitly asks in conversation"), "manual override path preserved");
+	assert.equal(payload.text({ agent: AGENT("s-miss-empty") }), "", "miss renders zero delta bytes");
 });
 test("non-structural classifier hits (pressure only) still render the miss variant", () => {
 	recordClassifierConstraints("s-miss2", "s-miss2:no-user", ["context_pressure", "skill_match"]);
 	const { ctx } = fakeApplyHost();
-	const section = mount(ctx, cfg(true, true));
+	const { section, payload } = mount(ctx, cfg(true, true));
 	const text = section.text({ agent: AGENT("s-miss2") });
 	assert.ok(text.includes("No team-constraint combination hit"));
 	assert.ok(!text.includes("[SWITCHMAN:CONSTRAINTS] Team-constraint combination hit"), "no hit intro");
+	assert.equal(payload.text({ agent: AGENT("s-miss2") }), "", "non-structural hits stay a miss in the delta");
 });
 
 // ---- 7. the pure hit predicate -----------------------------------------------------

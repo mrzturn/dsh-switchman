@@ -62,6 +62,7 @@
 import { LANES, laneField } from "./config.js";
 import { classifierConstraintsForTurn } from "./constraints.js";
 import { sessionIdOf } from "./context-watch.js";
+import { registerTailContext } from "./tail-context.js";
 
 /** The shipped bundle carrying spawn_teammate / team_task_* / send_message /
  *  wait_agent (Host composition; enabling it from here never double-registers
@@ -146,8 +147,15 @@ function structuralTeamHits(tags) {
 /** The ON-mode teams section body for one constraint state: legacy bytes
  *  when the constraint layer is off (conservative fallback — the original
  *  unconditional teams preference), otherwise the two trigger-policy lines
- *  swap to the hit/miss variants (guide §4.4.1). */
-function teamsSectionText(constraintsEnabled, hitTags) {
+ *  swap to the hit/miss variants (guide §4.4.1).
+ *
+ *  2026-11-21 cache-stability migration: this function renders the HEAD
+ *  doctrine only — it must never see per-turn bytes, so callers pass
+ *  `hitTags: []` and the hit-dependent fragment moved to
+ *  renderTeamsHitsDelta() (tail payload, order 360). With the legacy
+ *  hitTags argument the output stays byte-identical to the pre-refactor
+ *  text (used by the golden regression test and the legacy fallback). */
+function teamsSectionText(constraintsEnabled, hitTags = []) {
 	const tags = structuralTeamHits(hitTags);
 	let intro = TEAMS_INTRO_LEGACY;
 	let priority = TEAMS_PRIORITY_LEGACY;
@@ -162,6 +170,23 @@ function teamsSectionText(constraintsEnabled, hitTags) {
 		}
 	}
 	return [TEAMS_HEADER, "", intro, "", "## 5. Team Trigger & Collaboration Discipline", priority, ...TEAMS_DISCIPLINE_LINES].join("\n");
+}
+
+/** The hitTags-dependent fragment of the teams doctrine, delivered in the
+ *  switchman:teams-hits tail payload (order 360). Byte-identical to the
+ *  two lines that used to replace the head's intro/priority pair when the
+ *  §4.4.1 conjunction hit; empty (zero bytes) on every miss. The head keeps
+ *  the not-hit variants, so head+payload together convey exactly what the
+ *  pre-refactor full text conveyed. */
+function renderTeamsHitsDelta(hitTags) {
+	const tags = structuralTeamHits(hitTags);
+	if (tags.length === 0) return "";
+	const joined = tags.join(" + ");
+	return [
+		`[SWITCHMAN:CONSTRAINTS] Team-constraint combination hit (${joined}): the suggested condition for entering Agent Teams is met (≥2 structural tags) — assemble autonomously per the clauses below, without asking the user.`,
+		"",
+		`- Dispatch-channel priority (constraints hit): this session hit ${joined}, so child delegation defaults to Agent Teams — spawn_teammate to assemble, team_task_* on the shared board, send_message/wait_agent to collaborate; subagent/subagent_fork falls back to the backup channel, used only in the unavailable scenarios described in the fallback clause below.`,
+	].join("\n");
 }
 
 /** Full ON-mode doctrine body: the delegation block plus the teams section
@@ -652,28 +677,40 @@ function registerChildMessageTool(ctx) {
  *  scheduling and settings-document updates for this plugin's own
  *  namespace). */
 function applyTeams(ctx, config) {
-	ctx.systemPrompt.section({
-		name: "switchman:teams",
-		order: 10250,
-		interpolate: false,
-		text: (context) => {
+	registerTailContext(ctx, {
+		sectionName: "switchman:teams",
+		sectionOrder: 10250,
+		contextName: "switchman:teams-hits",
+		contextOrder: 360,
+		// Head doctrine: the full teams body with the NOT-HIT trigger-policy
+		// pair (or the legacy unconditional preference when the constraint
+		// layer is off) — byte-stable for a given configuration. The hit-
+		// dependent fragment travels in the tail payload.
+		doctrine: (context) => {
 			try {
 				if (readBool(config.teamsMode) !== true) return "";
 				const constraintsOn = readBool(config.constraintsEnabled) === true;
-				let hitTags = [];
-				if (constraintsOn) {
-					const sessionKey = sessionIdOf(context?.agent);
-					if (sessionKey !== null) {
-						hitTags = structuralTeamHits(classifierConstraintsForTurn(sessionKey).map((entry) => entry.tag));
-					}
-				}
-				return teamsDoctrineText({ constraintsEnabled: constraintsOn, hitTags });
+				// Head NEVER sees per-turn bytes: always the empty-hit variant.
+				return teamsDoctrineText({ constraintsEnabled: constraintsOn, hitTags: [] });
 			} catch {
 				// Fail-open toward the guide's risk table ("prefer loose, never
 				// miss a real teams case"): any internal error falls back to the
 				// legacy ON-mode doctrine (delegate-by-default + unconditional
 				// teams preference), never to silence.
 				return teamsDoctrineText({ constraintsEnabled: false, hitTags: [] });
+			}
+		},
+		// Tail payload: the hit delta, byte-identical to the pre-refactor
+		// hit-variant lines; "" whenever the §4.4.1 conjunction misses.
+		payload: (context) => {
+			try {
+				if (readBool(config.teamsMode) !== true) return "";
+				if (readBool(config.constraintsEnabled) !== true) return "";
+				const sessionKey = sessionIdOf(context?.agent);
+				if (sessionKey === null) return "";
+				return renderTeamsHitsDelta(classifierConstraintsForTurn(sessionKey).map((entry) => entry.tag));
+			} catch {
+				return "";
 			}
 		},
 	});
@@ -726,4 +763,4 @@ function applyTeams(ctx, config) {
 	syncChildMessageTool();
 }
 
-export { applyTeams, dispatchModelUnion, ensureTeamsBundle, pumpTeamsOrchestration, SWITCHMAN_SETTINGS_NS, DELEGATION_SECTION_TEXT, TEAMS_STRUCTURAL_TAGS, TEAMS_SECTION_TEXT, structuralTeamHits, teamsDoctrineText, scheduleTeamsOrchestration, teamsBundleState, teamsSyncSnapshot };
+export { applyTeams, dispatchModelUnion, ensureTeamsBundle, pumpTeamsOrchestration, SWITCHMAN_SETTINGS_NS, DELEGATION_SECTION_TEXT, TEAMS_STRUCTURAL_TAGS, TEAMS_SECTION_TEXT, structuralTeamHits, teamsDoctrineText, renderTeamsHitsDelta, scheduleTeamsOrchestration, teamsBundleState, teamsSyncSnapshot };

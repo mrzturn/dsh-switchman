@@ -44,3 +44,10 @@
 - 1.7.0 曾把 schemastery 声明为普通依赖（lock 里连带 `@deepseek-ai/cosmokit`、`@standard-schema/spec`），安装后 dshmarket 的 schema 改由第二份 schemastery 实例产生，与宿主设置系统/表单管线分叉，插件市场崩溃；市场恢复机制随后长期把本包按在关闭状态（`.dsh-market/log.ndjson`："plugin kept off: dsh-switchman"）。1.7.1 起改为 peer-only（`^3.18.1`，与 dshmarket/dsh-mcp-connector 同一生态约定）。
 - `scripts/validate.mjs` 第 6 项检查会在此不变量被破坏时失败；`npm pack` 前先跑它。
 - 排查此类冲突看三处：`~/.dsh/profiles/desktop/node_modules/` 下是否出现非本包作用域的空目录（`@deepseek-ai`、`@standard-schema` 等，是 hoist 残骸）；`~/.dsh/profiles/desktop/.dsh-market/log.ndjson`；DSH 源码 `packages/boot/app-boot/src/profile-resolution/resolver.ts` 的 `routeScoped`（本地候选优先级）。
+
+## 语言规范（插件内容一律英文，2026-11-21）
+
+- 凡涉及**插件能力**的内容一律使用英文：编排、规则、行为定义、注入到 prompt 的全部文本（section/context doctrine、锚点行、台账/水位/约束/池表等 payload）、tool 拒绝与修复文案、遥测与日志标记、代码注释、docstring、测试断言文本。
+- 例外仅两类：① 与用户的对话交流；② 面向用户的多语言 Markdown 文档（README、CHANGELOG、release notes 等中英双语皆可）。
+- 动机：注入文本是 prompt 缓存前缀与模型规程解析的一部分，语言必须字节稳定且统一英文；混杂语言会降低规程遵循度并干扰缓存稳定性审计。
+- 落地检查：新增/修改任何 render* 函数、section/context 注册文本、拒绝消息时，实现者自检 + reviewer 复查语言合规；设计文档中面向执行的规格（验收标准、边界）也以英文书写为主，中文仅用于与人交流的部分。
