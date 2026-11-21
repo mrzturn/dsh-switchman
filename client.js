@@ -849,13 +849,17 @@ window.__ModuleLoader__.load({
 		}
 
 		/** Serialize a display list back into the stored modelRank shape
-		 * (tier omitted when unset). */
+		 * (tier omitted when unset). Mirrors the Host coerce (cleanRank):
+		 * trim both keys, drop rows with a blank provider/model — shipping
+		 * one fails the whole payload with 400 "invalid values payload". */
 		const rankValue = (display) =>
-			display.map((entry) => ({
-				provider: entry.provider,
-				model: entry.model,
-				...(entry.tier ? { tier: entry.tier } : {}),
-			}));
+			display
+				.map((entry) => ({
+					provider: String(entry.provider ?? '').trim(),
+					model: String(entry.model ?? '').trim(),
+					...(entry.tier ? { tier: entry.tier } : {}),
+				}))
+				.filter((entry) => entry.provider !== '' && entry.model !== '');
 
 		// ------------------------------------------------------------------
 		// Dictionaries
@@ -5583,6 +5587,7 @@ window.__ModuleLoader__.load({
 		const [customArmed, setCustomArmed] = React.useState(false);
 		const [saving, setSaving] = React.useState(false);
 		const [failed, setFailed] = React.useState(false);
+		const [failDetail, setFailDetail] = React.useState('');
 		const [conflicted, setConflicted] = React.useState(false);
 		/** Last whitelist sync status from the Host config answer: null when
 		 *  both teams switches are off (the Host omits the field), otherwise
@@ -5705,23 +5710,41 @@ window.__ModuleLoader__.load({
 				customArmed ||
 				(values.langConversation !== '' &&
 					!isCandidate(values.langConversation));
-			/** Per-field numeric validity: raw text (when present) must be a
-			 * plain number within the schema bounds. The trim and intent rows
-			 * share the same raw-text overlay and save gate. */
+			/** Per-field numeric validity, two layers (both gate saving and
+			 *  drive the row hints):
+			 *  1. raw text (when present) must be a plain number within the
+			 *     schema bounds;
+			 *  2. with no overlay, the COMMITTED draft value itself must
+			 *     stay in bounds — editNumber commits on format alone, and
+			 *     the old text-only check cleared on blur, so an
+			 *     out-of-range number (e.g. a ratio below min) sailed past
+			 *     the save gate and the Host rejected the whole payload
+			 *     with 400 "invalid values payload" (coerceValues min/max).
+			 *  The trim and intent rows share the same overlay and gate. */
 			const numberInvalid = Object.fromEntries(
-								[
+				[
 					...WM_NUMBER_FIELDS,
 					...TRIM_NUMBER_FIELDS,
 					...INTENT_NUMBER_FIELDS,
 				].map(
 					({ field, min, max }) => {
 						const raw = numText[field];
+						if (raw !== undefined)
+							return [
+								field,
+								!/^\d+(?:\.\d+)?$/.test(raw.trim()) ||
+									Number(raw.trim()) < min ||
+									Number(raw.trim()) > (max ?? Infinity),
+							];
+						const committed = values[field];
 						return [
 							field,
-							raw !== undefined &&
-								(!/^\d+(?:\.\d+)?$/.test(raw.trim()) ||
-									Number(raw.trim()) < min ||
-									Number(raw.trim()) > (max ?? Infinity)),
+							!(
+								typeof committed === 'number' &&
+								Number.isFinite(committed) &&
+								committed >= min &&
+								committed <= (max ?? Infinity)
+							),
 						];
 					},
 				),
@@ -5932,7 +5955,10 @@ window.__ModuleLoader__.load({
 			}
 
 		async function save() {
-			if (form.status !== 'ready' || !form.writable || savingRef.current)
+			// Defense in depth: the save button already gates on `invalid`;
+			// re-check here so any other call path cannot ship an
+			// out-of-range draft to the Host's 400.
+			if (form.status !== 'ready' || !form.writable || savingRef.current || invalid)
 				return;
 			const desired = {
 				langScope: values.langScope,
@@ -5943,10 +5969,14 @@ window.__ModuleLoader__.load({
 				...Object.fromEntries(
 					POOL_FIELDS.map(({ field }) => [
 						field,
-						values[field].map((route) => ({
-							provider: route.provider,
-							model: route.model,
-						})),
+						// Mirror the Host coerce (cleanRoute): trim both keys and
+						// drop half-edited rows before shipping.
+						values[field]
+							.map((route) => ({
+								provider: String(route.provider ?? '').trim(),
+								model: String(route.model ?? '').trim(),
+							}))
+							.filter((route) => route.provider !== '' && route.model !== ''),
 					]),
 				),
 				...Object.fromEntries(
@@ -5958,11 +5988,18 @@ window.__ModuleLoader__.load({
 				...Object.fromEntries(
 					POOL_FIELDS.map(({ effortsField }) => [
 						effortsField,
-						values[effortsField].map((entry) => ({
-							provider: entry.provider,
-							model: entry.model,
-							effort: entry.effort,
-						})),
+						// Mirror the Host coerce (cleanEffortEntry): all three keys
+						// must be non-empty after trim, or the entry is dropped.
+						values[effortsField]
+							.map((entry) => ({
+								provider: String(entry.provider ?? '').trim(),
+								model: String(entry.model ?? '').trim(),
+								effort: String(entry.effort ?? '').trim(),
+							}))
+							.filter(
+								(entry) =>
+									entry.provider !== '' && entry.model !== '' && entry.effort !== '',
+							),
 					]),
 				),
 				modelRank: rankValue(values.modelRank),
@@ -6036,6 +6073,10 @@ window.__ModuleLoader__.load({
 				poolFeedbackEnabled: values.poolFeedbackEnabled,
 				dispatchStatsEnabled: values.dispatchStatsEnabled,
 				poolDifferentiationEnabled: values.poolDifferentiationEnabled,
+				// editFeedbackEnabled is a Host-required boolean (BOOLEAN_FIELDS):
+				// omitting it made coerceValues reject the WHOLE payload with
+				// 400 "invalid values payload" on every save.
+				editFeedbackEnabled: values.editFeedbackEnabled,
 			};
 			if (sameValues(current, desired)) {
 				// Whitespace-only differences: nothing to write, close the draft.
@@ -6050,6 +6091,7 @@ window.__ModuleLoader__.load({
 			savingRef.current = true;
 			setSaving(true);
 			setFailed(false);
+			setFailDetail('');
 			setConflicted(false);
 			let response;
 			try {
@@ -6100,6 +6142,14 @@ window.__ModuleLoader__.load({
 				}
 				return;
 			}
+			// Surface the Host's rejection reason (4xx/5xx bodies carry
+			// {error}); transport-level failures (status 0) keep the
+			// generic text only.
+			setFailDetail(
+				response.value !== null && typeof response.value === 'object'
+					? String(response.value.error ?? '')
+					: '',
+			);
 			setFailed(true);
 		}
 
@@ -6109,6 +6159,7 @@ window.__ModuleLoader__.load({
 				setCustomArmed(false);
 				clearNumText();
 				setFailed(false);
+				setFailDetail('');
 				setConflicted(false);
 			}
 
@@ -7994,7 +8045,9 @@ window.__ModuleLoader__.load({
 							style: failed ? STYLE.messageError : STYLE.message,
 						},
 						failed
-							? t('saveFailed')
+							? failDetail === ''
+								? t('saveFailed')
+								: `${t('saveFailed')} (${failDetail})`
 							: conflicted
 								? t('saveConflict')
 								: saving

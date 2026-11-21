@@ -5,6 +5,19 @@ All notable changes to dsh-switchman are documented here. / 本文件记录 dsh-
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 格式参照 Keep a Changelog;版本遵循语义化版本。
+## [1.11.11] — 2026-11-22
+
+### Fixed
+
+- Saves work again (regression shipped in 1.11.10): the edit-feedback release added `editFeedbackEnabled` to the Host's required boolean list, the form state, and the settings UI, but omitted it from the save payload's `desired` construction. The Host's `coerceValues` strict-requires every `BOOLEAN_FIELDS` entry, so ANY save was rejected with 400 "invalid values payload" ("This deployment did not accept these values") and nothing was ever written. `desired` now sends `editFeedbackEnabled`; proven against the live validator (payload without the field → null, with it → accepted, POST → 200).
+- 修复保存必失败（1.11.10 引入的回归）：edit-feedback 版本把 `editFeedbackEnabled` 加进了宿主必填布尔清单、表单状态与设置界面，却漏加进保存载荷的 `desired` 构造。宿主 `coerceValues` 严格要求 `BOOLEAN_FIELDS` 每一项，因此任何保存都被 400 "invalid values payload"（“本部署没有接受这些值”）拒绝，什么都没写入。`desired` 现在发送 `editFeedbackEnabled`；已用装机校验器实测证明（缺字段 → null，补上 → 接受，POST → 200）。
+- Out-of-range numbers are gated in two layers: besides the raw-text overlay check, the COMMITTED draft value itself is bounds-checked (`numberInvalid`), so an out-of-range number shows a persistent red row with the allowed range and blocks saving, instead of silently failing at the Host with 400. `save()` additionally re-checks the aggregate `invalid` flag as defense in depth.
+- 越界数字改为两层门禁：除输入框原始文本校验外，已提交的草稿值本身也做上下限检查（`numberInvalid`），越界数字会持续红框并显示允许范围、阻止保存，而不是静默地在宿主侧 400 失败。`save()` 内部额外复检聚合 `invalid` 标志作为纵深防御。
+- Half-edited rows no longer reject the whole save: pool routes, effort entries, and the model rank are trimmed and rows with empty keys are dropped client-side, mirroring the Host's `cleanRoute` / `cleanEffortEntry` coercers, so an in-progress row cannot 400 the payload.
+- 半编辑行不再拖垮整次保存：泳道路由、effort 条目与 modelRank 在客户端完成 trim 并丢弃键为空的行，与宿主 `cleanRoute` / `cleanEffortEntry` 强转逻辑对齐，编辑到一半的行不会再导致整包 400。
+- Failed saves surface the Host's rejection reason: the error line appends the server `error` detail when a 4xx/5xx body carries one (e.g. "… (invalid values payload)"); transport-level failures keep the generic text.
+- 保存失败时透出宿主拒绝原因：4xx/5xx 响应体携带 `error` 时，错误行会追加该详情（如 “… (invalid values payload)”）；传输层失败仍显示通用文案。
+
 ## [1.11.10] — 2026-11-21
 
 ### Added
