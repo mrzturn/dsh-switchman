@@ -49,6 +49,7 @@
 
 import { LANES } from "./config.js";
 import { getDispatchStats } from "./dispatch-stats.js";
+import { registerTailContext } from "./tail-context.js";
 
 /** Final position of the differentiation section: right after the
  *  pool-feedback rows (10406) — both are footnotes of the pools table
@@ -237,11 +238,21 @@ function logDiffChange(ctx, block, entries) {
 export function applyPoolDifferentiation(ctx, config, statsProvider = getDispatchStats) {
 	const warn = (message) => ctx?.logger?.warn?.(`dsh-switchman: ${message}`);
 	try {
-		ctx.systemPrompt.section({
-			name: "switchman:pool-differentiation",
-			order: POOL_DIFFERENTIATION_ORDER,
-			interpolate: false,
-			text: () => {
+		registerTailContext(ctx, {
+			sectionName: "switchman:pool-differentiation",
+			sectionOrder: POOL_DIFFERENTIATION_ORDER,
+			contextName: "switchman:pool-differentiation-live",
+			contextOrder: POOL_DIFFERENTIATION_LIVE_ORDER,
+			// Head doctrine: a static anchor line (byte-stable) declaring the
+			// tail snapshot binding; the stats-driven block travels in the
+			// tail payload so dispatch stats never invalidate the prefix.
+			doctrine: (context) => {
+				if (config?.poolDifferentiationEnabled?.get() !== true) return "";
+				return POOL_DIFFERENTIATION_ANCHOR;
+			},
+			// Tail payload: today's per-assembly closure body, verbatim
+			// (including the logDiffChange side effect, payload-only).
+			payload: () => {
 				try {
 					// Master switch FIRST: off renders "" on every assembly AND
 					// skips the stats read entirely (zero computation while OFF).
@@ -259,6 +270,14 @@ export function applyPoolDifferentiation(ctx, config, statsProvider = getDispatc
 		warn(`systemPrompt.section registration failed — pool-differentiation hints disabled: ${error?.message ?? error}`);
 	}
 }
+
+/** Byte-stable head anchor line (§4.4 of the 2026-11-21 cache-stability
+ *  design): constant string literal, nothing interpolated into it. */
+const POOL_DIFFERENTIATION_ANCHOR =
+	"Pool differentiation hints (per-lane quality verdicts from recent dispatch stats) are delivered in the Current runtime context snapshot at the tail of the conversation; treat them as binding routing guidance.";
+
+/** Tail context slot: after pool-feedback-live (330), before dispatch route (350). */
+const POOL_DIFFERENTIATION_LIVE_ORDER = 340;
 
 /** Clear the audit-log signature slot (tests; mirrors resetDispatchStats). */
 export function resetPoolDifferentiationAudit() {

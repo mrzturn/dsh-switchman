@@ -41,6 +41,7 @@
 
 import { LANES } from "./config.js";
 import { getSkillLoadStats } from "./skill-registry.js";
+import { registerTailContext } from "./tail-context.js";
 
 /** Final position of the pool-feedback section: right after the
  * constraints/skills section (10405) — the feedback rows qualify the
@@ -161,14 +162,24 @@ function logFeedbackChange(ctx, block, loadEntries) {
 export function applyPoolFeedback(ctx, config, annotatedSkills) {
 	const warn = (message) => ctx?.logger?.warn?.(`dsh-switchman: ${message}`);
 	try {
-		ctx.systemPrompt.section({
-			name: "switchman:pool-feedback",
-			order: POOL_FEEDBACK_ORDER,
-			interpolate: false,
-			text: (context) => {
+		registerTailContext(ctx, {
+			sectionName: "switchman:pool-feedback",
+			sectionOrder: POOL_FEEDBACK_ORDER,
+			contextName: "switchman:pool-feedback-live",
+			contextOrder: POOL_FEEDBACK_LIVE_ORDER,
+			// Head doctrine: a static anchor line (byte-stable) declaring the
+			// tail snapshot binding; the growing feedback block travels in the
+			// tail payload so skill-load stats never invalidate the prefix.
+			doctrine: (context) => {
+				if (config?.poolFeedbackEnabled?.get() !== true) return "";
+				return POOL_FEEDBACK_ANCHOR;
+			},
+			// Tail payload: today's per-assembly closure body, verbatim
+			// (including the logFeedbackChange side effect, payload-only).
+			payload: (context) => {
 				try {
 					// Master switch: off renders "" on every assembly — the
-					// section exists but contributes zero bytes (zero diff).
+					// entry exists but contributes zero bytes (zero diff).
 					if (config?.poolFeedbackEnabled?.get() !== true) return "";
 					// Per-assembly closure (index.js) or plain array (tests):
 					// resolve first so downstream helpers always see an array.
@@ -186,3 +197,11 @@ export function applyPoolFeedback(ctx, config, annotatedSkills) {
 		warn(`systemPrompt.section registration failed — pool-feedback lines disabled: ${error?.message ?? error}`);
 	}
 }
+
+/** Byte-stable head anchor line (§4.4 of the 2026-11-21 cache-stability
+ *  design): constant string literal, nothing interpolated into it. */
+const POOL_FEEDBACK_ANCHOR =
+	"Skill load feedback (recent direct-call vs PTC-program usage per skill) is delivered in the Current runtime context snapshot at the tail of the conversation; treat it as binding routing guidance.";
+
+/** Tail context slot: after constraints-live (320), before pool-differentiation (340). */
+const POOL_FEEDBACK_LIVE_ORDER = 330;

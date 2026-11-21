@@ -184,6 +184,7 @@ test("renderPoolDifferentiationBlock: junk shapes render zero bytes", () => {
 
 function fakeHost() {
 	const sections = [];
+	const contexts = [];
 	const infos = [];
 	const warnings = [];
 	const ctx = {
@@ -193,17 +194,18 @@ function fakeHost() {
 		},
 		systemPrompt: {
 			section: (spec) => sections.push(spec),
+			context: (spec) => contexts.push(spec),
 		},
 	};
-	return { ctx, sections, infos, warnings };
+	return { ctx, sections, contexts, infos, warnings };
 }
 
 const configWith = (poolDifferentiationEnabled) => ({
 	poolDifferentiationEnabled: { get: () => poolDifferentiationEnabled },
 });
 
-test("applyPoolDifferentiation: registers one section at a free order slot", () => {
-	const { ctx, sections } = fakeHost();
+test("applyPoolDifferentiation: registers head doctrine and tail context entry", () => {
+	const { ctx, sections, contexts } = fakeHost();
 	applyPoolDifferentiation(ctx, configWith(false), []);
 	assert.equal(sections.length, 1);
 	assert.equal(sections[0].name, "switchman:pool-differentiation");
@@ -216,34 +218,61 @@ test("applyPoolDifferentiation: registers one section at a free order slot", () 
 	assert.equal(POOL_DIFFERENTIATION_ORDER, 10407);
 	const taken = new Set([10200, 10250, 10300, 10400, 10405, 10406, 10450, 10510]);
 	assert.equal(taken.has(POOL_DIFFERENTIATION_ORDER), false, "order must not collide with an existing section");
+	// Tail payload entry: constraints-live is 320, dispatch-route takes 350.
+	assert.equal(contexts.length, 1);
+	assert.equal(contexts[0].name, "switchman:pool-differentiation-live");
+	assert.equal(contexts[0].order, 340);
+	assert.equal(contexts[0].required, true);
+	assert.equal(contexts[0].interpolate, false);
 });
 
 test("applyPoolDifferentiation: switch OFF (default) renders zero bytes on every assembly", () => {
-	const { ctx, sections } = fakeHost();
+	const { ctx, sections, contexts } = fakeHost();
 	applyPoolDifferentiation(ctx, configWith(false), []);
 	const spec = sections[0];
 	// The master switch is checked BEFORE any stats read, so OFF is zero
-	// computation too — "" regardless of what the telemetry holds.
+	// computation too — "" regardless of what the telemetry holds, on BOTH
+	// channels (head doctrine gated by the same master switch).
 	assert.equal(spec.text({}), "");
 	assert.equal(spec.text(undefined), "");
 	assert.equal(spec.text({ agent: { session: { header: { cwd: "/tmp/w" } } } }), "");
+	assert.equal(contexts[0].text({}), "");
+	assert.equal(contexts[0].text(undefined), "");
+	assert.equal(contexts[0].text({ agent: { session: { header: { cwd: "/tmp/w" } } } }), "");
 });
 
 test("applyPoolDifferentiation: config without the field renders zero bytes (no throw)", () => {
-	const { ctx, sections } = fakeHost();
+	const { ctx, contexts } = fakeHost();
 	applyPoolDifferentiation(ctx, {}, []);
-	assert.equal(sections[0].text({}), "");
+	assert.equal(contexts[0].text({}), "");
 });
 
 test("applyPoolDifferentiation: ON renders hints from the live telemetry, empty telemetry stays empty", () => {
-	const { ctx, sections } = fakeHost();
+	const { ctx, sections, contexts } = fakeHost();
 	// Empty telemetry (dispatchStatsEnabled off / nothing captured yet) → "".
 	applyPoolDifferentiation(ctx, configWith(true), () => null);
-	assert.equal(sections[0].text({}), "");
+	assert.equal(contexts[0].text({}), "");
 	// §5 P2 acceptance shape: ON + sufficient samples → the injected bytes are
 	// a FUNCTION of the recorded outcomes, byte-identical to the pure render.
 	applyPoolDifferentiation(ctx, configWith(true), () => ({ entries: MIXED_STATS }));
-	assert.equal(sections[1].text({}), renderPoolDifferentiationBlock(MIXED_STATS));
+	assert.equal(contexts[1].text({}), renderPoolDifferentiationBlock(MIXED_STATS));
+	// Head anchor: static, identical across both registrations.
+	assert.equal(sections[0].text({}), sections[1].text({}));
+	assert.match(sections[1].text({}), /Current runtime context snapshot/u);
+});
+
+test("applyPoolDifferentiation: head anchor constant while the stats change (cache stability)", () => {
+	resetPoolDifferentiationAudit();
+	const { ctx, sections, contexts } = fakeHost();
+	applyPoolDifferentiation(ctx, configWith(true), () => ({ entries: MIXED_STATS }));
+	const anchor = sections[0].text({});
+	assert.match(contexts[0].text({}), /- mechanical: effort raise/u);
+	// Telemetry heals; the payload changes but the head never does.
+	const healed = MIXED_STATS.map((item) => (item.pool === "mechanical" ? { ...item, failures: 0, rework: 0 } : item));
+	applyPoolDifferentiation(ctx, configWith(true), () => ({ entries: healed }));
+	assert.match(contexts[1].text({}), /- mechanical: effort steady, switch-confidence high/u);
+	assert.equal(sections[1].text({}), anchor);
+	resetPoolDifferentiationAudit();
 });
 
 test("applyPoolDifferentiation: hints track the recorded outcomes (data-only bytes)", () => {
@@ -260,15 +289,15 @@ test("applyPoolDifferentiation: hints track the recorded outcomes (data-only byt
 
 test("applyPoolDifferentiation: audit log fires once per signature change, counts allowed", () => {
 	resetPoolDifferentiationAudit();
-	const { ctx, sections, infos } = fakeHost();
+	const { ctx, contexts, infos } = fakeHost();
 	applyPoolDifferentiation(ctx, configWith(true), () => ({ entries: MIXED_STATS }));
-	const first = sections[0].text({});
+	const first = contexts[0].text({});
 	assert.notEqual(first, "", "precondition: a non-empty block");
 	assert.equal(infos.length, 1);
 	assert.match(infos[0], /pool differentiation updated:/u);
 	assert.match(infos[0], /total=/u, "the HOST log carries exact counts (never model-injected)");
 	// Same signature again → silent.
-	sections[0].text({});
+	contexts[0].text({});
 	assert.equal(infos.length, 1);
 	resetPoolDifferentiationAudit();
 });
@@ -280,7 +309,7 @@ test("applyPoolDifferentiation: registration failure warns and disables the laye
 	};
 	assert.doesNotThrow(() => applyPoolDifferentiation(ctx, configWith(true), []));
 	assert.equal(warnings.length, 1);
-	assert.match(warnings[0], /pool-differentiation hints disabled/u);
+	assert.match(warnings[0], /switchman:pool-differentiation disabled/u);
 });
 
 // ---------------------------------------------------------------------------

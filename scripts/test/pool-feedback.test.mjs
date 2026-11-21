@@ -100,6 +100,7 @@ test("renderPoolFeedbackBlock: junk shapes render zero bytes", () => {
 
 function fakeHost() {
 	const sections = [];
+	const contexts = [];
 	const infos = [];
 	const warnings = [];
 	const ctx = {
@@ -109,9 +110,10 @@ function fakeHost() {
 		},
 		systemPrompt: {
 			section: (spec) => sections.push(spec),
+			context: (spec) => contexts.push(spec),
 		},
 	};
-	return { ctx, sections, infos, warnings };
+	return { ctx, sections, contexts, infos, warnings };
 }
 
 const configWith = (poolFeedbackEnabled, constraintsEnabled = true) => ({
@@ -119,45 +121,57 @@ const configWith = (poolFeedbackEnabled, constraintsEnabled = true) => ({
 	constraintsEnabled: { get: () => constraintsEnabled },
 });
 
-test("applyPoolFeedback: registers one section at order 10406", () => {
-	const { ctx, sections } = fakeHost();
+test("applyPoolFeedback: registers head doctrine and tail context entry", () => {
+	const { ctx, sections, contexts } = fakeHost();
 	applyPoolFeedback(ctx, configWith(false), []);
 	assert.equal(sections.length, 1);
 	assert.equal(sections[0].name, "switchman:pool-feedback");
 	assert.equal(sections[0].order, POOL_FEEDBACK_ORDER);
 	assert.equal(POOL_FEEDBACK_ORDER, 10406);
 	assert.equal(sections[0].interpolate, false);
+	assert.equal(contexts.length, 1);
+	assert.equal(contexts[0].name, "switchman:pool-feedback-live");
+	assert.equal(contexts[0].order, 330);
+	assert.equal(contexts[0].required, true);
+	assert.equal(contexts[0].interpolate, false);
 });
 
 test("applyPoolFeedback: switch OFF (default) renders zero bytes on every assembly", () => {
 	resetSkillLoadStats();
 	recordSkillLoad({ name: "db-query", source: "bundled" }, true, null);
-	const { ctx, sections } = fakeHost();
+	const { ctx, sections, contexts } = fakeHost();
 	applyPoolFeedback(ctx, configWith(false), HINTED);
 	const spec = sections[0];
-	// Both agent shapes render "" — the section exists but contributes nothing.
+	// Both agent shapes render "" — the layer exists but contributes nothing,
+	// on BOTH channels (head doctrine gated by the same master switch).
 	assert.equal(spec.text({ agent: { session: { header: { cwd: "/tmp/w" } } } }), "");
 	assert.equal(spec.text({}), "");
 	assert.equal(spec.text(undefined), "");
+	assert.equal(contexts[0].text({ agent: { session: { header: { cwd: "/tmp/w" } } } }), "");
+	assert.equal(contexts[0].text({}), "");
+	assert.equal(contexts[0].text(undefined), "");
 });
 
 test("applyPoolFeedback: config without the field renders zero bytes (no throw)", () => {
-	const { ctx, sections } = fakeHost();
+	const { ctx, contexts } = fakeHost();
 	applyPoolFeedback(ctx, {}, HINTED);
-	assert.equal(sections[0].text({}), "");
+	assert.equal(contexts[0].text({}), "");
 });
 
 test("applyPoolFeedback: ON renders the loop — array and per-assembly closure agree (review F6 pin)", () => {
 	resetSkillLoadStats();
 	for (let i = 0; i < 7; i += 1) recordSkillLoad({ name: "db-query", source: "bundled" }, true, null);
 	for (let i = 0; i < 3; i += 1) recordSkillLoad({ name: "git-commit-message", source: "bundled" }, true, null);
-	const { ctx, sections, infos } = fakeHost();
+	const { ctx, sections, contexts, infos } = fakeHost();
 	const config = configWith(true);
 	applyPoolFeedback(ctx, config, HINTED);
-	const fromArray = sections[0].text({});
+	const anchor = sections[0].text({});
+	assert.ok(anchor.includes("Current runtime context snapshot"), "head is the static anchor line");
+	const fromArray = contexts[0].text({});
 	// Same data through a closure — the closure resolves INSIDE text().
 	applyPoolFeedback(ctx, config, () => HINTED);
-	const fromClosure = sections[1].text({ agent: { session: { header: { cwd: "/tmp/w" } } } });
+	assert.equal(sections[1].text({}), anchor, "head anchor bytes are identical across registrations");
+	const fromClosure = contexts[1].text({ agent: { session: { header: { cwd: "/tmp/w" } } } });
 	assert.equal(fromClosure, fromArray);
 	const expected =
 		"[SWITCHMAN:POOLS-FEEDBACK] skill loads since enable, by pool_hint lane (tier labels only; few = 1-5 loads, often = 6+):\n" +
@@ -166,10 +180,22 @@ test("applyPoolFeedback: ON renders the loop — array and per-assembly closure 
 	assert.equal(fromArray, expected);
 	// Audit log fires once for the first render, then stays silent for the
 	// same signature; host-side only, so counts are allowed there.
-	assert.equal(sections[1].text({}), fromArray);
-	assert.equal(sections[1].text({}), fromArray);
+	assert.equal(contexts[1].text({}), fromArray);
+	assert.equal(contexts[1].text({}), fromArray);
 	assert.equal(infos.length, 1);
 	assert.match(infos[0], /pool feedback updated: mechanical: db-query often\(7\), git-commit-message few\(3\); main: requirement-docs never\(0\)/u);
+	resetSkillLoadStats();
+});
+
+test("applyPoolFeedback: head anchor constant while the load stats grow (cache stability)", () => {
+	resetSkillLoadStats();
+	const { ctx, sections, contexts } = fakeHost();
+	applyPoolFeedback(ctx, configWith(true), HINTED);
+	const anchor = sections[0].text({});
+	// Stats grow; the payload changes but the head never does.
+	for (let i = 0; i < 6; i += 1) recordSkillLoad({ name: "db-query", source: "bundled" }, true, null);
+	assert.match(contexts[0].text({}), /db-query often/u);
+	assert.equal(sections[0].text({}), anchor);
 	resetSkillLoadStats();
 });
 
@@ -180,40 +206,40 @@ test("applyPoolFeedback: loop closes — a reset observation drops every tier (�
 	// signal instead of freezing a stale tier.
 	resetSkillLoadStats();
 	recordSkillLoad({ name: "db-query", source: "bundled" }, true, null);
-	const { ctx, sections } = fakeHost();
+	const { ctx, contexts } = fakeHost();
 	applyPoolFeedback(ctx, configWith(true), HINTED);
-	const withLoad = sections[0].text({});
+	const withLoad = contexts[0].text({});
 	assert.match(withLoad, /db-query few/u);
 	resetSkillLoadStats();
-	const afterReset = sections[0].text({});
+	const afterReset = contexts[0].text({});
 	assert.match(afterReset, /db-query never/u);
 	assert.notEqual(withLoad, afterReset);
 });
 
 test("applyPoolFeedback: fail-open — throwing closure, junk closure, missing stats", () => {
-	const { ctx, sections } = fakeHost();
+	const { ctx, contexts } = fakeHost();
 	const config = configWith(true);
 	applyPoolFeedback(ctx, config, () => {
 		throw new Error("registry exploded");
 	});
-	assert.equal(sections[0].text({}), "");
+	assert.equal(contexts[0].text({}), "");
 	applyPoolFeedback(ctx, config, () => null);
-	assert.equal(sections[0].text({}), "");
+	assert.equal(contexts[1].text({}), "");
 	applyPoolFeedback(ctx, config, () => "junk");
-	assert.equal(sections[0].text({}), "");
+	assert.equal(contexts[2].text({}), "");
 	applyPoolFeedback(ctx, config, () => undefined);
-	assert.equal(sections[0].text({}), "");
+	assert.equal(contexts[3].text({}), "");
 });
 
 test("applyPoolFeedback: ON but nothing hinted (or constraints off) renders zero bytes", () => {
 	resetSkillLoadStats();
 	recordSkillLoad({ name: "solo-skill", source: "local" }, true, null);
-	const { ctx, sections } = fakeHost();
+	const { ctx, contexts } = fakeHost();
 	applyPoolFeedback(ctx, configWith(true), [{ name: "solo-skill", tags: ["parallelizable"] }]);
-	assert.equal(sections[0].text({}), "");
+	assert.equal(contexts[0].text({}), "");
 	// constraintsEnabled off → closure returns [] → "" even with hints configured.
 	applyPoolFeedback(ctx, configWith(true, false), () => []);
-	assert.equal(sections[1].text({}), "");
+	assert.equal(contexts[1].text({}), "");
 });
 
 test("applyPoolFeedback: registration failure warns and disables the layer, never throws", () => {
@@ -223,5 +249,5 @@ test("applyPoolFeedback: registration failure warns and disables the layer, neve
 	};
 	assert.doesNotThrow(() => applyPoolFeedback(ctx, configWith(true), HINTED));
 	assert.equal(warnings.length, 1);
-	assert.match(warnings[0], /pool-feedback lines disabled/u);
+	assert.match(warnings[0], /switchman:pool-feedback disabled/u);
 });
